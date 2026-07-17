@@ -1,0 +1,2735 @@
+# ============================
+# PART 1A - MASTER PROMPT
+# Project: WhatsApp_Auto_Reply
+# Owner: QorvixNode Technologies
+# ============================
+
+Build a COMPLETE PRODUCTION-READY WhatsApp AI Auto Reply Platform from scratch.
+
+THIS IS NOT A DEMO.
+THIS IS NOT A SAMPLE.
+THIS IS NOT A PROTOTYPE.
+
+Generate only production-quality code.
+
+Do NOT generate placeholders.
+Do NOT generate TODO comments.
+Do NOT leave unfinished functions.
+Do NOT skip any module.
+Every feature must be fully implemented.
+
+==================================================
+PRIMARY TARGET
+==================================================
+
+Platform:
+Termux (Android ARM64)
+
+Device:
+Moto G45 5G
+
+Android:
+Android 15
+
+Primary Browser:
+Google Chrome
+
+==================================================
+SECONDARY TARGET
+==================================================
+
+Ubuntu
+Debian
+Linux VPS
+
+The same source code must run without modification.
+
+==================================================
+PYTHON REQUIREMENTS
+==================================================
+
+Target compatibility:
+
+- Python 3.12.x
+- Python 3.13.x
+- Python 3.14.x (where dependency support exists)
+
+Avoid deprecated APIs.
+
+Write forward-compatible code.
+
+==================================================
+PROJECT NAME
+==================================================
+
+WhatsApp_Auto_Reply
+
+Owner:
+
+QorvixNode Technologies
+
+==================================================
+STARTUP
+==================================================
+
+The entire project must start using only:
+
+bash start.sh
+
+No manual startup commands.
+
+==================================================
+START.SH MUST
+==================================================
+
+Automatically:
+
+- Verify Python
+- Verify pip
+- Verify SQLite
+- Verify Node.js if required
+- Verify npm if required
+- Create virtual environment
+- Install missing packages
+- Create folders
+- Create database
+- Run migrations
+- Verify ports
+- Kill stale processes
+- Start Backend
+- Start Frontend
+- Create logs
+- Show localhost URLs
+- Recover from common startup errors
+- Exit cleanly if a fatal error occurs
+
+==================================================
+LOCALHOST
+==================================================
+
+Frontend
+
+http://127.0.0.1:3000
+
+Backend
+
+http://127.0.0.1:8000
+
+==================================================
+PROJECT GOALS
+==================================================
+
+Build a complete AI-powered WhatsApp Business Automation Platform for QorvixNode Technologies.
+
+The platform must:
+
+• Connect WhatsApp using QR Code.
+
+• Automatically save session.
+
+• Auto reconnect after restart.
+
+• Never require QR again unless session expires.
+
+• Auto reply using AI.
+
+• Support AI API providers.
+
+• Work entirely on localhost.
+
+• Store all data in SQLite.
+
+• Be optimized for Termux.
+
+==================================================
+COMPANY PROFILE
+==================================================
+
+Company Name:
+
+QorvixNode Technologies
+
+Company Website:
+
+https://qorvixnodetechnologies.indevs.in
+
+Business Type:
+
+Software Development Company
+
+Services:
+
+• Custom Website Development
+• Android App Development
+• AI Automation
+• Business Software
+• CRM Development
+• E-Commerce Website
+• Portfolio Website
+• Landing Pages
+• Dashboard Development
+• UI/UX Design
+• API Integration
+• Hosting
+• Deployment
+• Maintenance
+
+This information must be permanently available to the AI assistant.
+
+==================================================
+FIRST CUSTOMER MESSAGE
+==================================================
+
+Whenever a NEW customer sends the first WhatsApp message:
+
+The AI must introduce the company first.
+
+The AI must explain:
+
+Who we are.
+
+What services we provide.
+
+How we can help.
+
+It must naturally invite the customer to explain their requirements.
+
+If the customer requests the company website, portfolio or official website, the AI must automatically share:
+
+https://qorvixnodetechnologies.indevs.in
+
+==================================================
+OWNER SETTINGS
+==================================================
+
+Dashboard must include:
+
+Owner Name
+
+Owner Phone Number
+
+Editable by login user.
+
+The AI must always know who the owner is.
+
+Never expose the owner's phone number to customers automatically.
+
+==================================================
+OWNER REQUEST
+==================================================
+
+If the customer says:
+
+"I want to talk to the owner"
+
+"I need a human"
+
+"Connect me to the owner"
+
+"Can I speak with your manager?"
+
+The AI must reply politely that the request has been forwarded.
+
+Then immediately send a WhatsApp notification to the configured Owner Number containing:
+
+Customer Name
+
+Customer Number
+
+Conversation Summary
+
+Last Customer Message
+
+Time
+
+Lead Score
+
+==================================================
+LEAD DETECTION
+==================================================
+
+AI must continuously evaluate customer interest.
+
+Assign an Interest Score between 0 and 100.
+
+Detect:
+
+Website Inquiry
+
+App Inquiry
+
+Software Inquiry
+
+AI Automation Inquiry
+
+General Question
+
+Support Request
+
+Potential Client
+
+If the lead score exceeds the configured threshold, notify the owner automatically.
+
+==================================================
+GENERAL RULES
+==================================================
+
+Production quality only.
+
+Modular architecture.
+
+Reusable code.
+
+Clean code.
+
+PEP8 compliant.
+
+Type hints everywhere.
+
+Proper logging.
+
+Graceful error handling.
+
+No placeholder code.
+
+No fake APIs.
+
+No unfinished modules.
+
+Everything must be production-ready.
+# ==========================================================
+# PART 1B – WHATSAPP ENGINE + AI ENGINE + DATABASE + AUTO REPLY
+# Project : WhatsApp_Auto_Reply
+# Owner   : QorvixNode Technologies
+# ==========================================================
+
+Continue from Part 1A.
+
+This project MUST remain production-ready.
+
+Never generate placeholder code.
+
+Never leave unfinished implementations.
+
+All modules must communicate properly.
+
+==================================================
+WHATSAPP ENGINE
+==================================================
+
+Implement a stable WhatsApp Multi-Device engine.
+
+Requirements:
+
+• QR Code Login
+• Automatic Session Save
+• Automatic Session Restore
+• Automatic Reconnect
+• Detect Connection Loss
+• Detect Logout
+• Auto Retry
+• Auto Restart Engine
+• Live Connection Status
+• Device Information
+• Connected Number
+• Session Health Monitoring
+
+The QR should disappear automatically after successful login.
+
+Dashboard must instantly update to:
+
+CONNECTED
+
+with:
+
+Connected Phone Number
+
+Connection Time
+
+Status
+
+==================================================
+MESSAGE LISTENER
+==================================================
+
+The backend must continuously listen for:
+
+Private Messages
+
+Ignore:
+
+Status Updates
+
+Broadcast Messages
+
+System Messages
+
+Deleted Events unless required
+
+The listener must never stop while the backend is running.
+
+==================================================
+MESSAGE PROCESSING PIPELINE
+==================================================
+
+Every incoming message must follow this pipeline:
+
+Receive Message
+
+↓
+
+Validate Message
+
+↓
+
+Save Database
+
+↓
+
+Check Contact
+
+↓
+
+Load Conversation History
+
+↓
+
+Load Company Context
+
+↓
+
+Load Customer Memory
+
+↓
+
+Generate AI Prompt
+
+↓
+
+Generate AI Response
+
+↓
+
+Store AI Response
+
+↓
+
+Send WhatsApp Reply
+
+↓
+
+Update Logs
+
+↓
+
+Check Lead Score
+
+↓
+
+Notify Owner if Required
+
+==================================================
+CONTACT DATABASE
+==================================================
+
+Automatically create contacts.
+
+Fields:
+
+ID
+
+Name
+
+Phone Number
+
+Country Code
+
+WhatsApp ID
+
+First Seen
+
+Last Seen
+
+Language
+
+Status
+
+Lead Score
+
+Notes
+
+Last Message Time
+
+Owner Assigned
+
+==================================================
+CHAT HISTORY
+==================================================
+
+Store every message.
+
+Fields:
+
+Message ID
+
+Contact ID
+
+Timestamp
+
+Direction
+
+Incoming
+
+Outgoing
+
+AI
+
+Owner
+
+Text
+
+Media Type
+
+Status
+
+Read
+
+Delivered
+
+Failed
+
+Retry Count
+
+==================================================
+AI MEMORY
+==================================================
+
+AI must remember previous conversations.
+
+Example:
+
+Customer Name
+
+Business
+
+Requirements
+
+Budget
+
+Preferred Language
+
+Previous Questions
+
+Project Status
+
+Do NOT lose memory after restart.
+
+Everything must persist in SQLite.
+
+==================================================
+FIRST MESSAGE LOGIC
+==================================================
+
+When a NEW customer sends the first message:
+
+AI must NOT immediately ask random questions.
+
+Instead introduce the company.
+
+Explain:
+
+Who QorvixNode Technologies is.
+
+What services are offered.
+
+How customers can get help.
+
+Invite the customer to explain their requirement.
+
+If customer requests:
+
+Website
+
+Portfolio
+
+Company Details
+
+Official Website
+
+Automatically send:
+
+https://qorvixnodetechnologies.indevs.in
+
+==================================================
+AI REPLY RULES
+==================================================
+
+Replies must be:
+
+Professional
+
+Friendly
+
+Short
+
+Natural
+
+Human-like
+
+Never robotic.
+
+Never repetitive.
+
+Never send the same reply twice.
+
+Maintain conversation context.
+
+Detect customer language.
+
+Reply in:
+
+English
+
+Hindi
+
+Hinglish
+
+according to customer language.
+
+==================================================
+AI API SETTINGS
+==================================================
+
+Dashboard must allow:
+
+API Provider
+
+API Key
+
+Model Name
+
+Base URL
+
+Temperature
+
+Top P
+
+Max Tokens
+
+Prompt
+
+Save
+
+Test Connection
+
+Support OpenAI-compatible APIs.
+
+The backend must be provider-independent.
+
+==================================================
+OWNER SETTINGS
+==================================================
+
+Dashboard Settings:
+
+Owner Name
+
+Owner Number
+
+Editable anytime.
+
+The AI must always know:
+
+Who the owner is.
+
+Never reveal owner phone number automatically.
+
+==================================================
+OWNER TAKEOVER
+==================================================
+
+If customer says:
+
+"I want to talk to owner"
+
+"I need a human"
+
+"Connect me"
+
+"Manager"
+
+"Call me"
+
+"Owner"
+
+The AI must:
+
+Reply politely.
+
+Inform customer that the request has been forwarded.
+
+Immediately notify Owner WhatsApp.
+
+Notification must contain:
+
+Customer Name
+
+Phone Number
+
+Conversation Summary
+
+Interest Level
+
+Last Customer Message
+
+Current Time
+
+After Owner starts replying:
+
+Disable AI replies for that conversation.
+
+Owner becomes active.
+
+Dashboard must show:
+
+Human Mode
+
+When Owner ends conversation:
+
+AI may resume automatically or manually.
+
+==================================================
+LEAD DETECTION
+==================================================
+
+AI must continuously score every conversation.
+
+Score:
+
+0 - 100
+
+Detect:
+
+Website Lead
+
+Android App Lead
+
+CRM Lead
+
+Business Software
+
+AI Automation
+
+Maintenance
+
+General Question
+
+Support
+
+High Priority Client
+
+If score exceeds threshold:
+
+Immediately notify owner.
+
+==================================================
+AUTO REPLY SETTINGS
+==================================================
+
+Dashboard options:
+
+Enable
+
+Disable
+
+Reply Delay
+
+Typing Delay
+
+Business Hours
+
+Greeting
+
+Away Message
+
+Maximum Reply Length
+
+Language Preference
+
+==================================================
+DATABASE
+==================================================
+
+SQLite
+
+Tables:
+
+users
+
+settings
+
+company
+
+owner
+
+contacts
+
+messages
+
+conversation_memory
+
+lead_scores
+
+logs
+
+sessions
+
+api_settings
+
+Everything must use proper indexes.
+
+Foreign keys enabled.
+
+Transactions enabled.
+
+==================================================
+LOGGING
+==================================================
+
+Log everything.
+
+Startup
+
+Shutdown
+
+WhatsApp
+
+AI
+
+Database
+
+Errors
+
+Warnings
+
+Owner Notifications
+
+Lead Detection
+
+Logs must rotate automatically.
+
+==================================================
+ERROR HANDLING
+==================================================
+
+No crashes.
+
+Recover automatically whenever possible.
+
+Retry temporary failures.
+
+Show meaningful error messages.
+
+Write complete logs.
+
+Never silently ignore exceptions.
+
+Continue running whenever recovery is possible.
+
+==================================================
+CODING RULES
+==================================================
+
+Production quality only.
+
+No placeholder code.
+
+No TODO comments.
+
+No fake implementations.
+
+Strong typing.
+
+Clean architecture.
+
+Modular code.
+
+Reusable components.
+
+Maintainable structure.
+
+Every module must be fully integrated with every other module.
+
+The generated project must be capable of running locally on Termux using:
+
+bash start.sh
+
+# ==========================================================
+# PART 1C – BACKEND CORE + START.SH + SECURITY + TERMUX
+# Project : WhatsApp_Auto_Reply
+# Owner   : QorvixNode Technologies
+# ==========================================================
+
+Continue from Part 1A and Part 1B.
+
+This is NOT a demo.
+
+Generate ONLY production-quality code.
+
+Never leave incomplete modules.
+
+Never generate placeholder code.
+
+==================================================
+BACKEND
+==================================================
+
+Use a production-ready Python backend.
+
+Requirements:
+
+• Modular architecture
+• Async where appropriate
+• REST API
+• WebSocket support for live dashboard updates
+• SQLite database
+• Automatic database migrations
+• Proper dependency injection where beneficial
+• Configuration through environment variables and settings
+
+Backend must continue running even if individual modules encounter recoverable errors.
+
+==================================================
+START.SH
+==================================================
+
+The entire project must start using ONLY:
+
+bash start.sh
+
+The script must automatically:
+
+• Verify Python installation
+• Verify supported Python version (target 3.12–3.14)
+• Verify pip
+• Create virtual environment if missing
+• Install/update missing dependencies
+• Create required folders
+• Create SQLite database
+• Run migrations
+• Verify configuration files
+• Verify API configuration
+• Verify WhatsApp session
+• Check if localhost ports are already in use
+• Stop stale project processes safely
+• Start Backend
+• Start Frontend
+• Generate startup logs
+• Display:
+
+Backend URL
+
+Frontend URL
+
+Project Version
+
+Python Version
+
+WhatsApp Status
+
+Dashboard Status
+
+If startup fails:
+
+Generate readable error logs.
+
+Exit cleanly.
+
+==================================================
+TERMUX OPTIMIZATION
+==================================================
+
+The project MUST be optimized for Android Termux.
+
+Requirements:
+
+Low RAM usage
+
+Low CPU usage
+
+Low storage usage
+
+Minimal background activity
+
+Avoid unnecessary polling
+
+Prefer event-driven architecture
+
+Avoid memory leaks
+
+Proper garbage collection
+
+Automatically release unused resources
+
+Project should remain stable during long uptime.
+
+==================================================
+FRONTEND SERVER
+==================================================
+
+Frontend:
+
+http://127.0.0.1:3000
+
+Backend:
+
+http://127.0.0.1:8000
+
+Dashboard must automatically reconnect if backend restarts.
+
+==================================================
+SECURITY
+==================================================
+
+Protect:
+
+API Keys
+
+WhatsApp Sessions
+
+Configuration
+
+Passwords
+
+Owner Settings
+
+Requirements:
+
+Encrypt sensitive values before storage.
+
+Never expose secrets to frontend.
+
+Never hardcode credentials.
+
+Use secure session handling.
+
+Sanitize all user input.
+
+Validate all API requests.
+
+Protect against:
+
+SQL Injection
+
+Path Traversal
+
+XSS
+
+CSRF (where applicable)
+
+Command Injection
+
+Unsafe file operations
+
+==================================================
+API SETTINGS
+==================================================
+
+Dashboard must allow configuration of:
+
+Provider Name
+
+Base URL
+
+API Key
+
+Model Name
+
+Temperature
+
+Top P
+
+Maximum Tokens
+
+System Prompt
+
+Connection Test
+
+Save
+
+Reset
+
+Support OpenAI-compatible APIs by default.
+
+Backend must be provider-independent.
+
+==================================================
+COMPANY SETTINGS
+==================================================
+
+Editable Company Information:
+
+Company Name
+
+QorvixNode Technologies
+
+Website
+
+Business Description
+
+Services
+
+Business Hours
+
+Greeting Message
+
+Closing Message
+
+Support Message
+
+This information must automatically be included in AI context.
+
+==================================================
+OWNER SETTINGS
+==================================================
+
+Editable:
+
+Owner Name
+
+Owner Number
+
+Owner Availability
+
+Business Hours
+
+Human Takeover Enabled
+
+Lead Notification Enabled
+
+The owner number must NEVER be shared automatically with customers.
+
+==================================================
+AI CONTEXT
+==================================================
+
+The AI must always know:
+
+Company Name
+
+Company Website
+
+Services
+
+Conversation History
+
+Customer Memory
+
+Current Time
+
+Business Hours
+
+Owner Settings
+
+AI Settings
+
+Lead Score
+
+The AI must answer naturally without repeatedly introducing the company after the first interaction.
+
+==================================================
+DATABASE SAFETY
+==================================================
+
+SQLite requirements:
+
+Foreign Keys Enabled
+
+Transactions
+
+Indexes
+
+Automatic Backups
+
+Database Integrity Checks
+
+Safe Shutdown
+
+Automatic Recovery after unexpected termination
+
+==================================================
+LOGGING
+==================================================
+
+Generate separate log files for:
+
+Startup
+
+Backend
+
+Frontend
+
+WhatsApp
+
+AI
+
+Database
+
+Errors
+
+Security
+
+Owner Notifications
+
+Lead Detection
+
+Logs must rotate automatically.
+
+Old logs should be archived.
+
+==================================================
+ERROR RECOVERY
+==================================================
+
+Recover automatically whenever possible.
+
+Retry temporary failures.
+
+Reconnect WhatsApp automatically.
+
+Reconnect dashboard automatically.
+
+Restart failed background workers when safe.
+
+Never lose chat history because of recoverable errors.
+
+==================================================
+FILE STRUCTURE
+==================================================
+
+Create a clean production-ready folder structure.
+
+Separate:
+
+Backend
+
+Frontend
+
+Database
+
+Configuration
+
+Logs
+
+Static Files
+
+Templates
+
+WhatsApp Engine
+
+AI Engine
+
+Utilities
+
+Services
+
+Routes
+
+Models
+
+Controllers
+
+Repositories
+
+Security
+
+Tests
+
+Documentation
+
+Scripts
+
+==================================================
+CODE QUALITY
+==================================================
+
+Use:
+
+Type Hints
+
+PEP 8
+
+Docstrings
+
+Meaningful variable names
+
+Meaningful logging
+
+Consistent formatting
+
+Reusable modules
+
+No duplicate logic
+
+No dead code
+
+No placeholder implementations
+
+No TODO comments
+
+==================================================
+FINAL REQUIREMENTS
+==================================================
+
+The generated project must be capable of running on:
+
+• Termux (Primary)
+• Ubuntu
+• Debian
+
+using a single command:
+
+bash start.sh
+
+The completed application must include:
+
+✓ Login Page
+
+✓ Dashboard
+
+✓ WhatsApp QR Login
+
+✓ Automatic Session Restore
+
+✓ AI Auto Reply
+
+✓ Company Introduction
+
+✓ Company Website Sharing
+
+✓ AI API Settings
+
+✓ Owner Settings
+
+✓ Human Takeover
+
+✓ Lead Detection
+
+✓ Owner Notification
+
+✓ Conversation Memory
+
+✓ Chat History
+
+✓ SQLite Database
+
+✓ Secure Configuration
+
+✓ Live Dashboard Updates
+
+✓ Logging
+
+✓ Error Recovery
+
+✓ Mobile-Friendly UI
+
+The implementation must be production-ready, modular, maintainable, fully integrated, and suitable for real-world deployment under the QorvixNode Technologies brand.
+# ==========================================================
+# PART 2A – FRONTEND + LOGIN + DASHBOARD + SETTINGS
+# Project : WhatsApp_Auto_Reply
+# Owner   : QorvixNode Technologies
+# ==========================================================
+
+Continue from Part 1A, Part 1B and Part 1C.
+
+Generate a complete production-ready frontend.
+
+This is NOT a demo.
+
+Do NOT generate placeholder UI.
+
+Do NOT leave unfinished pages.
+
+Frontend must communicate with the backend using REST APIs and WebSockets.
+
+==================================================
+FRONTEND REQUIREMENTS
+==================================================
+
+Frontend URL
+
+http://127.0.0.1:3000
+
+Must work perfectly on:
+
+• Chrome Android
+• Chrome Desktop
+• Firefox
+• Edge
+
+Mobile-first responsive design.
+
+Dark Mode by default.
+
+Light Mode optional.
+
+Fast loading.
+
+Minimal animations.
+
+==================================================
+LOGIN PAGE
+==================================================
+
+Create a professional login page.
+
+Fields:
+
+Username
+
+Password
+
+Remember Login
+
+Login Button
+
+Show Password
+
+Forgot Password (optional placeholder hidden until backend support)
+
+Features:
+
+Secure Login
+
+Session Storage
+
+Logout
+
+Auto Login if Remember Login enabled
+
+Proper validation
+
+Loading animation
+
+Error messages
+
+==================================================
+LAYOUT
+==================================================
+
+Left Sidebar
+
+Top Navigation Bar
+
+Main Content Area
+
+Responsive Drawer on Mobile
+
+Footer
+
+==================================================
+SIDEBAR MENU
+==================================================
+
+Dashboard
+
+WhatsApp
+
+Chats
+
+Leads
+
+AI Settings
+
+Company Settings
+
+Owner Settings
+
+Logs
+
+System Status
+
+Logout
+
+==================================================
+TOP BAR
+==================================================
+
+Project Name
+
+WhatsApp_Auto_Reply
+
+Company
+
+QorvixNode Technologies
+
+Current User
+
+WhatsApp Status
+
+Current Time
+
+Notification Icon
+
+==================================================
+DASHBOARD
+==================================================
+
+Dashboard must update in real time.
+
+Cards:
+
+WhatsApp Status
+
+Connected Number
+
+Today's Messages
+
+Total Contacts
+
+AI Replies
+
+Owner Replies
+
+Hot Leads
+
+System Uptime
+
+Database Status
+
+AI Provider
+
+Current AI Model
+
+==================================================
+SYSTEM STATUS
+==================================================
+
+Show:
+
+Backend Status
+
+Frontend Status
+
+Database Status
+
+WhatsApp Status
+
+AI Status
+
+API Status
+
+Session Status
+
+Green
+
+Yellow
+
+Red
+
+Indicators.
+
+==================================================
+WHATSAPP PAGE
+==================================================
+
+Display:
+
+Connection Status
+
+QR Code
+
+Connected Number
+
+Connection Time
+
+Session State
+
+Buttons:
+
+Generate QR
+
+Reconnect
+
+Logout
+
+Refresh Status
+
+After successful login:
+
+Hide QR automatically.
+
+Show connected account.
+
+==================================================
+AI SETTINGS PAGE
+==================================================
+
+Fields:
+
+Provider
+
+Base URL
+
+API Key
+
+Model
+
+Temperature
+
+Top P
+
+Maximum Tokens
+
+System Prompt
+
+Buttons:
+
+Save
+
+Reset
+
+Test Connection
+
+Status
+
+Show current AI provider.
+
+Never expose API key in plain text.
+
+==================================================
+COMPANY SETTINGS
+==================================================
+
+Editable:
+
+Company Name
+
+Company Website
+
+Business Description
+
+Services
+
+Greeting Message
+
+Closing Message
+
+Support Message
+
+Business Hours
+
+Changes must instantly affect AI replies.
+
+==================================================
+OWNER SETTINGS
+==================================================
+
+Editable:
+
+Owner Name
+
+Owner WhatsApp Number
+
+Lead Notification
+
+Human Takeover
+
+Business Hours
+
+Auto Notify
+
+Save Button
+
+Test Notification
+
+Owner number must never appear to customers automatically.
+
+==================================================
+CHAT SUMMARY
+==================================================
+
+Dashboard must show:
+
+Recent Conversations
+
+Unread Messages
+
+Last Customer
+
+Last Reply Time
+
+Lead Score
+
+==================================================
+LEADS PAGE
+==================================================
+
+Display table:
+
+Customer Name
+
+Phone Number
+
+Service Requested
+
+Lead Score
+
+Status
+
+Last Message
+
+Search
+
+Filter
+
+Sort
+
+Export CSV
+
+==================================================
+LOGS PAGE
+==================================================
+
+Separate tabs:
+
+Startup
+
+Backend
+
+WhatsApp
+
+AI
+
+Database
+
+Errors
+
+Security
+
+Search logs.
+
+Download logs.
+
+Auto refresh.
+
+==================================================
+NOTIFICATIONS
+==================================================
+
+Real-time notifications.
+
+Examples:
+
+WhatsApp Connected
+
+WhatsApp Disconnected
+
+New Customer
+
+New Lead
+
+Owner Requested
+
+AI Error
+
+Database Error
+
+==================================================
+SEARCH
+==================================================
+
+Global search.
+
+Search by:
+
+Customer Name
+
+Phone Number
+
+Message
+
+Lead
+
+Date
+
+==================================================
+MOBILE RESPONSIVE
+==================================================
+
+Fully optimized for Android.
+
+No horizontal scrolling.
+
+Large touch targets.
+
+Fast rendering.
+
+Smooth navigation.
+
+Responsive sidebar.
+
+==================================================
+UI RULES
+==================================================
+
+Professional Design.
+
+Minimal Design.
+
+Fast.
+
+Modern.
+
+No unnecessary animations.
+
+Consistent spacing.
+
+Consistent typography.
+
+Accessible UI.
+
+Dark Mode default.
+
+==================================================
+FRONTEND QUALITY
+==================================================
+
+No placeholder pages.
+
+No fake buttons.
+
+Every button must work.
+
+Every form must validate.
+
+Every API must be connected.
+
+Every page must function correctly.
+
+Frontend must remain synchronized with backend in real time.
+
+Generate production-quality frontend code only.
+
+# ==========================================================
+# PART 2B – CHAT SYSTEM + LIVE UPDATES + FINAL UI RULES
+# Project : WhatsApp_Auto_Reply
+# Owner   : QorvixNode Technologies
+# ==========================================================
+
+Continue from Part 1A, Part 1B, Part 1C and Part 2A.
+
+Generate ONLY production-ready code.
+
+Do NOT generate demo code.
+
+Do NOT generate placeholder pages.
+
+Every screen must work completely.
+
+==================================================
+CHAT PAGE
+==================================================
+
+Create a complete WhatsApp-style chat interface.
+
+Features:
+
+• Conversation List
+• Chat Window
+• Customer Details Panel
+• Search
+• Filter
+• Unread Indicator
+• Online Status
+• Typing Indicator
+• Delivery Status
+• Read Status
+• AI Status
+• Human Status
+• Lead Badge
+
+==================================================
+CHAT LIST
+==================================================
+
+Display:
+
+Customer Name
+
+Phone Number
+
+Profile Initial
+
+Last Message
+
+Last Message Time
+
+Unread Count
+
+Lead Score
+
+Pinned Status
+
+Human Takeover Status
+
+Sort chats by latest activity automatically.
+
+==================================================
+CHAT WINDOW
+==================================================
+
+Display:
+
+Incoming Messages
+
+Outgoing Messages
+
+AI Replies
+
+Owner Replies
+
+Message Time
+
+Delivery Status
+
+Read Status
+
+Typing Animation
+
+Auto Scroll
+
+Date Separators
+
+Conversation should load instantly.
+
+==================================================
+CUSTOMER DETAILS PANEL
+==================================================
+
+Display:
+
+Customer Name
+
+Phone Number
+
+First Contact Date
+
+Last Active
+
+Preferred Language
+
+Lead Score
+
+Detected Service
+
+Conversation Summary
+
+Current Mode
+
+AI
+
+Human
+
+==================================================
+HUMAN TAKEOVER
+==================================================
+
+Provide button:
+
+Take Over Chat
+
+When enabled:
+
+AI immediately stops replying.
+
+Owner controls the conversation.
+
+Display:
+
+Human Mode Active
+
+Provide button:
+
+Resume AI
+
+AI resumes only after owner confirmation.
+
+==================================================
+AI STATUS
+==================================================
+
+Display current status:
+
+Thinking
+
+Generating Reply
+
+Sending Reply
+
+Idle
+
+Error
+
+Response Time
+
+Current Model
+
+==================================================
+LIVE UPDATES
+==================================================
+
+Dashboard must update instantly using WebSocket.
+
+Without refreshing browser update:
+
+New Messages
+
+New Leads
+
+WhatsApp Status
+
+Owner Notifications
+
+AI Status
+
+Database Status
+
+Logs
+
+==================================================
+OWNER NOTIFICATIONS
+==================================================
+
+Whenever:
+
+Customer requests owner
+
+High Lead Score detected
+
+Critical AI Error
+
+WhatsApp disconnects
+
+Backend restarts
+
+Notify owner immediately.
+
+==================================================
+SEARCH
+==================================================
+
+Support searching by:
+
+Customer Name
+
+Phone Number
+
+Keyword
+
+Lead Score
+
+Service
+
+Date
+
+==================================================
+FILTERS
+==================================================
+
+Filter chats by:
+
+Unread
+
+Read
+
+Lead
+
+Hot Lead
+
+AI Active
+
+Human Active
+
+Newest
+
+Oldest
+
+==================================================
+EXPORT
+==================================================
+
+Allow exporting:
+
+Chat History
+
+Lead List
+
+Logs
+
+CSV
+
+JSON
+
+==================================================
+SYSTEM HEALTH PAGE
+==================================================
+
+Display:
+
+Backend Status
+
+Frontend Status
+
+WhatsApp Status
+
+SQLite Status
+
+AI Provider Status
+
+CPU Usage
+
+RAM Usage
+
+Disk Usage
+
+Project Uptime
+
+==================================================
+ERROR PAGE
+==================================================
+
+If backend becomes unavailable:
+
+Display friendly message.
+
+Automatically retry connection.
+
+Recover without refreshing browser.
+
+==================================================
+RESPONSIVE DESIGN
+==================================================
+
+Must work perfectly on:
+
+Android Phones
+
+Android Tablets
+
+Desktop Browsers
+
+Sidebar must collapse automatically on mobile.
+
+No horizontal scrolling.
+
+Large touch-friendly buttons.
+
+==================================================
+PERFORMANCE
+==================================================
+
+Fast page loading.
+
+Lazy loading where useful.
+
+Efficient DOM updates.
+
+Avoid unnecessary API requests.
+
+Keep memory usage low.
+
+==================================================
+ACCESSIBILITY
+==================================================
+
+Proper labels.
+
+Keyboard navigation.
+
+Readable fonts.
+
+Good contrast.
+
+==================================================
+FINAL FRONTEND RULES
+==================================================
+
+Every page must be functional.
+
+Every API must be connected.
+
+Every button must work.
+
+Every notification must be real.
+
+No fake data.
+
+No placeholder cards.
+
+No unfinished UI.
+
+No dead links.
+
+==================================================
+PROJECT BRANDING
+==================================================
+
+Brand Name:
+
+QorvixNode Technologies
+
+Project:
+
+WhatsApp_Auto_Reply
+
+Dashboard title must display:
+
+WhatsApp_Auto_Reply
+by QorvixNode Technologies
+
+==================================================
+FINAL FRONTEND ACCEPTANCE
+==================================================
+
+The frontend is NOT considered complete unless it provides:
+
+✓ Secure Login
+
+✓ Responsive Dashboard
+
+✓ WhatsApp QR Login
+
+✓ Live WhatsApp Status
+
+✓ AI Settings
+
+✓ Company Settings
+
+✓ Owner Settings
+
+✓ Live Chat
+
+✓ Human Takeover
+
+✓ Conversation History
+
+✓ Lead Dashboard
+
+✓ Logs Viewer
+
+✓ System Health
+
+✓ Real-time Updates
+
+✓ Mobile Optimization
+
+✓ Production Quality
+
+The implementation must be fully integrated with the backend and ready for real-world usage on Termux using:
+
+bash start.sh
+
+# ==========================================================
+# PART 3 – FINAL PRODUCTION REQUIREMENTS
+# Project : WhatsApp_Auto_Reply
+# Owner   : QorvixNode Technologies
+# ==========================================================
+
+Continue from Part 1A, Part 1B, Part 1C, Part 2A and Part 2B.
+
+This project MUST be production-ready.
+
+This is NOT a demo.
+
+Do NOT generate placeholder code.
+
+Do NOT leave incomplete files.
+
+The project is NOT complete until every feature below is fully implemented and tested.
+
+==================================================
+INSTALLATION
+==================================================
+
+The entire project must install automatically.
+
+No manual configuration after installation.
+
+Automatically:
+
+• Verify Python
+• Verify pip
+• Verify SQLite
+• Verify required system packages
+• Install missing dependencies
+• Create virtual environment
+• Generate configuration
+• Create folders
+• Create SQLite database
+• Run migrations
+• Verify frontend
+• Verify backend
+• Verify WhatsApp Engine
+
+==================================================
+DEPENDENCY MANAGEMENT
+==================================================
+
+Automatically detect missing dependencies.
+
+Install compatible versions.
+
+Avoid conflicting package versions.
+
+Support Python:
+
+3.12.x
+
+3.13.x
+
+3.14.x (where dependencies support it)
+
+==================================================
+STARTUP VALIDATION
+==================================================
+
+Before starting:
+
+Verify:
+
+Configuration
+
+Database
+
+Environment
+
+WhatsApp Session
+
+API Settings
+
+Required folders
+
+Ports
+
+Permissions
+
+Disk space
+
+RAM availability
+
+==================================================
+SHUTDOWN
+==================================================
+
+On shutdown:
+
+Save sessions
+
+Save database
+
+Close connections safely
+
+Flush logs
+
+Stop background workers
+
+Exit without corruption
+
+==================================================
+AUTO RECOVERY
+==================================================
+
+Recover automatically after:
+
+Backend crash
+
+Frontend crash
+
+WhatsApp disconnect
+
+Database reconnect
+
+Temporary API failure
+
+Internet reconnect
+
+Unexpected restart
+
+Never lose conversation history.
+
+==================================================
+BACKUP
+==================================================
+
+Provide automatic backup.
+
+Backup:
+
+Database
+
+Settings
+
+Company Information
+
+Owner Information
+
+Conversation Memory
+
+Lead Database
+
+Logs
+
+Sessions
+
+Allow manual backup.
+
+Allow restore.
+
+==================================================
+DATABASE VALIDATION
+==================================================
+
+Before startup:
+
+Verify database integrity.
+
+Repair recoverable problems.
+
+Rebuild indexes if necessary.
+
+Prevent corruption.
+
+==================================================
+AI VALIDATION
+==================================================
+
+Verify:
+
+API Key
+
+Provider
+
+Base URL
+
+Model
+
+Prompt
+
+Connection
+
+Display clear error messages.
+
+==================================================
+WHATSAPP VALIDATION
+==================================================
+
+Verify:
+
+Session
+
+Connection
+
+Authentication
+
+Connected Number
+
+Auto reconnect if disconnected.
+
+==================================================
+TESTING
+==================================================
+
+Generate automated tests.
+
+Cover:
+
+Backend
+
+Frontend
+
+Database
+
+WhatsApp Engine
+
+AI Engine
+
+API Routes
+
+Authentication
+
+Owner Notification
+
+Lead Detection
+
+Conversation Memory
+
+Settings
+
+Startup
+
+Shutdown
+
+==================================================
+CODE QUALITY
+==================================================
+
+Use:
+
+PEP8
+
+Type Hints
+
+Docstrings
+
+Logging
+
+Reusable modules
+
+No duplicated logic
+
+Meaningful variable names
+
+Meaningful function names
+
+==================================================
+SECURITY
+==================================================
+
+Encrypt:
+
+API Keys
+
+Sessions
+
+Passwords
+
+Owner Settings
+
+Protect:
+
+Database
+
+Logs
+
+Configuration
+
+Input validation
+
+Output validation
+
+Safe file handling
+
+==================================================
+PERFORMANCE
+==================================================
+
+Optimize for:
+
+Termux
+
+Android
+
+Low RAM
+
+Low CPU
+
+Low Storage
+
+Fast startup
+
+Fast shutdown
+
+Fast database queries
+
+Fast dashboard updates
+
+==================================================
+LOGGING
+==================================================
+
+Generate logs for:
+
+Startup
+
+Shutdown
+
+Backend
+
+Frontend
+
+WhatsApp
+
+AI
+
+Database
+
+Errors
+
+Warnings
+
+Security
+
+Owner Notifications
+
+Lead Detection
+
+Automatically rotate logs.
+
+==================================================
+DOCUMENTATION
+==================================================
+
+Generate complete documentation.
+
+Include:
+
+Installation
+
+Configuration
+
+Folder Structure
+
+API Documentation
+
+Database Schema
+
+Dashboard Guide
+
+WhatsApp Setup
+
+AI Setup
+
+Troubleshooting
+
+Backup
+
+Restore
+
+Updating
+
+FAQ
+
+==================================================
+PROJECT FILES
+==================================================
+
+Generate:
+
+README.md
+
+LICENSE
+
+CHANGELOG.md
+
+requirements.txt
+
+package.json (if frontend requires it)
+
+start.sh
+
+.env.example
+
+.gitignore
+
+Database Migration Files
+
+Configuration Files
+
+==================================================
+FINAL ACCEPTANCE TEST
+==================================================
+
+The project is NOT complete until ALL of the following work correctly:
+
+✓ Login
+
+✓ Dashboard
+
+✓ Responsive Mobile UI
+
+✓ WhatsApp QR Login
+
+✓ Session Restore
+
+✓ AI Auto Reply
+
+✓ Company Introduction
+
+✓ Company Website Sharing
+
+✓ AI API Configuration
+
+✓ Company Settings
+
+✓ Owner Settings
+
+✓ Human Takeover
+
+✓ Lead Detection
+
+✓ Owner Notification
+
+✓ Conversation Memory
+
+✓ Chat History
+
+✓ SQLite Database
+
+✓ Secure API Key Storage
+
+✓ Logs
+
+✓ Search
+
+✓ Filters
+
+✓ Live Dashboard
+
+✓ Live Chat
+
+✓ System Health
+
+✓ Auto Recovery
+
+✓ Backup
+
+✓ Restore
+
+✓ Error Handling
+
+✓ Production Documentation
+
+✓ start.sh starts the complete project
+
+==================================================
+FINAL DEVELOPMENT RULES
+==================================================
+
+Never use placeholder code.
+
+Never leave TODO comments.
+
+Never generate incomplete files.
+
+Never generate fake APIs.
+
+Never skip modules.
+
+Every page must be functional.
+
+Every backend endpoint must be connected.
+
+Every frontend page must communicate with backend correctly.
+
+Every database table must be used.
+
+Every feature must be tested.
+
+Every error must be handled gracefully.
+
+The final result must be a complete production-ready WhatsApp AI Auto Reply Platform for QorvixNode Technologies that runs locally on Termux using only:
+
+bash start.sh
+
+The project must be maintainable, modular, scalable, secure, optimized, and suitable for real business usage.

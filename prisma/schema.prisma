@@ -1,0 +1,229 @@
+// ============================================================
+// WhatsApp AI Auto Reply Platform - QorvixNode Technologies
+// Prisma Schema (SQLite)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------- Auth ----------------
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  displayName  String
+  role         String   @default("admin") // admin | operator
+  rememberToken String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------- Settings (key/value) ----------------
+model Setting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------- Company profile ----------------
+model Company {
+  id            String  @id @default("company")
+  name          String
+  website       String
+  description   String
+  services      String // JSON array as string
+  businessHours String // JSON as string
+  greetingMsg   String
+  closingMsg    String
+  supportMsg    String
+  updatedAt     DateTime @updatedAt
+}
+
+// ---------------- Owner profile ----------------
+model Owner {
+  id              String  @id @default("owner")
+  name            String
+  phoneNumber     String
+  availability    String  @default("available") // available | busy | away
+  businessHours   String
+  humanTakeover   Boolean @default(true)
+  leadNotify      Boolean @default(true)
+  autoNotify      Boolean @default(true)
+  leadThreshold   Int     @default(70)
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------- AI / API config ----------------
+model ApiSetting {
+  id           String  @id @default("api")
+  provider     String  @default("zai")
+  baseUrl      String  @default("")
+  apiKey       String  @default("")
+  model        String  @default("glm-4.5")
+  temperature  Float   @default(0.7)
+  topP         Float   @default(0.9)
+  maxTokens    Int     @default(512)
+  systemPrompt String
+  status       String  @default("untested") // ok | error | untested
+  lastTestedAt DateTime?
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------- Auto reply config ----------------
+model AutoReplySetting {
+  id              String  @id @default("autoreply")
+  enabled         Boolean @default(true)
+  replyDelaySec   Int     @default(1)
+  typingDelaySec  Int     @default(2)
+  businessHoursOnly Boolean @default(false)
+  greeting        String
+  awayMessage     String
+  maxReplyLength  Int     @default(600)
+  languagePref    String  @default("auto") // auto | en | hi | hinglish
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------- Contacts ----------------
+model Contact {
+  id           String   @id @default(cuid())
+  phone        String   @unique
+  name         String
+  countryCode  String   @default("")
+  whatsappId   String   @default("")
+  language     String   @default("en")
+  status       String   @default("new") // new | active | lead | customer | blocked
+  leadScore    Int      @default(0)
+  detectedService String @default("")
+  notes        String   @default("")
+  pinned       Boolean  @default(false)
+  humanMode    Boolean  @default(false) // human takeover active
+  firstSeen    DateTime @default(now())
+  lastSeen     DateTime @default(now())
+  lastMessageAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  messages     Message[]
+  memories     ConversationMemory[]
+  notifications Notification[]
+  logs         Log[]
+
+  @@index([status])
+  @@index([leadScore])
+  @@index([lastMessageAt])
+}
+
+// ---------------- Messages ----------------
+model Message {
+  id           String   @id @default(cuid())
+  contactId    String
+  direction    String   // incoming | outgoing
+  source       String   @default("ai") // ai | owner | system | customer
+  text         String
+  mediaType    String   @default("text") // text | image | audio | document
+  status       String   @default("sent") // sent | delivered | read | failed | pending
+  read         Boolean  @default(false)
+  retryCount   Int      @default(0)
+  leadDelta    Int      @default(0)
+  timestamp    DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  contact      Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([timestamp])
+  @@index([direction])
+}
+
+// ---------------- Conversation memory (AI) ----------------
+model ConversationMemory {
+  id        String   @id @default(cuid())
+  contactId String
+  key       String   // e.g. name, business, requirements, budget, language, project_status
+  value     String
+  updatedAt DateTime @updatedAt
+
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, key])
+  @@index([contactId])
+}
+
+// ---------------- Lead scores history ----------------
+model LeadScore {
+  id           String   @id @default(cuid())
+  contactId    String
+  score        Int
+  category     String   // website | app | crm | software | ai_automation | maintenance | general | support | high_priority
+  reason       String
+  notified     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([contactId])
+  @@index([score])
+}
+
+// ---------------- Logs ----------------
+model Log {
+  id        String   @id @default(cuid())
+  category  String   // startup | backend | whatsapp | ai | database | errors | security | owner_notify | lead | frontend
+  level     String   @default("info") // info | warn | error | debug
+  message   String
+  meta      String   @default("") // JSON
+  contactId String?
+  createdAt DateTime @default(now())
+
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([category])
+  @@index([level])
+  @@index([createdAt])
+}
+
+// ---------------- WhatsApp session ----------------
+model Session {
+  id           String  @id @default("whatsapp")
+  state        String  @default("disconnected") // disconnected | connecting | connected | logged_out
+  connectedNumber String @default("")
+  connectedName String @default("")
+  deviceInfo   String  @default("")
+  qrCode       String  @default("")
+  connectedAt  DateTime?
+  lastSeen     DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ---------------- Notifications (owner + dashboard) ----------------
+model Notification {
+  id        String   @id @default(cuid())
+  type      String   // owner_request | new_lead | wa_connected | wa_disconnected | ai_error | db_error | new_customer
+  title     String
+  body      String
+  contactId String?
+  read      Boolean  @default(false)
+  severity  String   @default("info") // info | success | warning | error
+  createdAt DateTime @default(now())
+
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([read])
+  @@index([createdAt])
+}
+
+// ---------------- System metrics (time series) ----------------
+model Metric {
+  id        String   @id @default(cuid())
+  name      String   // cpu | ram | disk | messages_today | ai_replies | owner_replies
+  value     Float
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+}

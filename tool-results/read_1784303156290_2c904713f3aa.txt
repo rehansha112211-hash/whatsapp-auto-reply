@@ -1,0 +1,2002 @@
+     1→# ============================
+     2→# PART 1A - MASTER PROMPT
+     3→# Project: WhatsApp_Auto_Reply
+     4→# Owner: QorvixNode Technologies
+     5→# ============================
+     6→
+     7→Build a COMPLETE PRODUCTION-READY WhatsApp AI Auto Reply Platform from scratch.
+     8→
+     9→THIS IS NOT A DEMO.
+    10→THIS IS NOT A SAMPLE.
+    11→THIS IS NOT A PROTOTYPE.
+    12→
+    13→Generate only production-quality code.
+    14→
+    15→Do NOT generate placeholders.
+    16→Do NOT generate TODO comments.
+    17→Do NOT leave unfinished functions.
+    18→Do NOT skip any module.
+    19→Every feature must be fully implemented.
+    20→
+    21→==================================================
+    22→PRIMARY TARGET
+    23→==================================================
+    24→
+    25→Platform:
+    26→Termux (Android ARM64)
+    27→
+    28→Device:
+    29→Moto G45 5G
+    30→
+    31→Android:
+    32→Android 15
+    33→
+    34→Primary Browser:
+    35→Google Chrome
+    36→
+    37→==================================================
+    38→SECONDARY TARGET
+    39→==================================================
+    40→
+    41→Ubuntu
+    42→Debian
+    43→Linux VPS
+    44→
+    45→The same source code must run without modification.
+    46→
+    47→==================================================
+    48→PYTHON REQUIREMENTS
+    49→==================================================
+    50→
+    51→Target compatibility:
+    52→
+    53→- Python 3.12.x
+    54→- Python 3.13.x
+    55→- Python 3.14.x (where dependency support exists)
+    56→
+    57→Avoid deprecated APIs.
+    58→
+    59→Write forward-compatible code.
+    60→
+    61→==================================================
+    62→PROJECT NAME
+    63→==================================================
+    64→
+    65→WhatsApp_Auto_Reply
+    66→
+    67→Owner:
+    68→
+    69→QorvixNode Technologies
+    70→
+    71→==================================================
+    72→STARTUP
+    73→==================================================
+    74→
+    75→The entire project must start using only:
+    76→
+    77→bash start.sh
+    78→
+    79→No manual startup commands.
+    80→
+    81→==================================================
+    82→START.SH MUST
+    83→==================================================
+    84→
+    85→Automatically:
+    86→
+    87→- Verify Python
+    88→- Verify pip
+    89→- Verify SQLite
+    90→- Verify Node.js if required
+    91→- Verify npm if required
+    92→- Create virtual environment
+    93→- Install missing packages
+    94→- Create folders
+    95→- Create database
+    96→- Run migrations
+    97→- Verify ports
+    98→- Kill stale processes
+    99→- Start Backend
+   100→- Start Frontend
+   101→- Create logs
+   102→- Show localhost URLs
+   103→- Recover from common startup errors
+   104→- Exit cleanly if a fatal error occurs
+   105→
+   106→==================================================
+   107→LOCALHOST
+   108→==================================================
+   109→
+   110→Frontend
+   111→
+   112→http://127.0.0.1:3000
+   113→
+   114→Backend
+   115→
+   116→http://127.0.0.1:8000
+   117→
+   118→==================================================
+   119→PROJECT GOALS
+   120→==================================================
+   121→
+   122→Build a complete AI-powered WhatsApp Business Automation Platform for QorvixNode Technologies.
+   123→
+   124→The platform must:
+   125→
+   126→• Connect WhatsApp using QR Code.
+   127→
+   128→• Automatically save session.
+   129→
+   130→• Auto reconnect after restart.
+   131→
+   132→• Never require QR again unless session expires.
+   133→
+   134→• Auto reply using AI.
+   135→
+   136→• Support AI API providers.
+   137→
+   138→• Work entirely on localhost.
+   139→
+   140→• Store all data in SQLite.
+   141→
+   142→• Be optimized for Termux.
+   143→
+   144→==================================================
+   145→COMPANY PROFILE
+   146→==================================================
+   147→
+   148→Company Name:
+   149→
+   150→QorvixNode Technologies
+   151→
+   152→Company Website:
+   153→
+   154→https://qorvixnodetechnologies.indevs.in
+   155→
+   156→Business Type:
+   157→
+   158→Software Development Company
+   159→
+   160→Services:
+   161→
+   162→• Custom Website Development
+   163→• Android App Development
+   164→• AI Automation
+   165→• Business Software
+   166→• CRM Development
+   167→• E-Commerce Website
+   168→• Portfolio Website
+   169→• Landing Pages
+   170→• Dashboard Development
+   171→• UI/UX Design
+   172→• API Integration
+   173→• Hosting
+   174→• Deployment
+   175→• Maintenance
+   176→
+   177→This information must be permanently available to the AI assistant.
+   178→
+   179→==================================================
+   180→FIRST CUSTOMER MESSAGE
+   181→==================================================
+   182→
+   183→Whenever a NEW customer sends the first WhatsApp message:
+   184→
+   185→The AI must introduce the company first.
+   186→
+   187→The AI must explain:
+   188→
+   189→Who we are.
+   190→
+   191→What services we provide.
+   192→
+   193→How we can help.
+   194→
+   195→It must naturally invite the customer to explain their requirements.
+   196→
+   197→If the customer requests the company website, portfolio or official website, the AI must automatically share:
+   198→
+   199→https://qorvixnodetechnologies.indevs.in
+   200→
+   201→==================================================
+   202→OWNER SETTINGS
+   203→==================================================
+   204→
+   205→Dashboard must include:
+   206→
+   207→Owner Name
+   208→
+   209→Owner Phone Number
+   210→
+   211→Editable by login user.
+   212→
+   213→The AI must always know who the owner is.
+   214→
+   215→Never expose the owner's phone number to customers automatically.
+   216→
+   217→==================================================
+   218→OWNER REQUEST
+   219→==================================================
+   220→
+   221→If the customer says:
+   222→
+   223→"I want to talk to the owner"
+   224→
+   225→"I need a human"
+   226→
+   227→"Connect me to the owner"
+   228→
+   229→"Can I speak with your manager?"
+   230→
+   231→The AI must reply politely that the request has been forwarded.
+   232→
+   233→Then immediately send a WhatsApp notification to the configured Owner Number containing:
+   234→
+   235→Customer Name
+   236→
+   237→Customer Number
+   238→
+   239→Conversation Summary
+   240→
+   241→Last Customer Message
+   242→
+   243→Time
+   244→
+   245→Lead Score
+   246→
+   247→==================================================
+   248→LEAD DETECTION
+   249→==================================================
+   250→
+   251→AI must continuously evaluate customer interest.
+   252→
+   253→Assign an Interest Score between 0 and 100.
+   254→
+   255→Detect:
+   256→
+   257→Website Inquiry
+   258→
+   259→App Inquiry
+   260→
+   261→Software Inquiry
+   262→
+   263→AI Automation Inquiry
+   264→
+   265→General Question
+   266→
+   267→Support Request
+   268→
+   269→Potential Client
+   270→
+   271→If the lead score exceeds the configured threshold, notify the owner automatically.
+   272→
+   273→==================================================
+   274→GENERAL RULES
+   275→==================================================
+   276→
+   277→Production quality only.
+   278→
+   279→Modular architecture.
+   280→
+   281→Reusable code.
+   282→
+   283→Clean code.
+   284→
+   285→PEP8 compliant.
+   286→
+   287→Type hints everywhere.
+   288→
+   289→Proper logging.
+   290→
+   291→Graceful error handling.
+   292→
+   293→No placeholder code.
+   294→
+   295→No fake APIs.
+   296→
+   297→No unfinished modules.
+   298→
+   299→Everything must be production-ready.
+   300→# ==========================================================
+   301→# PART 1B – WHATSAPP ENGINE + AI ENGINE + DATABASE + AUTO REPLY
+   302→# Project : WhatsApp_Auto_Reply
+   303→# Owner   : QorvixNode Technologies
+   304→# ==========================================================
+   305→
+   306→Continue from Part 1A.
+   307→
+   308→This project MUST remain production-ready.
+   309→
+   310→Never generate placeholder code.
+   311→
+   312→Never leave unfinished implementations.
+   313→
+   314→All modules must communicate properly.
+   315→
+   316→==================================================
+   317→WHATSAPP ENGINE
+   318→==================================================
+   319→
+   320→Implement a stable WhatsApp Multi-Device engine.
+   321→
+   322→Requirements:
+   323→
+   324→• QR Code Login
+   325→• Automatic Session Save
+   326→• Automatic Session Restore
+   327→• Automatic Reconnect
+   328→• Detect Connection Loss
+   329→• Detect Logout
+   330→• Auto Retry
+   331→• Auto Restart Engine
+   332→• Live Connection Status
+   333→• Device Information
+   334→• Connected Number
+   335→• Session Health Monitoring
+   336→
+   337→The QR should disappear automatically after successful login.
+   338→
+   339→Dashboard must instantly update to:
+   340→
+   341→CONNECTED
+   342→
+   343→with:
+   344→
+   345→Connected Phone Number
+   346→
+   347→Connection Time
+   348→
+   349→Status
+   350→
+   351→==================================================
+   352→MESSAGE LISTENER
+   353→==================================================
+   354→
+   355→The backend must continuously listen for:
+   356→
+   357→Private Messages
+   358→
+   359→Ignore:
+   360→
+   361→Status Updates
+   362→
+   363→Broadcast Messages
+   364→
+   365→System Messages
+   366→
+   367→Deleted Events unless required
+   368→
+   369→The listener must never stop while the backend is running.
+   370→
+   371→==================================================
+   372→MESSAGE PROCESSING PIPELINE
+   373→==================================================
+   374→
+   375→Every incoming message must follow this pipeline:
+   376→
+   377→Receive Message
+   378→
+   379→↓
+   380→
+   381→Validate Message
+   382→
+   383→↓
+   384→
+   385→Save Database
+   386→
+   387→↓
+   388→
+   389→Check Contact
+   390→
+   391→↓
+   392→
+   393→Load Conversation History
+   394→
+   395→↓
+   396→
+   397→Load Company Context
+   398→
+   399→↓
+   400→
+   401→Load Customer Memory
+   402→
+   403→↓
+   404→
+   405→Generate AI Prompt
+   406→
+   407→↓
+   408→
+   409→Generate AI Response
+   410→
+   411→↓
+   412→
+   413→Store AI Response
+   414→
+   415→↓
+   416→
+   417→Send WhatsApp Reply
+   418→
+   419→↓
+   420→
+   421→Update Logs
+   422→
+   423→↓
+   424→
+   425→Check Lead Score
+   426→
+   427→↓
+   428→
+   429→Notify Owner if Required
+   430→
+   431→==================================================
+   432→CONTACT DATABASE
+   433→==================================================
+   434→
+   435→Automatically create contacts.
+   436→
+   437→Fields:
+   438→
+   439→ID
+   440→
+   441→Name
+   442→
+   443→Phone Number
+   444→
+   445→Country Code
+   446→
+   447→WhatsApp ID
+   448→
+   449→First Seen
+   450→
+   451→Last Seen
+   452→
+   453→Language
+   454→
+   455→Status
+   456→
+   457→Lead Score
+   458→
+   459→Notes
+   460→
+   461→Last Message Time
+   462→
+   463→Owner Assigned
+   464→
+   465→==================================================
+   466→CHAT HISTORY
+   467→==================================================
+   468→
+   469→Store every message.
+   470→
+   471→Fields:
+   472→
+   473→Message ID
+   474→
+   475→Contact ID
+   476→
+   477→Timestamp
+   478→
+   479→Direction
+   480→
+   481→Incoming
+   482→
+   483→Outgoing
+   484→
+   485→AI
+   486→
+   487→Owner
+   488→
+   489→Text
+   490→
+   491→Media Type
+   492→
+   493→Status
+   494→
+   495→Read
+   496→
+   497→Delivered
+   498→
+   499→Failed
+   500→
+   501→Retry Count
+   502→
+   503→==================================================
+   504→AI MEMORY
+   505→==================================================
+   506→
+   507→AI must remember previous conversations.
+   508→
+   509→Example:
+   510→
+   511→Customer Name
+   512→
+   513→Business
+   514→
+   515→Requirements
+   516→
+   517→Budget
+   518→
+   519→Preferred Language
+   520→
+   521→Previous Questions
+   522→
+   523→Project Status
+   524→
+   525→Do NOT lose memory after restart.
+   526→
+   527→Everything must persist in SQLite.
+   528→
+   529→==================================================
+   530→FIRST MESSAGE LOGIC
+   531→==================================================
+   532→
+   533→When a NEW customer sends the first message:
+   534→
+   535→AI must NOT immediately ask random questions.
+   536→
+   537→Instead introduce the company.
+   538→
+   539→Explain:
+   540→
+   541→Who QorvixNode Technologies is.
+   542→
+   543→What services are offered.
+   544→
+   545→How customers can get help.
+   546→
+   547→Invite the customer to explain their requirement.
+   548→
+   549→If customer requests:
+   550→
+   551→Website
+   552→
+   553→Portfolio
+   554→
+   555→Company Details
+   556→
+   557→Official Website
+   558→
+   559→Automatically send:
+   560→
+   561→https://qorvixnodetechnologies.indevs.in
+   562→
+   563→==================================================
+   564→AI REPLY RULES
+   565→==================================================
+   566→
+   567→Replies must be:
+   568→
+   569→Professional
+   570→
+   571→Friendly
+   572→
+   573→Short
+   574→
+   575→Natural
+   576→
+   577→Human-like
+   578→
+   579→Never robotic.
+   580→
+   581→Never repetitive.
+   582→
+   583→Never send the same reply twice.
+   584→
+   585→Maintain conversation context.
+   586→
+   587→Detect customer language.
+   588→
+   589→Reply in:
+   590→
+   591→English
+   592→
+   593→Hindi
+   594→
+   595→Hinglish
+   596→
+   597→according to customer language.
+   598→
+   599→==================================================
+   600→AI API SETTINGS
+   601→==================================================
+   602→
+   603→Dashboard must allow:
+   604→
+   605→API Provider
+   606→
+   607→API Key
+   608→
+   609→Model Name
+   610→
+   611→Base URL
+   612→
+   613→Temperature
+   614→
+   615→Top P
+   616→
+   617→Max Tokens
+   618→
+   619→Prompt
+   620→
+   621→Save
+   622→
+   623→Test Connection
+   624→
+   625→Support OpenAI-compatible APIs.
+   626→
+   627→The backend must be provider-independent.
+   628→
+   629→==================================================
+   630→OWNER SETTINGS
+   631→==================================================
+   632→
+   633→Dashboard Settings:
+   634→
+   635→Owner Name
+   636→
+   637→Owner Number
+   638→
+   639→Editable anytime.
+   640→
+   641→The AI must always know:
+   642→
+   643→Who the owner is.
+   644→
+   645→Never reveal owner phone number automatically.
+   646→
+   647→==================================================
+   648→OWNER TAKEOVER
+   649→==================================================
+   650→
+   651→If customer says:
+   652→
+   653→"I want to talk to owner"
+   654→
+   655→"I need a human"
+   656→
+   657→"Connect me"
+   658→
+   659→"Manager"
+   660→
+   661→"Call me"
+   662→
+   663→"Owner"
+   664→
+   665→The AI must:
+   666→
+   667→Reply politely.
+   668→
+   669→Inform customer that the request has been forwarded.
+   670→
+   671→Immediately notify Owner WhatsApp.
+   672→
+   673→Notification must contain:
+   674→
+   675→Customer Name
+   676→
+   677→Phone Number
+   678→
+   679→Conversation Summary
+   680→
+   681→Interest Level
+   682→
+   683→Last Customer Message
+   684→
+   685→Current Time
+   686→
+   687→After Owner starts replying:
+   688→
+   689→Disable AI replies for that conversation.
+   690→
+   691→Owner becomes active.
+   692→
+   693→Dashboard must show:
+   694→
+   695→Human Mode
+   696→
+   697→When Owner ends conversation:
+   698→
+   699→AI may resume automatically or manually.
+   700→
+   701→==================================================
+   702→LEAD DETECTION
+   703→==================================================
+   704→
+   705→AI must continuously score every conversation.
+   706→
+   707→Score:
+   708→
+   709→0 - 100
+   710→
+   711→Detect:
+   712→
+   713→Website Lead
+   714→
+   715→Android App Lead
+   716→
+   717→CRM Lead
+   718→
+   719→Business Software
+   720→
+   721→AI Automation
+   722→
+   723→Maintenance
+   724→
+   725→General Question
+   726→
+   727→Support
+   728→
+   729→High Priority Client
+   730→
+   731→If score exceeds threshold:
+   732→
+   733→Immediately notify owner.
+   734→
+   735→==================================================
+   736→AUTO REPLY SETTINGS
+   737→==================================================
+   738→
+   739→Dashboard options:
+   740→
+   741→Enable
+   742→
+   743→Disable
+   744→
+   745→Reply Delay
+   746→
+   747→Typing Delay
+   748→
+   749→Business Hours
+   750→
+   751→Greeting
+   752→
+   753→Away Message
+   754→
+   755→Maximum Reply Length
+   756→
+   757→Language Preference
+   758→
+   759→==================================================
+   760→DATABASE
+   761→==================================================
+   762→
+   763→SQLite
+   764→
+   765→Tables:
+   766→
+   767→users
+   768→
+   769→settings
+   770→
+   771→company
+   772→
+   773→owner
+   774→
+   775→contacts
+   776→
+   777→messages
+   778→
+   779→conversation_memory
+   780→
+   781→lead_scores
+   782→
+   783→logs
+   784→
+   785→sessions
+   786→
+   787→api_settings
+   788→
+   789→Everything must use proper indexes.
+   790→
+   791→Foreign keys enabled.
+   792→
+   793→Transactions enabled.
+   794→
+   795→==================================================
+   796→LOGGING
+   797→==================================================
+   798→
+   799→Log everything.
+   800→
+   801→Startup
+   802→
+   803→Shutdown
+   804→
+   805→WhatsApp
+   806→
+   807→AI
+   808→
+   809→Database
+   810→
+   811→Errors
+   812→
+   813→Warnings
+   814→
+   815→Owner Notifications
+   816→
+   817→Lead Detection
+   818→
+   819→Logs must rotate automatically.
+   820→
+   821→==================================================
+   822→ERROR HANDLING
+   823→==================================================
+   824→
+   825→No crashes.
+   826→
+   827→Recover automatically whenever possible.
+   828→
+   829→Retry temporary failures.
+   830→
+   831→Show meaningful error messages.
+   832→
+   833→Write complete logs.
+   834→
+   835→Never silently ignore exceptions.
+   836→
+   837→Continue running whenever recovery is possible.
+   838→
+   839→==================================================
+   840→CODING RULES
+   841→==================================================
+   842→
+   843→Production quality only.
+   844→
+   845→No placeholder code.
+   846→
+   847→No TODO comments.
+   848→
+   849→No fake implementations.
+   850→
+   851→Strong typing.
+   852→
+   853→Clean architecture.
+   854→
+   855→Modular code.
+   856→
+   857→Reusable components.
+   858→
+   859→Maintainable structure.
+   860→
+   861→Every module must be fully integrated with every other module.
+   862→
+   863→The generated project must be capable of running locally on Termux using:
+   864→
+   865→bash start.sh
+   866→
+   867→# ==========================================================
+   868→# PART 1C – BACKEND CORE + START.SH + SECURITY + TERMUX
+   869→# Project : WhatsApp_Auto_Reply
+   870→# Owner   : QorvixNode Technologies
+   871→# ==========================================================
+   872→
+   873→Continue from Part 1A and Part 1B.
+   874→
+   875→This is NOT a demo.
+   876→
+   877→Generate ONLY production-quality code.
+   878→
+   879→Never leave incomplete modules.
+   880→
+   881→Never generate placeholder code.
+   882→
+   883→==================================================
+   884→BACKEND
+   885→==================================================
+   886→
+   887→Use a production-ready Python backend.
+   888→
+   889→Requirements:
+   890→
+   891→• Modular architecture
+   892→• Async where appropriate
+   893→• REST API
+   894→• WebSocket support for live dashboard updates
+   895→• SQLite database
+   896→• Automatic database migrations
+   897→• Proper dependency injection where beneficial
+   898→• Configuration through environment variables and settings
+   899→
+   900→Backend must continue running even if individual modules encounter recoverable errors.
+   901→
+   902→==================================================
+   903→START.SH
+   904→==================================================
+   905→
+   906→The entire project must start using ONLY:
+   907→
+   908→bash start.sh
+   909→
+   910→The script must automatically:
+   911→
+   912→• Verify Python installation
+   913→• Verify supported Python version (target 3.12–3.14)
+   914→• Verify pip
+   915→• Create virtual environment if missing
+   916→• Install/update missing dependencies
+   917→• Create required folders
+   918→• Create SQLite database
+   919→• Run migrations
+   920→• Verify configuration files
+   921→• Verify API configuration
+   922→• Verify WhatsApp session
+   923→• Check if localhost ports are already in use
+   924→• Stop stale project processes safely
+   925→• Start Backend
+   926→• Start Frontend
+   927→• Generate startup logs
+   928→• Display:
+   929→
+   930→Backend URL
+   931→
+   932→Frontend URL
+   933→
+   934→Project Version
+   935→
+   936→Python Version
+   937→
+   938→WhatsApp Status
+   939→
+   940→Dashboard Status
+   941→
+   942→If startup fails:
+   943→
+   944→Generate readable error logs.
+   945→
+   946→Exit cleanly.
+   947→
+   948→==================================================
+   949→TERMUX OPTIMIZATION
+   950→==================================================
+   951→
+   952→The project MUST be optimized for Android Termux.
+   953→
+   954→Requirements:
+   955→
+   956→Low RAM usage
+   957→
+   958→Low CPU usage
+   959→
+   960→Low storage usage
+   961→
+   962→Minimal background activity
+   963→
+   964→Avoid unnecessary polling
+   965→
+   966→Prefer event-driven architecture
+   967→
+   968→Avoid memory leaks
+   969→
+   970→Proper garbage collection
+   971→
+   972→Automatically release unused resources
+   973→
+   974→Project should remain stable during long uptime.
+   975→
+   976→==================================================
+   977→FRONTEND SERVER
+   978→==================================================
+   979→
+   980→Frontend:
+   981→
+   982→http://127.0.0.1:3000
+   983→
+   984→Backend:
+   985→
+   986→http://127.0.0.1:8000
+   987→
+   988→Dashboard must automatically reconnect if backend restarts.
+   989→
+   990→==================================================
+   991→SECURITY
+   992→==================================================
+   993→
+   994→Protect:
+   995→
+   996→API Keys
+   997→
+   998→WhatsApp Sessions
+   999→
+  1000→Configuration
+  1001→
+  1002→Passwords
+  1003→
+  1004→Owner Settings
+  1005→
+  1006→Requirements:
+  1007→
+  1008→Encrypt sensitive values before storage.
+  1009→
+  1010→Never expose secrets to frontend.
+  1011→
+  1012→Never hardcode credentials.
+  1013→
+  1014→Use secure session handling.
+  1015→
+  1016→Sanitize all user input.
+  1017→
+  1018→Validate all API requests.
+  1019→
+  1020→Protect against:
+  1021→
+  1022→SQL Injection
+  1023→
+  1024→Path Traversal
+  1025→
+  1026→XSS
+  1027→
+  1028→CSRF (where applicable)
+  1029→
+  1030→Command Injection
+  1031→
+  1032→Unsafe file operations
+  1033→
+  1034→==================================================
+  1035→API SETTINGS
+  1036→==================================================
+  1037→
+  1038→Dashboard must allow configuration of:
+  1039→
+  1040→Provider Name
+  1041→
+  1042→Base URL
+  1043→
+  1044→API Key
+  1045→
+  1046→Model Name
+  1047→
+  1048→Temperature
+  1049→
+  1050→Top P
+  1051→
+  1052→Maximum Tokens
+  1053→
+  1054→System Prompt
+  1055→
+  1056→Connection Test
+  1057→
+  1058→Save
+  1059→
+  1060→Reset
+  1061→
+  1062→Support OpenAI-compatible APIs by default.
+  1063→
+  1064→Backend must be provider-independent.
+  1065→
+  1066→==================================================
+  1067→COMPANY SETTINGS
+  1068→==================================================
+  1069→
+  1070→Editable Company Information:
+  1071→
+  1072→Company Name
+  1073→
+  1074→QorvixNode Technologies
+  1075→
+  1076→Website
+  1077→
+  1078→Business Description
+  1079→
+  1080→Services
+  1081→
+  1082→Business Hours
+  1083→
+  1084→Greeting Message
+  1085→
+  1086→Closing Message
+  1087→
+  1088→Support Message
+  1089→
+  1090→This information must automatically be included in AI context.
+  1091→
+  1092→==================================================
+  1093→OWNER SETTINGS
+  1094→==================================================
+  1095→
+  1096→Editable:
+  1097→
+  1098→Owner Name
+  1099→
+  1100→Owner Number
+  1101→
+  1102→Owner Availability
+  1103→
+  1104→Business Hours
+  1105→
+  1106→Human Takeover Enabled
+  1107→
+  1108→Lead Notification Enabled
+  1109→
+  1110→The owner number must NEVER be shared automatically with customers.
+  1111→
+  1112→==================================================
+  1113→AI CONTEXT
+  1114→==================================================
+  1115→
+  1116→The AI must always know:
+  1117→
+  1118→Company Name
+  1119→
+  1120→Company Website
+  1121→
+  1122→Services
+  1123→
+  1124→Conversation History
+  1125→
+  1126→Customer Memory
+  1127→
+  1128→Current Time
+  1129→
+  1130→Business Hours
+  1131→
+  1132→Owner Settings
+  1133→
+  1134→AI Settings
+  1135→
+  1136→Lead Score
+  1137→
+  1138→The AI must answer naturally without repeatedly introducing the company after the first interaction.
+  1139→
+  1140→==================================================
+  1141→DATABASE SAFETY
+  1142→==================================================
+  1143→
+  1144→SQLite requirements:
+  1145→
+  1146→Foreign Keys Enabled
+  1147→
+  1148→Transactions
+  1149→
+  1150→Indexes
+  1151→
+  1152→Automatic Backups
+  1153→
+  1154→Database Integrity Checks
+  1155→
+  1156→Safe Shutdown
+  1157→
+  1158→Automatic Recovery after unexpected termination
+  1159→
+  1160→==================================================
+  1161→LOGGING
+  1162→==================================================
+  1163→
+  1164→Generate separate log files for:
+  1165→
+  1166→Startup
+  1167→
+  1168→Backend
+  1169→
+  1170→Frontend
+  1171→
+  1172→WhatsApp
+  1173→
+  1174→AI
+  1175→
+  1176→Database
+  1177→
+  1178→Errors
+  1179→
+  1180→Security
+  1181→
+  1182→Owner Notifications
+  1183→
+  1184→Lead Detection
+  1185→
+  1186→Logs must rotate automatically.
+  1187→
+  1188→Old logs should be archived.
+  1189→
+  1190→==================================================
+  1191→ERROR RECOVERY
+  1192→==================================================
+  1193→
+  1194→Recover automatically whenever possible.
+  1195→
+  1196→Retry temporary failures.
+  1197→
+  1198→Reconnect WhatsApp automatically.
+  1199→
+  1200→Reconnect dashboard automatically.
+  1201→
+  1202→Restart failed background workers when safe.
+  1203→
+  1204→Never lose chat history because of recoverable errors.
+  1205→
+  1206→==================================================
+  1207→FILE STRUCTURE
+  1208→==================================================
+  1209→
+  1210→Create a clean production-ready folder structure.
+  1211→
+  1212→Separate:
+  1213→
+  1214→Backend
+  1215→
+  1216→Frontend
+  1217→
+  1218→Database
+  1219→
+  1220→Configuration
+  1221→
+  1222→Logs
+  1223→
+  1224→Static Files
+  1225→
+  1226→Templates
+  1227→
+  1228→WhatsApp Engine
+  1229→
+  1230→AI Engine
+  1231→
+  1232→Utilities
+  1233→
+  1234→Services
+  1235→
+  1236→Routes
+  1237→
+  1238→Models
+  1239→
+  1240→Controllers
+  1241→
+  1242→Repositories
+  1243→
+  1244→Security
+  1245→
+  1246→Tests
+  1247→
+  1248→Documentation
+  1249→
+  1250→Scripts
+  1251→
+  1252→==================================================
+  1253→CODE QUALITY
+  1254→==================================================
+  1255→
+  1256→Use:
+  1257→
+  1258→Type Hints
+  1259→
+  1260→PEP 8
+  1261→
+  1262→Docstrings
+  1263→
+  1264→Meaningful variable names
+  1265→
+  1266→Meaningful logging
+  1267→
+  1268→Consistent formatting
+  1269→
+  1270→Reusable modules
+  1271→
+  1272→No duplicate logic
+  1273→
+  1274→No dead code
+  1275→
+  1276→No placeholder implementations
+  1277→
+  1278→No TODO comments
+  1279→
+  1280→==================================================
+  1281→FINAL REQUIREMENTS
+  1282→==================================================
+  1283→
+  1284→The generated project must be capable of running on:
+  1285→
+  1286→• Termux (Primary)
+  1287→• Ubuntu
+  1288→• Debian
+  1289→
+  1290→using a single command:
+  1291→
+  1292→bash start.sh
+  1293→
+  1294→The completed application must include:
+  1295→
+  1296→✓ Login Page
+  1297→
+  1298→✓ Dashboard
+  1299→
+  1300→✓ WhatsApp QR Login
+  1301→
+  1302→✓ Automatic Session Restore
+  1303→
+  1304→✓ AI Auto Reply
+  1305→
+  1306→✓ Company Introduction
+  1307→
+  1308→✓ Company Website Sharing
+  1309→
+  1310→✓ AI API Settings
+  1311→
+  1312→✓ Owner Settings
+  1313→
+  1314→✓ Human Takeover
+  1315→
+  1316→✓ Lead Detection
+  1317→
+  1318→✓ Owner Notification
+  1319→
+  1320→✓ Conversation Memory
+  1321→
+  1322→✓ Chat History
+  1323→
+  1324→✓ SQLite Database
+  1325→
+  1326→✓ Secure Configuration
+  1327→
+  1328→✓ Live Dashboard Updates
+  1329→
+  1330→✓ Logging
+  1331→
+  1332→✓ Error Recovery
+  1333→
+  1334→✓ Mobile-Friendly UI
+  1335→
+  1336→The implementation must be production-ready, modular, maintainable, fully integrated, and suitable for real-world deployment under the QorvixNode Technologies brand.
+  1337→# ==========================================================
+  1338→# PART 2A – FRONTEND + LOGIN + DASHBOARD + SETTINGS
+  1339→# Project : WhatsApp_Auto_Reply
+  1340→# Owner   : QorvixNode Technologies
+  1341→# ==========================================================
+  1342→
+  1343→Continue from Part 1A, Part 1B and Part 1C.
+  1344→
+  1345→Generate a complete production-ready frontend.
+  1346→
+  1347→This is NOT a demo.
+  1348→
+  1349→Do NOT generate placeholder UI.
+  1350→
+  1351→Do NOT leave unfinished pages.
+  1352→
+  1353→Frontend must communicate with the backend using REST APIs and WebSockets.
+  1354→
+  1355→==================================================
+  1356→FRONTEND REQUIREMENTS
+  1357→==================================================
+  1358→
+  1359→Frontend URL
+  1360→
+  1361→http://127.0.0.1:3000
+  1362→
+  1363→Must work perfectly on:
+  1364→
+  1365→• Chrome Android
+  1366→• Chrome Desktop
+  1367→• Firefox
+  1368→• Edge
+  1369→
+  1370→Mobile-first responsive design.
+  1371→
+  1372→Dark Mode by default.
+  1373→
+  1374→Light Mode optional.
+  1375→
+  1376→Fast loading.
+  1377→
+  1378→Minimal animations.
+  1379→
+  1380→==================================================
+  1381→LOGIN PAGE
+  1382→==================================================
+  1383→
+  1384→Create a professional login page.
+  1385→
+  1386→Fields:
+  1387→
+  1388→Username
+  1389→
+  1390→Password
+  1391→
+  1392→Remember Login
+  1393→
+  1394→Login Button
+  1395→
+  1396→Show Password
+  1397→
+  1398→Forgot Password (optional placeholder hidden until backend support)
+  1399→
+  1400→Features:
+  1401→
+  1402→Secure Login
+  1403→
+  1404→Session Storage
+  1405→
+  1406→Logout
+  1407→
+  1408→Auto Login if Remember Login enabled
+  1409→
+  1410→Proper validation
+  1411→
+  1412→Loading animation
+  1413→
+  1414→Error messages
+  1415→
+  1416→==================================================
+  1417→LAYOUT
+  1418→==================================================
+  1419→
+  1420→Left Sidebar
+  1421→
+  1422→Top Navigation Bar
+  1423→
+  1424→Main Content Area
+  1425→
+  1426→Responsive Drawer on Mobile
+  1427→
+  1428→Footer
+  1429→
+  1430→==================================================
+  1431→SIDEBAR MENU
+  1432→==================================================
+  1433→
+  1434→Dashboard
+  1435→
+  1436→WhatsApp
+  1437→
+  1438→Chats
+  1439→
+  1440→Leads
+  1441→
+  1442→AI Settings
+  1443→
+  1444→Company Settings
+  1445→
+  1446→Owner Settings
+  1447→
+  1448→Logs
+  1449→
+  1450→System Status
+  1451→
+  1452→Logout
+  1453→
+  1454→==================================================
+  1455→TOP BAR
+  1456→==================================================
+  1457→
+  1458→Project Name
+  1459→
+  1460→WhatsApp_Auto_Reply
+  1461→
+  1462→Company
+  1463→
+  1464→QorvixNode Technologies
+  1465→
+  1466→Current User
+  1467→
+  1468→WhatsApp Status
+  1469→
+  1470→Current Time
+  1471→
+  1472→Notification Icon
+  1473→
+  1474→==================================================
+  1475→DASHBOARD
+  1476→==================================================
+  1477→
+  1478→Dashboard must update in real time.
+  1479→
+  1480→Cards:
+  1481→
+  1482→WhatsApp Status
+  1483→
+  1484→Connected Number
+  1485→
+  1486→Today's Messages
+  1487→
+  1488→Total Contacts
+  1489→
+  1490→AI Replies
+  1491→
+  1492→Owner Replies
+  1493→
+  1494→Hot Leads
+  1495→
+  1496→System Uptime
+  1497→
+  1498→Database Status
+  1499→
+  1500→AI Provider
+  1501→
+  1502→Current AI Model
+  1503→
+  1504→==================================================
+  1505→SYSTEM STATUS
+  1506→==================================================
+  1507→
+  1508→Show:
+  1509→
+  1510→Backend Status
+  1511→
+  1512→Frontend Status
+  1513→
+  1514→Database Status
+  1515→
+  1516→WhatsApp Status
+  1517→
+  1518→AI Status
+  1519→
+  1520→API Status
+  1521→
+  1522→Session Status
+  1523→
+  1524→Green
+  1525→
+  1526→Yellow
+  1527→
+  1528→Red
+  1529→
+  1530→Indicators.
+  1531→
+  1532→==================================================
+  1533→WHATSAPP PAGE
+  1534→==================================================
+  1535→
+  1536→Display:
+  1537→
+  1538→Connection Status
+  1539→
+  1540→QR Code
+  1541→
+  1542→Connected Number
+  1543→
+  1544→Connection Time
+  1545→
+  1546→Session State
+  1547→
+  1548→Buttons:
+  1549→
+  1550→Generate QR
+  1551→
+  1552→Reconnect
+  1553→
+  1554→Logout
+  1555→
+  1556→Refresh Status
+  1557→
+  1558→After successful login:
+  1559→
+  1560→Hide QR automatically.
+  1561→
+  1562→Show connected account.
+  1563→
+  1564→==================================================
+  1565→AI SETTINGS PAGE
+  1566→==================================================
+  1567→
+  1568→Fields:
+  1569→
+  1570→Provider
+  1571→
+  1572→Base URL
+  1573→
+  1574→API Key
+  1575→
+  1576→Model
+  1577→
+  1578→Temperature
+  1579→
+  1580→Top P
+  1581→
+  1582→Maximum Tokens
+  1583→
+  1584→System Prompt
+  1585→
+  1586→Buttons:
+  1587→
+  1588→Save
+  1589→
+  1590→Reset
+  1591→
+  1592→Test Connection
+  1593→
+  1594→Status
+  1595→
+  1596→Show current AI provider.
+  1597→
+  1598→Never expose API key in plain text.
+  1599→
+  1600→==================================================
+  1601→COMPANY SETTINGS
+  1602→==================================================
+  1603→
+  1604→Editable:
+  1605→
+  1606→Company Name
+  1607→
+  1608→Company Website
+  1609→
+  1610→Business Description
+  1611→
+  1612→Services
+  1613→
+  1614→Greeting Message
+  1615→
+  1616→Closing Message
+  1617→
+  1618→Support Message
+  1619→
+  1620→Business Hours
+  1621→
+  1622→Changes must instantly affect AI replies.
+  1623→
+  1624→==================================================
+  1625→OWNER SETTINGS
+  1626→==================================================
+  1627→
+  1628→Editable:
+  1629→
+  1630→Owner Name
+  1631→
+  1632→Owner WhatsApp Number
+  1633→
+  1634→Lead Notification
+  1635→
+  1636→Human Takeover
+  1637→
+  1638→Business Hours
+  1639→
+  1640→Auto Notify
+  1641→
+  1642→Save Button
+  1643→
+  1644→Test Notification
+  1645→
+  1646→Owner number must never appear to customers automatically.
+  1647→
+  1648→==================================================
+  1649→CHAT SUMMARY
+  1650→==================================================
+  1651→
+  1652→Dashboard must show:
+  1653→
+  1654→Recent Conversations
+  1655→
+  1656→Unread Messages
+  1657→
+  1658→Last Customer
+  1659→
+  1660→Last Reply Time
+  1661→
+  1662→Lead Score
+  1663→
+  1664→==================================================
+  1665→LEADS PAGE
+  1666→==================================================
+  1667→
+  1668→Display table:
+  1669→
+  1670→Customer Name
+  1671→
+  1672→Phone Number
+  1673→
+  1674→Service Requested
+  1675→
+  1676→Lead Score
+  1677→
+  1678→Status
+  1679→
+  1680→Last Message
+  1681→
+  1682→Search
+  1683→
+  1684→Filter
+  1685→
+  1686→Sort
+  1687→
+  1688→Export CSV
+  1689→
+  1690→==================================================
+  1691→LOGS PAGE
+  1692→==================================================
+  1693→
+  1694→Separate tabs:
+  1695→
+  1696→Startup
+  1697→
+  1698→Backend
+  1699→
+  1700→WhatsApp
+  1701→
+  1702→AI
+  1703→
+  1704→Database
+  1705→
+  1706→Errors
+  1707→
+  1708→Security
+  1709→
+  1710→Search logs.
+  1711→
+  1712→Download logs.
+  1713→
+  1714→Auto refresh.
+  1715→
+  1716→==================================================
+  1717→NOTIFICATIONS
+  1718→==================================================
+  1719→
+  1720→Real-time notifications.
+  1721→
+  1722→Examples:
+  1723→
+  1724→WhatsApp Connected
+  1725→
+  1726→WhatsApp Disconnected
+  1727→
+  1728→New Customer
+  1729→
+  1730→New Lead
+  1731→
+  1732→Owner Requested
+  1733→
+  1734→AI Error
+  1735→
+  1736→Database Error
+  1737→
+  1738→==================================================
+  1739→SEARCH
+  1740→==================================================
+  1741→
+  1742→Global search.
+  1743→
+  1744→Search by:
+  1745→
+  1746→Customer Name
+  1747→
+  1748→Phone Number
+  1749→
+  1750→Message
+  1751→
+  1752→Lead
+  1753→
+  1754→Date
+  1755→
+  1756→==================================================
+  1757→MOBILE RESPONSIVE
+  1758→==================================================
+  1759→
+  1760→Fully optimized for Android.
+  1761→
+  1762→No horizontal scrolling.
+  1763→
+  1764→Large touch targets.
+  1765→
+  1766→Fast rendering.
+  1767→
+  1768→Smooth navigation.
+  1769→
+  1770→Responsive sidebar.
+  1771→
+  1772→==================================================
+  1773→UI RULES
+  1774→==================================================
+  1775→
+  1776→Professional Design.
+  1777→
+  1778→Minimal Design.
+  1779→
+  1780→Fast.
+  1781→
+  1782→Modern.
+  1783→
+  1784→No unnecessary animations.
+  1785→
+  1786→Consistent spacing.
+  1787→
+  1788→Consistent typography.
+  1789→
+  1790→Accessible UI.
+  1791→
+  1792→Dark Mode default.
+  1793→
+  1794→==================================================
+  1795→FRONTEND QUALITY
+  1796→==================================================
+  1797→
+  1798→No placeholder pages.
+  1799→
+  1800→No fake buttons.
+  1801→
+  1802→Every button must work.
+  1803→
+  1804→Every form must validate.
+  1805→
+  1806→Every API must be connected.
+  1807→
+  1808→Every page must function correctly.
+  1809→
+  1810→Frontend must remain synchronized with backend in real time.
+  1811→
+  1812→Generate production-quality frontend code only.
+  1813→
+  1814→# ==========================================================
+  1815→# PART 2B – CHAT SYSTEM + LIVE UPDATES + FINAL UI RULES
+  1816→# Project : WhatsApp_Auto_Reply
+  1817→# Owner   : QorvixNode Technologies
+  1818→# ==========================================================
+  1819→
+  1820→Continue from Part 1A, Part 1B, Part 1C and Part 2A.
+  1821→
+  1822→Generate ONLY production-ready code.
+  1823→
+  1824→Do NOT generate demo code.
+  1825→
+  1826→Do NOT generate placeholder pages.
+  1827→
+  1828→Every screen must work completely.
+  1829→
+  1830→==================================================
+  1831→CHAT PAGE
+  1832→==================================================
+  1833→
+  1834→Create a complete WhatsApp-style chat interface.
+  1835→
+  1836→Features:
+  1837→
+  1838→• Conversation List
+  1839→• Chat Window
+  1840→• Customer Details Panel
+  1841→• Search
+  1842→• Filter
+  1843→• Unread Indicator
+  1844→• Online Status
+  1845→• Typing Indicator
+  1846→• Delivery Status
+  1847→• Read Status
+  1848→• AI Status
+  1849→• Human Status
+  1850→• Lead Badge
+  1851→
+  1852→==================================================
+  1853→CHAT LIST
+  1854→==================================================
+  1855→
+  1856→Display:
+  1857→
+  1858→Customer Name
+  1859→
+  1860→Phone Number
+  1861→
+  1862→Profile Initial
+  1863→
+  1864→Last Message
+  1865→
+  1866→Last Message Time
+  1867→
+  1868→Unread Count
+  1869→
+  1870→Lead Score
+  1871→
+  1872→Pinned Status
+  1873→
+  1874→Human Takeover Status
+  1875→
+  1876→Sort chats by latest activity automatically.
+  1877→
+  1878→==================================================
+  1879→CHAT WINDOW
+  1880→==================================================
+  1881→
+  1882→Display:
+  1883→
+  1884→Incoming Messages
+  1885→
+  1886→Outgoing Messages
+  1887→
+  1888→AI Replies
+  1889→
+  1890→Owner Replies
+  1891→
+  1892→Message Time
+  1893→
+  1894→Delivery Status
+  1895→
+  1896→Read Status
+  1897→
+  1898→Typing Animation
+  1899→
+  1900→Auto Scroll
+  1901→
+  1902→Date Separators
+  1903→
+  1904→Conversation should load instantly.
+  1905→
+  1906→==================================================
+  1907→CUSTOMER DETAILS PANEL
+  1908→==================================================
+  1909→
+  1910→Display:
+  1911→
+  1912→Customer Name
+  1913→
+  1914→Phone Number
+  1915→
+  1916→First Contact Date
+  1917→
+  1918→Last Active
+  1919→
+  1920→Preferred Language
+  1921→
+  1922→Lead Score
+  1923→
+  1924→Detected Service
+  1925→
+  1926→Conversation Summary
+  1927→
+  1928→Current Mode
+  1929→
+  1930→AI
+  1931→
+  1932→Human
+  1933→
+  1934→==================================================
+  1935→HUMAN TAKEOVER
+  1936→==================================================
+  1937→
+  1938→Provide button:
+  1939→
+  1940→Take Over Chat
+  1941→
+  1942→When enabled:
+  1943→
+  1944→AI immediately stops replying.
+  1945→
+  1946→Owner controls the conversation.
+  1947→
+  1948→Display:
+  1949→
+  1950→Human Mode Active
+  1951→
+  1952→Provide button:
+  1953→
+  1954→Resume AI
+  1955→
+  1956→AI resumes only after owner confirmation.
+  1957→
+  1958→==================================================
+  1959→AI STATUS
+  1960→==================================================
+  1961→
+  1962→Display current status:
+  1963→
+  1964→Thinking
+  1965→
+  1966→Generating Reply
+  1967→
+  1968→Sending Reply
+  1969→
+  1970→Idle
+  1971→
+  1972→Error
+  1973→
+  1974→Response Time
+  1975→
+  1976→Current Model
+  1977→
+  1978→==================================================
+  1979→LIVE UPDATES
+  1980→==================================================
+  1981→
+  1982→Dashboard must update instantly using WebSocket.
+  1983→
+  1984→Without refreshing browser update:
+  1985→
+  1986→New Messages
+  1987→
+  1988→New Leads
+  1989→
+  1990→WhatsApp Status
+  1991→
+  1992→Owner Notifications
+  1993→
+  1994→AI Status
+  1995→
+  1996→Database Status
+  1997→
+  1998→Logs
+  1999→
+  2000→==================================================
+
+[showing lines 1-2000 of 2735; use offset=2001 with limit to continue reading]
