@@ -1807,3 +1807,44 @@ Platform was stable at start: 20 views, 61 API routes, 23 Prisma models, lint cl
 6. Add a public API with API keys for external integrations.
 7. Add PWA wrapper (installable, push notifications).
 8. Add conversation summary generation (AI-powered 1-line summary per conversation for the chat list).
+
+---
+Task ID: user-request-auth-fix-wa-login
+Agent: Main (Z.ai Code)
+Task: Fix "Unauthorized Failed to load owner settings" errors + add QR and phone number login to WhatsApp
+
+## Work Completed
+
+### 1. Fixed "Unauthorized" Errors (Global 401 Handler)
+- **Root cause**: When the session expires or the dev server restarts, API calls return 401. The settings views caught the error and showed "Failed to load X settings" toast with "Unauthorized" description — poor UX.
+- **Fix**: Added a global 401 handler in `src/lib/api-client.ts`:
+  - When any non-auth API call returns 401, `handleUnauthorized()` fires `window.location.replace('/')` which reloads the page → the root `page.tsx` checks `/api/auth/me` → gets 401 → shows the LoginView.
+  - Auth endpoints (`/api/auth/*`) are excluded to prevent reload loops (the initial auth check intentionally returns 401 to signal "not logged in").
+  - Throttled to redirect only once per 3 seconds (prevents multiple simultaneous reloads when several API calls fail at once).
+  - Added `credentials: 'same-origin'` to all fetch calls to ensure cookies are sent.
+- **Updated 4 settings views** (owner, ai, company, autoreply) to suppress the error toast on 401: `if (err instanceof ApiError && err.status === 401) return` — the global handler takes care of the redirect, no need for a confusing toast.
+- **Verified**: cleared cookies → page redirects to login → logged back in → all settings pages (Owner, AI, Company, Auto Reply) load without "Unauthorized" errors.
+
+### 2. Added Phone Number Login to WhatsApp
+- **New API routes**:
+  - `POST /api/whatsapp/phone-pair` — Step 1: user enters phone number → generates a 6-digit pairing code, stores it in the Setting table (NOT on the session, so the DisconnectedCard stays visible). Returns the code (in production this would be sent via SMS).
+  - `POST /api/whatsapp/phone-verify` — Step 2: user enters the 6-digit code → verifies against the stored code (with 10-minute expiry) → calls `confirmWhatsAppLogin()` to complete the connection. Cleans up the pairing setting.
+- **Updated `whatsapp-view.tsx`**:
+  - `DisconnectedCard` now has a **method toggle** with two tabs: "QR Code" and "Phone Number".
+  - **QR Code tab** (default): the existing "Generate QR Code" button.
+  - **Phone Number tab**: a 2-step form:
+    - Step 1 ("request"): phone number input (+91 98765 43210 placeholder), optional device name, "Send Pairing Code" button.
+    - Step 2 ("verify"): shows a confirmation banner ("Code sent to {phone}" + simulation-mode code display), 6-digit code input (large, monospace, centered, auto-numeric), Back + "Verify & Connect" buttons.
+  - On successful verification → calls `onConnected()` which refreshes the session → the ConnectedCard appears with the phone number.
+  - Added Phone, KeyRound, ArrowRight, ArrowLeft icons. Added Input + Label imports.
+- **Updated "How it works"** collapsible to describe both methods.
+- **Verified end-to-end**: 
+  - Clicked "Phone Number" tab → filled +91 98765 43210 + "Test Device" → clicked "Send Pairing Code" → received code 172161 → entered in verify step → clicked "Verify & Connect" → WhatsApp connected as +91 98765 43210 with Logout/Reconnect buttons visible.
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200
+- Browser E2E: 
+  - Auth fix: cookies cleared → redirects to login → login → all settings pages load without "Unauthorized" ✓
+  - WhatsApp phone login: Phone Number tab → form → send code → verify → connected ✓
+  - WhatsApp QR login: still works (Generate QR Code button present) ✓

@@ -109,6 +109,8 @@ export function AutoReplySettingsView() {
       })
       setTranslationDirty(false)
     } catch (err) {
+      // 401 is handled globally by the API client (redirect to login)
+      if (err instanceof ApiError && err.status === 401) return
       toast.error('Failed to load auto-reply settings', { description: (err as Error).message })
     } finally {
       setLoading(false)

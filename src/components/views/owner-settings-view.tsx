@@ -84,6 +84,8 @@ export function OwnerSettingsView() {
         leadThreshold: data.leadThreshold,
       })
     } catch (err) {
+      // 401 is handled globally by the API client (redirect to login)
+      if (err instanceof ApiError && err.status === 401) return
       toast.error('Failed to load owner settings', { description: (err as Error).message })
     } finally {
       setLoading(false)

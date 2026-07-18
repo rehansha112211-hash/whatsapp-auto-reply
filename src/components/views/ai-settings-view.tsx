@@ -87,6 +87,8 @@ export function AISettingsView() {
       setSettings(data)
       setApiKeyInput(data.apiKeyMasked ?? '')
     } catch (err) {
+      // 401 is handled globally by the API client (redirect to login)
+      if (err instanceof ApiError && err.status === 401) return
       toast.error('Failed to load AI settings', { description: (err as Error).message })
     } finally {
       setLoading(false)
