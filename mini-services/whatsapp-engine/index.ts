@@ -324,6 +324,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         const code = await sock.requestPairingCode(cleanPhone)
         console.log(`[wa-engine] ✓ Pairing code generated: ${code}`)
 
+        // IMPORTANT: Clear the QR code from state so the UI shows the
+        // pairing code screen instead of switching to the QR card.
+        state.qrCode = ''
         state.connectionState = 'connecting'
         state.phoneNumber = phone
         saveState()
