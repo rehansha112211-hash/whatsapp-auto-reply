@@ -440,13 +440,8 @@ function RealQrCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col items-center gap-4 pb-6">
-        <div className="relative rounded-2xl border-2 border-emerald-500/30 bg-white p-4 shadow-lg">
-          <QrImage payload={qrPayload} size={240} />
-          <div className="absolute inset-0 grid place-items-center">
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-white/90 shadow-md">
-              <MessageCircle className="h-6 w-6 text-emerald-600" />
-            </div>
-          </div>
+        <div className="rounded-2xl border-2 border-emerald-500/30 bg-white p-6 shadow-lg">
+          <QrImage payload={qrPayload} size={320} />
         </div>
 
         <div className="text-center">
@@ -492,7 +487,7 @@ function RealQrCard({
 // ============================================================
 import QRCode from 'qrcode'
 
-function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
+function QrImage({ payload, size = 320 }: { payload: string; size?: number }) {
   const [dataUrl, setDataUrl] = React.useState<string>('')
 
   React.useEffect(() => {
@@ -501,11 +496,11 @@ function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
       setDataUrl('')
       return
     }
-    // Generate a REAL QR code as a data URL — this is scannable
+    // Generate a REAL scannable QR code — no overlays, clean black/white
     QRCode.toDataURL(payload, {
       width: size,
-      margin: 1,
-      errorCorrectionLevel: 'H', // High — survives even if the logo overlay covers part
+      margin: 2,
+      errorCorrectionLevel: 'M',
       color: { dark: '#000000', light: '#FFFFFF' },
     })
       .then((url) => {
@@ -523,7 +518,7 @@ function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
     return (
       <div
         style={{ width: size, height: size }}
-        className="grid place-items-center rounded-lg bg-white"
+        className="grid place-items-center bg-white"
       >
         <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
       </div>
@@ -536,8 +531,7 @@ function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
       width={size}
       height={size}
       alt="WhatsApp QR Code"
-      className="rounded-lg"
-      style={{ imageRendering: 'pixelated' }}
+      style={{ display: 'block' }}
     />
   )
 }
