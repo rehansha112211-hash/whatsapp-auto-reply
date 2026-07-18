@@ -46,7 +46,7 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
+# test (don't ignore Next.js API test routes)
 prompt
 
 server.log
