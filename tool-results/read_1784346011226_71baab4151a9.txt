@@ -1,0 +1,697 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// SimulatorView — end-to-end test harness for the AI auto-reply
+     5→// pipeline. Lets the operator simulate an incoming WhatsApp
+     6→// customer message (no real WhatsApp connection needed) and
+     7→// watch the real LLM produce a reply, score the lead, and
+     8→// (optionally) trigger owner-notification + human-takeover.
+     9→// ============================================================
+    10→import * as React from 'react'
+    11→import { toast } from 'sonner'
+    12→import {
+    13→  FlaskConical,
+    14→  Send,
+    15→  Sparkles,
+    16→  Dices,
+    17→  MessageCircle,
+    18→  Bot,
+    19→  User,
+    20→  AlertTriangle,
+    21→  Flame,
+    22→  ArrowRight,
+    23→  RotateCcw,
+    24→  Clock,
+    25→  Tag,
+    26→  CheckCircle2,
+    27→  XCircle,
+    28→  Loader2,
+    29→} from 'lucide-react'
+    30→import { cn } from '@/lib/utils'
+    31→import { Button } from '@/components/ui/button'
+    32→import { Input } from '@/components/ui/input'
+    33→import { Textarea } from '@/components/ui/textarea'
+    34→import { Label } from '@/components/ui/label'
+    35→import { Badge } from '@/components/ui/badge'
+    36→import { Separator } from '@/components/ui/separator'
+    37→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    38→import { ScrollArea } from '@/components/ui/scroll-area'
+    39→import { apiPost, apiGet } from '@/lib/api-client'
+    40→import { leadBadge } from '@/lib/format'
+    41→import { useRealtime } from '@/hooks/use-realtime'
+    42→import type { ViewKey, ChatMessage } from '@/lib/types'
+    43→
+    44→interface SimulatorResult {
+    45→  ok: boolean
+    46→  contactId: string
+    47→  replyText: string | null
+    48→  replyMessageId: string | null
+    49→  leadScore: number
+    50→  ownerRequested: boolean
+    51→  ownerNotified: boolean
+    52→  aiSkipped: boolean
+    53→  detectedService?: string
+    54→  responseMs?: number
+    55→  error?: string
+    56→}
+    57→
+    58→interface SimulatorViewProps {
+    59→  onNavigate?: (v: ViewKey) => void
+    60→}
+    61→
+    62→const QUICK_MESSAGES = [
+    63→  'Hi, I need a website',
+    64→  'Mujhe ek app chahiye budget 30k',
+    65→  'I want to talk to owner',
+    66→  'What services do you offer?',
+    67→  'Need a CRM urgently, ready to pay',
+    68→  'Namaste, AI automation chahiye',
+    69→]
+    70→
+    71→function randomIndianPhone(): string {
+    72→  const prefix = '+91'
+    73→  // Indian mobile numbers start with 6/7/8/9
+    74→  const first = ['6', '7', '8', '9'][Math.floor(Math.random() * 4)]
+    75→  let rest = ''
+    76→  for (let i = 0; i < 9; i++) rest += Math.floor(Math.random() * 10).toString()
+    77→  return `${prefix} ${first}${rest.slice(0, 4)} ${rest.slice(4)}`
+    78→}
+    79→
+    80→function categoryLabel(svc: string): string {
+    81→  if (!svc) return '—'
+    82→  return svc.replace(/_/g, ' ')
+    83→}
+    84→
+    85→export function SimulatorView({ onNavigate }: SimulatorViewProps) {
+    86→  const [phone, setPhone] = React.useState<string>(() => randomIndianPhone())
+    87→  const [name, setName] = React.useState<string>('')
+    88→  const [text, setText] = React.useState<string>('')
+    89→  const [sending, setSending] = React.useState<boolean>(false)
+    90→  const [result, setResult] = React.useState<SimulatorResult | null>(null)
+    91→  const [lastSent, setLastSent] = React.useState<{ text: string; at: number } | null>(null)
+    92→  const [history, setHistory] = React.useState<ChatMessage[]>([])
+    93→  const [historyLoading, setHistoryLoading] = React.useState<boolean>(false)
+    94→  const [activeContactId, setActiveContactId] = React.useState<string | null>(null)
+    95→  const [tickCount, setTickCount] = React.useState<number>(0)
+    96→
+    97→  // Live-mode: re-fetch conversation history whenever the realtime service
+    98→  // emits a dashboard:tick or a simulator:message broadcast. This keeps
+    99→  // multiple simulator tabs (and the dashboard) in sync.
+   100→  useRealtime([
+   101→    {
+   102→      event: 'dashboard:tick',
+   103→      handler: () => setTickCount((n) => n + 1),
+   104→    },
+   105→    {
+   106→      event: 'simulator:message',
+   107→      handler: (payload: unknown) => {
+   108→        const p = payload as { contactId?: string } | null
+   109→        if (p?.contactId && p.contactId === activeContactId) {
+   110→          setTickCount((n) => n + 1)
+   111→        }
+   112→      },
+   113→    },
+   114→  ])
+   115→
+   116→  const refreshHistory = React.useCallback(async (contactId: string) => {
+   117→    setHistoryLoading(true)
+   118→    try {
+   119→      const data = await apiGet<ChatMessage[] | { items: ChatMessage[] }>(
+   120→        `/api/messages?contactId=${encodeURIComponent(contactId)}&limit=50`,
+   121→      )
+   122→      const list = Array.isArray(data) ? data : (data?.items ?? [])
+   123→      // API returns oldest-first (most common); ensure chronological order.
+   124→      setHistory(
+   125→        list.sort(
+   126→          (a, b) =>
+   127→            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+   128→        ),
+   129→      )
+   130→    } catch {
+   131→      // The messages endpoint may not be live yet (parallel agent). Stay
+   132→      // silent — the live chat preview above still shows the latest send.
+   133→      setHistory([])
+   134→    } finally {
+   135→      setHistoryLoading(false)
+   136→    }
+   137→  }, [])
+   138→
+   139→  // Re-fetch when contactId changes OR a realtime tick fires.
+   140→  React.useEffect(() => {
+   141→    if (activeContactId) void refreshHistory(activeContactId)
+   142→  }, [activeContactId, refreshHistory, tickCount])
+   143→
+   144→  const handleSend = async () => {
+   145→    if (!phone.trim()) {
+   146→      toast.error('Phone number is required')
+   147→      return
+   148→    }
+   149→    if (!text.trim()) {
+   150→      toast.error('Message text is required')
+   151→      return
+   152→    }
+   153→    setSending(true)
+   154→    setResult(null)
+   155→    setLastSent({ text: text.trim(), at: Date.now() })
+   156→    try {
+   157→      const res = await apiPost<SimulatorResult>('/api/simulator/send', {
+   158→        phone: phone.trim(),
+   159→        name: name.trim() || undefined,
+   160→        text: text.trim(),
+   161→      })
+   162→      setResult(res)
+   163→      setActiveContactId(res.contactId)
+   164→      if (res.ok) {
+   165→        if (res.aiSkipped) {
+   166→          toast.info('AI skipped — human mode is active for this contact.')
+   167→        } else {
+   168→          toast.success('AI reply generated!')
+   169→        }
+   170→      } else {
+   171→        toast.error(res.error || 'AI reply failed')
+   172→      }
+   173→    } catch (err) {
+   174→      const msg = err instanceof Error ? err.message : 'Request failed'
+   175→      toast.error(msg)
+   176→      setResult({
+   177→        ok: false,
+   178→        contactId: '',
+   179→        replyText: null,
+   180→        replyMessageId: null,
+   181→        leadScore: 0,
+   182→        ownerRequested: false,
+   183→        ownerNotified: false,
+   184→        aiSkipped: false,
+   185→        error: msg,
+   186→      })
+   187→    } finally {
+   188→      setSending(false)
+   189→    }
+   190→  }
+   191→
+   192→  const handleReset = () => {
+   193→    setPhone(randomIndianPhone())
+   194→    setName('')
+   195→    setText('')
+   196→    setResult(null)
+   197→    setLastSent(null)
+   198→    setHistory([])
+   199→    setActiveContactId(null)
+   200→    toast.message('New simulated phone generated')
+   201→  }
+   202→
+   203→  const handleRandomizePhone = () => {
+   204→    setPhone(randomIndianPhone())
+   205→    setResult(null)
+   206→    setHistory([])
+   207→    setActiveContactId(null)
+   208→  }
+   209→
+   210→  const handleQuickPick = (msg: string) => {
+   211→    setText(msg)
+   212→  }
+   213→
+   214→  return (
+   215→    <div className="space-y-6">
+   216→      {/* Header */}
+   217→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   218→        <div className="flex items-start gap-3">
+   219→          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/20">
+   220→            <FlaskConical className="h-5 w-5" />
+   221→          </div>
+   222→          <div>
+   223→            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+   224→              Message Simulator
+   225→            </h1>
+   226→            <p className="text-sm text-muted-foreground">
+   227→              Test the AI auto-reply engine end-to-end without a real WhatsApp
+   228→              connection. Simulated messages flow through the real LLM pipeline.
+   229→            </p>
+   230→          </div>
+   231→        </div>
+   232→        <Button variant="outline" size="sm" onClick={handleReset} className="gap-2">
+   233→          <RotateCcw className="h-4 w-4" />
+   234→          Reset conversation
+   235→        </Button>
+   236→      </div>
+   237→
+   238→      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+   239→        {/* ============ LEFT: FORM ============ */}
+   240→        <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   241→          <CardHeader>
+   242→            <CardTitle className="flex items-center gap-2 text-base">
+   243→              <Send className="h-4 w-4 text-emerald-400" />
+   244→              Simulate Incoming Message
+   245→            </CardTitle>
+   246→          </CardHeader>
+   247→          <CardContent className="space-y-4">
+   248→            {/* Phone */}
+   249→            <div className="space-y-2">
+   250→              <Label htmlFor="sim-phone" className="text-xs font-medium">
+   251→                Customer phone number
+   252→              </Label>
+   253→              <div className="flex gap-2">
+   254→                <Input
+   255→                  id="sim-phone"
+   256→                  value={phone}
+   257→                  onChange={(e) => setPhone(e.target.value)}
+   258→                  placeholder="+91 98765 43210"
+   259→                  className="font-mono text-sm"
+   260→                />
+   261→                <Button
+   262→                  type="button"
+   263→                  variant="outline"
+   264→                  size="icon"
+   265→                  onClick={handleRandomizePhone}
+   266→                  title="Randomize phone"
+   267→                  aria-label="Randomize phone"
+   268→                >
+   269→                  <Dices className="h-4 w-4" />
+   270→                </Button>
+   271→              </div>
+   272→              <p className="text-[11px] text-muted-foreground">
+   273→                Prefilled with a random Indian number. Click 🎲 to roll a new one.
+   274→              </p>
+   275→            </div>
+   276→
+   277→            {/* Name */}
+   278→            <div className="space-y-2">
+   279→              <Label htmlFor="sim-name" className="text-xs font-medium">
+   280→                Customer name <span className="text-muted-foreground">(optional)</span>
+   281→              </Label>
+   282→              <Input
+   283→                id="sim-name"
+   284→                value={name}
+   285→                onChange={(e) => setName(e.target.value)}
+   286→                placeholder="Rahul Sharma"
+   287→              />
+   288→            </div>
+   289→
+   290→            {/* Message */}
+   291→            <div className="space-y-2">
+   292→              <Label htmlFor="sim-text" className="text-xs font-medium">
+   293→                Incoming message
+   294→              </Label>
+   295→              <Textarea
+   296→                id="sim-text"
+   297→                value={text}
+   298→                onChange={(e) => setText(e.target.value)}
+   299→                placeholder="Type the customer's message here…"
+   300→                rows={4}
+   301→                className="resize-none"
+   302→              />
+   303→              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+   304→                <span>{text.length} chars</span>
+   305→                <span>Enter to send · Shift+Enter for newline</span>
+   306→              </div>
+   307→            </div>
+   308→
+   309→            {/* Quick-pick chips */}
+   310→            <div className="space-y-2">
+   311→              <Label className="text-xs font-medium">Quick-pick messages</Label>
+   312→              <div className="flex flex-wrap gap-1.5">
+   313→                {QUICK_MESSAGES.map((m) => (
+   314→                  <button
+   315→                    key={m}
+   316→                    type="button"
+   317→                    onClick={() => handleQuickPick(m)}
+   318→                    className={cn(
+   319→                      'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+   320→                      text === m
+   321→                        ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+   322→                        : 'border-border bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+   323→                    )}
+   324→                  >
+   325→                    {m}
+   326→                  </button>
+   327→                ))}
+   328→              </div>
+   329→            </div>
+   330→
+   331→            <Separator />
+   332→
+   333→            {/* Send button */}
+   334→            <Button
+   335→              type="button"
+   336→              onClick={handleSend}
+   337→              disabled={sending || !text.trim() || !phone.trim()}
+   338→              className="w-full gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/20 hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50"
+   339→            >
+   340→              {sending ? (
+   341→                <>
+   342→                  <span className="flex items-center gap-1">
+   343→                    <span className="typing-dot inline-block h-1.5 w-1.5 rounded-full bg-white" />
+   344→                    <span className="typing-dot inline-block h-1.5 w-1.5 rounded-full bg-white" />
+   345→                    <span className="typing-dot inline-block h-1.5 w-1.5 rounded-full bg-white" />
+   346→                  </span>
+   347→                  AI is thinking…
+   348→                </>
+   349→              ) : (
+   350→                <>
+   351→                  <Sparkles className="h-4 w-4" />
+   352→                  Send &amp; Generate AI Reply
+   353→                </>
+   354→              )}
+   355→            </Button>
+   356→
+   357→            <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+   358→              The simulated message runs through{' '}
+   359→              <code className="font-mono text-foreground">processIncomingMessage</code>{' '}
+   360→              → upsert contact → save incoming → AI reply (z-ai-web-dev-sdk) →
+   361→              save outgoing → memory update → lead score history → owner notify.
+   362→            </div>
+   363→          </CardContent>
+   364→        </Card>
+   365→
+   366→        {/* ============ RIGHT: RESULT ============ */}
+   367→        <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   368→          <CardHeader>
+   369→            <CardTitle className="flex items-center gap-2 text-base">
+   370→              <MessageCircle className="h-4 w-4 text-emerald-400" />
+   371→              AI Reply Preview
+   372→            </CardTitle>
+   373→          </CardHeader>
+   374→          <CardContent className="space-y-4">
+   375→            {/* Chat preview */}
+   376→            <div className="min-h-[180px] space-y-3 rounded-xl border bg-background/40 p-4">
+   377→              {!lastSent && !sending && (
+   378→                <div className="flex h-[150px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+   379→                  <Bot className="h-8 w-8 text-muted-foreground/50" />
+   380→                  <div>Send a simulated message to see the AI reply here.</div>
+   381→                </div>
+   382→              )}
+   383→
+   384→              {/* Incoming bubble */}
+   385→              {lastSent && (
+   386→                <div className="flex items-end gap-2">
+   387→                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
+   388→                    <User className="h-3.5 w-3.5" />
+   389→                  </div>
+   390→                  <div className="chat-bubble-in max-w-[80%] rounded-2xl rounded-tl-sm px-3 py-2 text-sm">
+   391→                    <div className="mb-0.5 text-[10px] font-semibold text-muted-foreground">
+   392→                      {name || 'Customer'}
+   393→                    </div>
+   394→                    <p className="whitespace-pre-wrap break-words">{lastSent.text}</p>
+   395→                    <div className="mt-1 text-right text-[9px] text-muted-foreground">
+   396→                      {new Date(lastSent.at).toLocaleTimeString([], {
+   397→                        hour: '2-digit',
+   398→                        minute: '2-digit',
+   399→                      })}
+   400→                    </div>
+   401→                  </div>
+   402→                </div>
+   403→              )}
+   404→
+   405→              {/* Typing indicator while waiting */}
+   406→              {sending && (
+   407→                <div className="flex items-end justify-end gap-2">
+   408→                  <div className="chat-bubble-out flex items-center gap-1 rounded-2xl rounded-tr-sm px-3 py-2.5">
+   409→                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-white/80" />
+   410→                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-white/80" />
+   411→                    <span className="typing-dot h-1.5 w-1.5 rounded-full bg-white/80" />
+   412→                  </div>
+   413→                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+   414→                    <Bot className="h-3.5 w-3.5" />
+   415→                  </div>
+   416→                </div>
+   417→              )}
+   418→
+   419→              {/* AI reply bubble */}
+   420→              {result && result.replyText && !sending && (
+   421→                <div className="flex items-end justify-end gap-2">
+   422→                  <div className="chat-bubble-out max-w-[80%] rounded-2xl rounded-tr-sm px-3 py-2 text-sm">
+   423→                    <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold opacity-80">
+   424→                      <Bot className="h-3 w-3" />
+   425→                      AI
+   426→                    </div>
+   427→                    <p className="whitespace-pre-wrap break-words">{result.replyText}</p>
+   428→                    <div className="mt-1 text-right text-[9px] opacity-70">
+   429→                      {new Date().toLocaleTimeString([], {
+   430→                        hour: '2-digit',
+   431→                        minute: '2-digit',
+   432→                      })}
+   433→                    </div>
+   434→                  </div>
+   435→                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+   436→                    <Bot className="h-3.5 w-3.5" />
+   437→                  </div>
+   438→                </div>
+   439→              )}
+   440→
+   441→              {/* AI skipped */}
+   442→              {result && result.aiSkipped && !sending && (
+   443→                <div className="flex items-end justify-end gap-2">
+   444→                  <div className="rounded-2xl rounded-tr-sm border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+   445→                    AI reply skipped — human mode active for this contact.
+   446→                  </div>
+   447→                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-amber-500/30 text-amber-300">
+   448→                    <AlertTriangle className="h-3.5 w-3.5" />
+   449→                  </div>
+   450→                </div>
+   451→              )}
+   452→
+   453→              {/* Error */}
+   454→              {result && !result.ok && !sending && (
+   455→                <div className="flex items-end justify-end gap-2">
+   456→                  <div className="rounded-2xl rounded-tr-sm border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+   457→                    AI reply failed: {result.error}
+   458→                  </div>
+   459→                  <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-rose-500/30 text-rose-300">
+   460→                    <XCircle className="h-3.5 w-3.5" />
+   461→                  </div>
+   462→                </div>
+   463→              )}
+   464→            </div>
+   465→
+   466→            {/* Metadata */}
+   467→            {result && result.ok && (
+   468→              <>
+   469→                {result.ownerRequested && (
+   470→                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+   471→                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+   472→                    <div>
+   473→                      <div className="font-semibold">Owner was notified and human mode auto-enabled.</div>
+   474→                      <div className="opacity-80">
+   475→                        Future messages from this number will not receive AI replies until human mode is turned off.
+   476→                      </div>
+   477→                    </div>
+   478→                  </div>
+   479→                )}
+   480→
+   481→                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+   482→                  <MetaItem
+   483→                    icon={<Clock className="h-3.5 w-3.5" />}
+   484→                    label="Response time"
+   485→                    value={result.responseMs != null ? `${result.responseMs} ms` : '—'}
+   486→                  />
+   487→                  <MetaItem
+   488→                    icon={<Flame className="h-3.5 w-3.5" />}
+   489→                    label="Lead score"
+   490→                    value={
+   491→                      <Badge className={cn('border', leadBadge(result.leadScore))}>
+   492→                        {result.leadScore}
+   493→                      </Badge>
+   494→                    }
+   495→                  />
+   496→                  <MetaItem
+   497→                    icon={<Tag className="h-3.5 w-3.5" />}
+   498→                    label="Category"
+   499→                    value={categoryLabel(result.detectedService ?? '')}
+   500→                  />
+   501→                  <MetaItem
+   502→                    icon={result.ownerRequested ? <CheckCircle2 className="h-3.5 w-3.5 text-amber-400" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground" />}
+   503→                    label="Owner requested"
+   504→                    value={result.ownerRequested ? 'Yes' : 'No'}
+   505→                  />
+   506→                  <MetaItem
+   507→                    icon={result.ownerNotified ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground" />}
+   508→                    label="Owner notified"
+   509→                    value={result.ownerNotified ? 'Yes' : 'No'}
+   510→                  />
+   511→                  <MetaItem
+   512→                    icon={result.aiSkipped ? <CheckCircle2 className="h-3.5 w-3.5 text-amber-400" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground" />}
+   513→                    label="AI skipped"
+   514→                    value={result.aiSkipped ? 'Yes (human mode)' : 'No'}
+   515→                  />
+   516→                </div>
+   517→
+   518→                <div className="flex flex-wrap gap-2">
+   519→                  <Button
+   520→                    variant="outline"
+   521→                    size="sm"
+   522→                    className="gap-2"
+   523→                    onClick={() => onNavigate?.('chats')}
+   524→                  >
+   525→                    View in Chats
+   526→                    <ArrowRight className="h-3.5 w-3.5" />
+   527→                  </Button>
+   528→                  {result.contactId && (
+   529→                    <Button
+   530→                      variant="ghost"
+   531→                      size="sm"
+   532→                      className="gap-2"
+   533→                      onClick={() => onNavigate?.('leads')}
+   534→                    >
+   535→                      View lead details
+   536→                      <ArrowRight className="h-3.5 w-3.5" />
+   537→                    </Button>
+   538→                  )}
+   539→                </div>
+   540→              </>
+   541→            )}
+   542→
+   543→            {!result && !sending && (
+   544→              <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+   545→                Metadata (response time, lead score, category, owner flags) will
+   546→                appear here after the AI reply is generated.
+   547→              </div>
+   548→            )}
+   549→          </CardContent>
+   550→        </Card>
+   551→      </div>
+   552→
+   553→      {/* ============ BOTTOM: CONVERSATION HISTORY ============ */}
+   554→      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   555→        <CardHeader>
+   556→          <CardTitle className="flex items-center justify-between text-base">
+   557→            <span className="flex items-center gap-2">
+   558→              <MessageCircle className="h-4 w-4 text-emerald-400" />
+   559→              Conversation history
+   560→            </span>
+   561→            <span className="text-[11px] font-normal text-muted-foreground">
+   562→              {activeContactId ? (
+   563→                <span className="font-mono">{phone}</span>
+   564→              ) : (
+   565→                'No contact yet'
+   566→              )}
+   567→            </span>
+   568→          </CardTitle>
+   569→        </CardHeader>
+   570→        <CardContent>
+   571→          {!activeContactId ? (
+   572→            <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+   573→              <User className="h-8 w-8 text-muted-foreground/50" />
+   574→              <div>
+   575→                Send a simulated message to load the full conversation thread for
+   576→                this phone number.
+   577→              </div>
+   578→            </div>
+   579→          ) : historyLoading && history.length === 0 ? (
+   580→            <div className="flex h-32 items-center justify-center gap-2 text-sm text-muted-foreground">
+   581→              <Loader2 className="h-4 w-4 animate-spin" />
+   582→              Loading conversation…
+   583→            </div>
+   584→          ) : history.length === 0 ? (
+   585→            <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+   586→              <MessageCircle className="h-8 w-8 text-muted-foreground/50" />
+   587→              <div>
+   588→                No conversation history available yet. The chat preview above
+   589→                shows the latest simulated exchange.
+   590→              </div>
+   591→              <Button
+   592→                variant="ghost"
+   593→                size="sm"
+   594→                className="mt-1 gap-2 text-xs"
+   595→                onClick={() => activeContactId && void refreshHistory(activeContactId)}
+   596→              >
+   597→                <RotateCcw className="h-3 w-3" />
+   598→                Retry fetch
+   599→              </Button>
+   600→            </div>
+   601→          ) : (
+   602→            <ScrollArea className="max-h-96 scrollbar-thin">
+   603→              <div className="space-y-3 p-1">
+   604→                {history.map((m) => {
+   605→                  const isIncoming = m.direction === 'incoming'
+   606→                  return (
+   607→                    <div
+   608→                      key={m.id}
+   609→                      className={cn(
+   610→                        'flex items-end gap-2',
+   611→                        isIncoming ? 'justify-start' : 'justify-end',
+   612→                      )}
+   613→                    >
+   614→                      {isIncoming && (
+   615→                        <div className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
+   616→                          <User className="h-3 w-3" />
+   617→                        </div>
+   618→                      )}
+   619→                      <div
+   620→                        className={cn(
+   621→                          'max-w-[75%] rounded-2xl px-3 py-2 text-sm',
+   622→                          isIncoming
+   623→                            ? 'chat-bubble-in rounded-tl-sm'
+   624→                            : 'chat-bubble-out rounded-tr-sm',
+   625→                        )}
+   626→                      >
+   627→                        {!isIncoming && (
+   628→                          <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold opacity-80">
+   629→                            {m.source === 'ai' ? (
+   630→                              <>
+   631→                                <Bot className="h-3 w-3" /> AI
+   632→                              </>
+   633→                            ) : m.source === 'owner' ? (
+   634→                              <>
+   635→                                <User className="h-3 w-3" /> Owner
+   636→                              </>
+   637→                            ) : (
+   638→                              <>
+   639→                                <Sparkles className="h-3 w-3" /> {m.source}
+   640→                              </>
+   641→                            )}
+   642→                          </div>
+   643→                        )}
+   644→                        <p className="whitespace-pre-wrap break-words">{m.text}</p>
+   645→                        <div
+   646→                          className={cn(
+   647→                            'mt-1 text-right text-[9px]',
+   648→                            isIncoming ? 'text-muted-foreground' : 'opacity-70',
+   649→                          )}
+   650→                        >
+   651→                          {new Date(m.timestamp).toLocaleString([], {
+   652→                            month: 'short',
+   653→                            day: 'numeric',
+   654→                            hour: '2-digit',
+   655→                            minute: '2-digit',
+   656→                          })}
+   657→                        </div>
+   658→                      </div>
+   659→                      {!isIncoming && (
+   660→                        <div className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+   661→                          <Bot className="h-3 w-3" />
+   662→                        </div>
+   663→                      )}
+   664→                    </div>
+   665→                  )
+   666→                })}
+   667→              </div>
+   668→            </ScrollArea>
+   669→          )}
+   670→        </CardContent>
+   671→      </Card>
+   672→    </div>
+   673→  )
+   674→}
+   675→
+   676→// ---------------- Helper components ----------------
+   677→
+   678→function MetaItem({
+   679→  icon,
+   680→  label,
+   681→  value,
+   682→}: {
+   683→  icon: React.ReactNode
+   684→  label: string
+   685→  value: React.ReactNode
+   686→}) {
+   687→  return (
+   688→    <div className="rounded-lg border bg-background/40 px-2.5 py-2">
+   689→      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+   690→        {icon}
+   691→        {label}
+   692→      </div>
+   693→      <div className="mt-1 text-sm font-semibold">{value}</div>
+   694→    </div>
+   695→  )
+   696→}
+   697→

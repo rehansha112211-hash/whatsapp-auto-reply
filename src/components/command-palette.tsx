@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Info,
   Loader2,
+  MessageSquare,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -24,9 +25,9 @@ import {
 } from '@/components/ui/command'
 import { NAV_ITEMS } from '@/lib/nav'
 import { apiGet } from '@/lib/api-client'
-import { colorFromString, initials, timeAgo } from '@/lib/format'
+import { colorFromString, initials, timeAgo, findMatchSegments } from '@/lib/format'
 import { LeadBadge } from '@/components/status'
-import type { ChatListItem, ViewKey } from '@/lib/types'
+import type { ChatListItem, SearchMessageItem, ViewKey } from '@/lib/types'
 
 // ============================================================
 // Global Command Palette (Cmd+K / Ctrl+K)
@@ -50,6 +51,7 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void
   onNavigate: (view: ViewKey) => void
   onOpenContact: (contactId: string) => void
+  initialQuery?: string
 }
 
 interface QuickAction {
@@ -110,18 +112,28 @@ export function CommandPalette({
   onOpenChange,
   onNavigate,
   onOpenContact,
+  initialQuery,
 }: CommandPaletteProps) {
   const [query, setQuery] = React.useState('')
   const [contacts, setContacts] = React.useState<ChatListItem[]>([])
+  const [messages, setMessages] = React.useState<SearchMessageItem[]>([])
   const [searching, setSearching] = React.useState(false)
+  const [searchingMessages, setSearchingMessages] = React.useState(false)
   const [notifications, setNotifications] = React.useState<NotificationItem[]>([])
+
+  // If an initialQuery is provided (e.g. opened from the search bar), seed it.
+  React.useEffect(() => {
+    if (open && initialQuery) setQuery(initialQuery)
+  }, [open, initialQuery])
 
   // Reset transient state whenever the palette closes.
   React.useEffect(() => {
     if (!open) {
       setQuery('')
       setContacts([])
+      setMessages([])
       setSearching(false)
+      setSearchingMessages(false)
     }
   }, [open])
 
@@ -141,26 +153,35 @@ export function CommandPalette({
     }
   }, [open])
 
-  // Debounced server-side contact search (>= 2 chars).
+  // Debounced server-side contact + message search (>= 2 chars).
+  // Both requests fire in parallel and settle independently so a slow
+  // messages query never delays the contacts list.
   React.useEffect(() => {
     const q = query.trim()
     if (q.length < 2) {
       setContacts([])
+      setMessages([])
       setSearching(false)
+      setSearchingMessages(false)
       return
     }
     setSearching(true)
-    const t = setTimeout(async () => {
-      try {
-        const d = await apiGet<{ items: ChatListItem[] }>(
-          `/api/chats?search=${encodeURIComponent(q)}&limit=8`,
-        )
-        setContacts(d.items ?? [])
-      } catch {
-        setContacts([])
-      } finally {
-        setSearching(false)
-      }
+    setSearchingMessages(true)
+    const t = setTimeout(() => {
+      // Contacts
+      void apiGet<{ items: ChatListItem[] }>(
+        `/api/chats?search=${encodeURIComponent(q)}&limit=8`,
+      )
+        .then((d) => setContacts(d.items ?? []))
+        .catch(() => setContacts([]))
+        .finally(() => setSearching(false))
+      // Messages (top 5)
+      void apiGet<{ items: SearchMessageItem[] }>(
+        `/api/search?q=${encodeURIComponent(q)}&limit=5`,
+      )
+        .then((d) => setMessages(d.items ?? []))
+        .catch(() => setMessages([]))
+        .finally(() => setSearchingMessages(false))
     }, 250)
     return () => clearTimeout(t)
   }, [query])
@@ -186,12 +207,14 @@ export function CommandPalette({
     : QUICK_ACTIONS
 
   const showContacts = query.trim().length >= 2
+  const showMessages = query.trim().length >= 2
+  const anySearching = searching || searchingMessages
   const showRecent = q.length === 0 && notifications.length > 0
 
   const hasAnyResult =
     filteredNav.length > 0 ||
     filteredActions.length > 0 ||
-    (showContacts && (searching || contacts.length > 0)) ||
+    (showContacts && (anySearching || contacts.length > 0 || messages.length > 0)) ||
     showRecent
 
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange])
@@ -204,6 +227,11 @@ export function CommandPalette({
     [onNavigate, close],
   )
 
+  const handleOpenSearch = React.useCallback(() => {
+    onNavigate('search')
+    close()
+  }, [onNavigate, close])
+
   const handleContact = React.useCallback(
     (id: string) => {
       onOpenContact(id)
@@ -211,6 +239,43 @@ export function CommandPalette({
     },
     [onOpenContact, close],
   )
+
+  // Build the highlighted snippet for a single message result.
+  const renderSnippet = (m: SearchMessageItem) => {
+    const segments = findMatchSegments(m.matchedSnippet, query.trim())
+    return segments.map((seg, i) =>
+      seg.match ? (
+        <mark
+          key={i}
+          className="rounded bg-emerald-500/30 px-0.5 text-emerald-200"
+        >
+          {seg.text}
+        </mark>
+      ) : (
+        <React.Fragment key={i}>{seg.text}</React.Fragment>
+      ),
+    )
+  }
+
+  // Direction/source label for a message result badge.
+  function messageDirLabel(m: SearchMessageItem): { label: string; cls: string } {
+    const dir = m.direction === 'incoming' ? 'In' : 'Out'
+    const src =
+      m.source === 'ai'
+        ? 'AI'
+        : m.source === 'owner'
+          ? 'Owner'
+          : m.source === 'customer'
+            ? 'Cust'
+            : 'Sys'
+    let cls = 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30'
+    if (m.source === 'ai') cls = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+    else if (m.source === 'owner') cls = 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+    else if (m.source === 'customer') cls = 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+    else if (m.direction === 'incoming') cls = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+    else cls = 'bg-teal-500/15 text-teal-300 border-teal-500/30'
+    return { label: `${dir} · ${src}`, cls }
+  }
 
   return (
     <CommandDialog
@@ -312,10 +377,74 @@ export function CommandPalette({
           </CommandGroup>
         )}
 
+        {/* Group 2.5 — Messages (server-side full-text search) */}
+        {showMessages && (
+          <CommandGroup heading="Messages">
+            {searchingMessages ? (
+              <div className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
+                <span>Searching messages…</span>
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="px-2 py-3 text-xs text-muted-foreground">
+                No messages found
+              </div>
+            ) : (
+              messages.map((m) => {
+                const dir = messageDirLabel(m)
+                return (
+                  <CommandItem
+                    key={m.messageId}
+                    value={`msg-${m.messageId}-${m.contactName}-${m.matchedSnippet}`}
+                    onSelect={handleOpenSearch}
+                    className="gap-3 data-[selected=true]:bg-primary/15 data-[selected=true]:text-primary"
+                  >
+                    <MessageSquare className="h-4 w-4 shrink-0 text-teal-400" />
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {m.contactName}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-md border px-1 py-0 text-[10px] font-medium ${dir.cls}`}
+                        >
+                          {dir.label}
+                        </span>
+                        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                          {timeAgo(m.timestamp)}
+                        </span>
+                      </div>
+                      <span className="line-clamp-1 text-[11px] text-muted-foreground">
+                        {renderSnippet(m)}
+                      </span>
+                    </div>
+                  </CommandItem>
+                )
+              })
+            )}
+            {/* Footer: open the full search view */}
+            <CommandItem
+              value="msg-open-search-view"
+              onSelect={handleOpenSearch}
+              className="gap-3 border-t border-border/60 mt-1 data-[selected=true]:bg-primary/15 data-[selected=true]:text-primary"
+            >
+              <MessageSquare className="h-4 w-4 shrink-0 text-emerald-400" />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm font-medium">
+                  Open full search view
+                </span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  See all matches with filters &amp; facets
+                </span>
+              </div>
+            </CommandItem>
+          </CommandGroup>
+        )}
+
         {/* Group 3 — Quick Actions */}
         {filteredActions.length > 0 && (
           <>
-            {filteredNav.length > 0 || showContacts ? <CommandSeparator /> : null}
+            {filteredNav.length > 0 || showContacts || showMessages ? <CommandSeparator /> : null}
             <CommandGroup heading="Quick Actions">
               {filteredActions.map((a) => {
                 const Icon = a.icon

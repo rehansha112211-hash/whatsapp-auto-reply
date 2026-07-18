@@ -21,6 +21,7 @@ import { BroadcastView } from '@/components/views/broadcast-view'
 import { ScheduledView } from '@/components/views/scheduled-view'
 import { AnalyticsView } from '@/components/views/analytics-view'
 import { ContactProfileView } from '@/components/views/contact-profile-view'
+import { SearchView } from '@/components/views/search-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
@@ -147,6 +148,7 @@ export default function Home() {
           {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
           {active === 'broadcast' && <BroadcastView />}
           {active === 'scheduled' && <ScheduledView onNavigate={setActive} />}
+          {active === 'search' && <SearchView onNavigate={setActive} />}
           {active === 'analytics' && <AnalyticsView />}
           {active === 'contact-profile' && profileContactId && (
             <ContactProfileView

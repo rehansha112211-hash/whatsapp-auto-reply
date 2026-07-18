@@ -399,7 +399,7 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 p-4 lg:p-6">{children}</main>
+        <main className="min-w-0 flex-1 bg-gradient-to-b from-background to-background/50 p-4 lg:p-6">{children}</main>
 
         <footer className="mt-auto border-t bg-background/80 px-4 py-3 backdrop-blur lg:px-6">
           <div className="flex flex-col items-center justify-between gap-2 text-[11px] text-muted-foreground sm:flex-row">

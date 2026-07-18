@@ -98,7 +98,7 @@ function ResourceCard({
   const color =
     pct >= 85 ? 'text-rose-300' : pct >= 65 ? 'text-amber-300' : 'text-emerald-300'
   return (
-    <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+    <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 p-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {icon}
@@ -144,7 +144,7 @@ function StatusCard({
   return (
     <div
       className={cn(
-        'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+        'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur card-hover',
         accent,
       )}
     >
@@ -312,7 +312,7 @@ function BackupRecoveryCard() {
   }
 
   return (
-    <Card className="rounded-xl border bg-card/60 p-5 backdrop-blur">
+    <Card className="rounded-xl border bg-card/60 p-5 backdrop-blur card-hover">
       <CardHeader className="p-0 pb-4">
         <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           <span className="flex items-center gap-2">
@@ -664,8 +664,8 @@ export function SystemView(_props: SystemViewProps) {
       {/* Overall status banner */}
       <div
         className={cn(
-          'relative overflow-hidden rounded-xl border bg-card/60 p-6 backdrop-blur',
-          ok ? 'border-emerald-500/30' : 'border-amber-500/30',
+          'relative overflow-hidden rounded-xl border bg-card/60 p-6 backdrop-blur card-hover',
+          ok ? 'border-emerald-500/30 glow-primary' : 'border-amber-500/30',
         )}
       >
         <div
@@ -744,7 +744,7 @@ export function SystemView(_props: SystemViewProps) {
         />
         <div
           className={cn(
-            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur card-hover',
             statusAccent(waStatus),
           )}
         >
@@ -764,7 +764,7 @@ export function SystemView(_props: SystemViewProps) {
         />
         <div
           className={cn(
-            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur card-hover',
             statusAccent(aiStatus),
           )}
         >
@@ -840,7 +840,7 @@ export function SystemView(_props: SystemViewProps) {
       </div>
 
       {/* Uptime & availability (full width) */}
-      <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover">
         <CardHeader className="p-0 pb-3">
           <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             <Clock className="h-4 w-4 text-emerald-400" />
@@ -897,7 +897,7 @@ export function SystemView(_props: SystemViewProps) {
       {/* Recent events */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Recent errors */}
-        <Card className="rounded-xl border border-rose-500/20 bg-rose-500/[0.03] p-4 backdrop-blur">
+        <Card className="rounded-xl border border-rose-500/20 bg-rose-500/[0.03] p-4 backdrop-blur card-hover">
           <CardHeader className="p-0 pb-3">
             <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-rose-300">
               <XCircle className="h-4 w-4" />
@@ -946,7 +946,7 @@ export function SystemView(_props: SystemViewProps) {
         </Card>
 
         {/* Recent startup events */}
-        <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+        <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover">
           <CardHeader className="p-0 pb-3">
             <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Activity className="h-4 w-4 text-emerald-400" />

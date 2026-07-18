@@ -156,7 +156,13 @@ export function AISettingsView() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-gradient-premium">AI Settings</h1>
+        <p className="text-sm text-muted-foreground">
+          Configure the LLM provider, model, and system prompt that power WhatsApp auto-replies.
+        </p>
+      </div>
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
@@ -335,7 +341,7 @@ export function AISettingsView() {
       </Card>
 
       {testResult && (
-        <Card className="rounded-xl border bg-card/60 backdrop-blur">
+        <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="size-4 text-primary" />

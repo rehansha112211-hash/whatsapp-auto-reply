@@ -125,7 +125,7 @@ export function AutoReplySettingsView() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
@@ -303,7 +303,7 @@ export function AutoReplySettingsView() {
         </CardFooter>
       </Card>
 
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Eye className="size-4 text-primary" />

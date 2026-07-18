@@ -42,6 +42,7 @@ import { cn } from '@/lib/utils'
 import { apiGet, apiPost, ApiError } from '@/lib/api-client'
 import { formatDateTime, formatUptime, timeAgo } from '@/lib/format'
 import type { WhatsAppState, LogRow } from '@/lib/types'
+import { motion } from 'framer-motion'
 
 interface WaSession {
   state: WhatsAppState
@@ -319,11 +320,16 @@ export function WhatsAppView() {
   const state = session?.state ?? 'disconnected'
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="mx-auto w-full max-w-5xl"
+    >
       {/* Page heading */}
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">WhatsApp Connection</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-gradient-premium">WhatsApp Connection</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Connect your WhatsApp account via QR pairing. Multi-device,
             end-to-end encrypted, auto-reconnecting.
@@ -342,7 +348,7 @@ export function WhatsAppView() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]" id="wa-main-grid">
         {/* Main column */}
         <div className="min-w-0">
           {loading && !session ? (
@@ -380,7 +386,7 @@ export function WhatsAppView() {
           <LogPreviewCard logs={logs} />
         </aside>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -433,7 +439,7 @@ function DisconnectedCard({
 }) {
   const [howOpen, setHowOpen] = React.useState(false)
   return (
-    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur">
+    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardContent className="flex flex-col items-center px-6 py-10 text-center sm:py-14">
         <div className="relative mb-6 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30">
           <MessageCircle className="h-10 w-10" />
@@ -570,7 +576,7 @@ function QrReadyCard({
   }, [remaining, onRefresh])
 
   return (
-    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur">
+    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardHeader>
         <div className="flex items-start justify-between">
           <div>
@@ -672,7 +678,7 @@ function ConnectedCard({
     : 0
 
   return (
-    <Card className="overflow-hidden rounded-xl border border-emerald-500/20 bg-card/60 backdrop-blur">
+    <Card className="overflow-hidden rounded-xl border border-emerald-500/20 bg-card/60 backdrop-blur card-hover">
       <CardHeader>
         <div className="flex items-start justify-between">
           <div>
@@ -808,7 +814,7 @@ function DetailRow({
 // ============================================================
 function ConnectingCard({ label }: { label: string }) {
   return (
-    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+    <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardContent className="flex flex-col items-center gap-4 px-6 py-16 text-center">
         <div className="relative grid h-16 w-16 place-items-center">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/20" />
@@ -887,7 +893,7 @@ function SessionHealthCard({
   ]
 
   return (
-    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+    <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm">
           <Activity className="h-4 w-4 text-emerald-400" />
@@ -925,7 +931,7 @@ const LOG_LEVEL_TONE: Record<string, string> = {
 
 function LogPreviewCard({ logs }: { logs: LogRow[] }) {
   return (
-    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+    <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm">
           <ScrollText className="h-4 w-4 text-emerald-400" />

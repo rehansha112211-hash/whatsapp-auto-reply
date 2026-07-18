@@ -464,7 +464,7 @@ function StatCard({
   accent: string
 }) {
   return (
-    <Card className={cn('rounded-xl border bg-card/60 p-5 backdrop-blur', accent)}>
+    <Card className={cn('rounded-xl border bg-card/60 p-5 backdrop-blur card-hover', accent)}>
       <CardContent className="flex items-center justify-between p-0">
         <div>
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -521,7 +521,7 @@ function Row({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
       transition={{ duration: 0.2 }}
-      className="rounded-xl border bg-card/60 p-4 backdrop-blur hover:border-emerald-500/40 hover:bg-card/80"
+      className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover hover:border-emerald-500/40 hover:bg-card/80"
     >
       <div className="flex items-start gap-3">
         <button

@@ -13,6 +13,7 @@ import {
   Megaphone,
   Clock,
   BarChart3,
+  Search,
   type LucideIcon,
 } from 'lucide-react'
 import type { ViewKey } from '@/lib/types'
@@ -33,6 +34,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'simulator', label: 'Simulator', icon: FlaskConical, description: 'Test AI replies', group: 'main' },
   { key: 'broadcast', label: 'Broadcast', icon: Megaphone, description: 'Mass messages & templates', group: 'main' },
   { key: 'scheduled', label: 'Scheduled', icon: Clock, description: 'Scheduled messages', group: 'main' },
+  { key: 'search', label: 'Search', icon: Search, description: 'Global message search', group: 'main' },
   { key: 'ai-settings', label: 'AI Settings', icon: Bot, description: 'Provider & model', group: 'settings' },
   { key: 'company-settings', label: 'Company', icon: Building2, description: 'Company profile', group: 'settings' },
   { key: 'owner-settings', label: 'Owner', icon: UserCog, description: 'Owner & takeover', group: 'settings' },

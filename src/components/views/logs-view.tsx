@@ -113,16 +113,19 @@ function LogRowItem({
   row,
   fresh,
   onOpenContact,
+  style,
 }: {
   row: LogRow
   fresh: boolean
   onOpenContact?: (id: string) => void
+  style?: React.CSSProperties
 }) {
   const metaText = formatMeta(row.meta)
   return (
     <div
+      style={style}
       className={cn(
-        'rounded-lg border border-transparent px-3 py-2 transition-colors',
+        'animate-slide-in rounded-lg border border-transparent px-3 py-2 transition-colors',
         'hover:border-border/60 hover:bg-muted/30',
         fresh && 'animate-[fadeHighlight_2.5s_ease-out] bg-primary/5',
       )}
@@ -406,7 +409,7 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
 
       {/* Stats strip */}
       <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+        <div className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Visible
           </div>
@@ -414,7 +417,7 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
             {total}
           </div>
         </div>
-        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 backdrop-blur">
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 backdrop-blur card-hover">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-rose-300">
             <AlertTriangle className="h-3 w-3" />
             Errors (24h)
@@ -423,7 +426,7 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
             {errorCount24h}
           </div>
         </div>
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 backdrop-blur">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 backdrop-blur card-hover">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
             <AlertTriangle className="h-3 w-3" />
             Warnings (24h)
@@ -453,7 +456,7 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
       </Tabs>
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-3 backdrop-blur">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 p-3 backdrop-blur card-hover">
         <Select
           value={level}
           onValueChange={(v) => setLevel(v as LogLevel | 'all')}
@@ -542,7 +545,7 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
       </div>
 
       {/* Log list */}
-      <div className="rounded-xl border bg-card/60 backdrop-blur">
+      <div className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <div className="flex items-center justify-between border-b px-3 py-2 text-[11px] text-muted-foreground">
           <span>
             {loading
@@ -580,12 +583,13 @@ export function LogsView({ onOpenContact }: LogsViewProps) {
             </div>
           ) : (
             <div className="flex flex-col gap-1">
-              {items.map((row) => (
+              {items.map((row, idx) => (
                 <LogRowItem
                   key={row.id}
                   row={row}
                   fresh={freshIds.has(row.id)}
                   onOpenContact={onOpenContact}
+                  style={{ animationDelay: `${Math.min(idx, 10) * 25}ms` }}
                 />
               ))}
             </div>

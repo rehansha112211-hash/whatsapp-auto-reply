@@ -1,0 +1,1002 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// BroadcastView — mass-messaging + reusable message templates.
+     5→//
+     6→// Two tabs:
+     7→//   • Campaigns  — compose & send a broadcast to a filtered audience,
+     8→//                  plus a list of recent campaigns.
+     9→//   • Templates  — create / edit / delete reusable message templates
+    10→//                  (seeded with 4 QorvixNode-branded defaults).
+    11→//
+    12→// Sending a broadcast goes through `/api/broadcast` which fans the
+    13→// message out to every matching contact via wa-engine.sendOwnerMessage
+    14→// — the resulting owner-source messages then show up in the Chats view.
+    15→// ============================================================
+    16→import * as React from 'react'
+    17→import { toast } from 'sonner'
+    18→import {
+    19→  Megaphone,
+    20→  Send,
+    21→  FileText,
+    22→  Plus,
+    23→  Trash2,
+    24→  Pencil,
+    25→  Users,
+    26→  AlertTriangle,
+    27→  Check,
+    28→  Copy,
+    29→  RefreshCw,
+    30→  Loader2,
+    31→  CheckCircle2,
+    32→  Clock,
+    33→} from 'lucide-react'
+    34→
+    35→import { cn } from '@/lib/utils'
+    36→import { apiGet, apiPost, apiDelete } from '@/lib/api-client'
+    37→import { timeAgo, formatDateTime } from '@/lib/format'
+    38→
+    39→import { Button } from '@/components/ui/button'
+    40→import { Input } from '@/components/ui/input'
+    41→import { Textarea } from '@/components/ui/textarea'
+    42→import { Label } from '@/components/ui/label'
+    43→import { Badge } from '@/components/ui/badge'
+    44→import { Separator } from '@/components/ui/separator'
+    45→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    46→import { ScrollArea } from '@/components/ui/scroll-area'
+    47→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    48→import {
+    49→  Select,
+    50→  SelectContent,
+    51→  SelectItem,
+    52→  SelectTrigger,
+    53→  SelectValue,
+    54→} from '@/components/ui/select'
+    55→import {
+    56→  Dialog,
+    57→  DialogContent,
+    58→  DialogDescription,
+    59→  DialogFooter,
+    60→  DialogHeader,
+    61→  DialogTitle,
+    62→} from '@/components/ui/dialog'
+    63→
+    64→// ------------------------------------------------------------
+    65→// Types
+    66→// ------------------------------------------------------------
+    67→interface BroadcastRow {
+    68→  id: string
+    69→  name: string
+    70→  message: string
+    71→  audience: string
+    72→  sentCount: number
+    73→  deliveredCount: number
+    74→  status: string
+    75→  createdAt: string
+    76→  updatedAt: string
+    77→}
+    78→
+    79→interface TemplateRow {
+    80→  id: string
+    81→  name: string
+    82→  body: string
+    83→  category: string
+    84→  createdAt: string
+    85→  updatedAt: string
+    86→}
+    87→
+    88→type Audience = 'all' | 'leads' | 'hot' | 'active' | 'customer' | 'custom'
+    89→type TemplateCategory = 'greeting' | 'promotion' | 'followup' | 'support' | 'general'
+    90→
+    91→interface SendResult {
+    92→  ok: boolean
+    93→  broadcast: BroadcastRow
+    94→  sentCount: number
+    95→  failedCount?: number
+    96→  warning?: string
+    97→}
+    98→
+    99→// ------------------------------------------------------------
+   100→// Constants
+   101→// ------------------------------------------------------------
+   102→const MAX_MESSAGE = 1000
+   103→
+   104→const AUDIENCE_OPTIONS: { value: Audience; label: string; hint: string }[] = [
+   105→  { value: 'all', label: 'All Contacts', hint: 'Every contact in the database' },
+   106→  { value: 'leads', label: 'Leads (score ≥ 25)', hint: 'Warm + hot leads combined' },
+   107→  { value: 'hot', label: 'Hot Leads (score ≥ 70)', hint: 'Sales-ready contacts' },
+   108→  { value: 'active', label: 'Active', hint: 'Conversations currently active' },
+   109→  { value: 'customer', label: 'Customers', hint: 'Converted / paying customers' },
+   110→  { value: 'custom', label: 'Custom (soon)', hint: 'Audience builder coming soon' },
+   111→]
+   112→
+   113→const TEMPLATE_CATEGORIES: { value: TemplateCategory; label: string; badge: string }[] = [
+   114→  { value: 'greeting', label: 'Greeting', badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
+   115→  { value: 'promotion', label: 'Promotion', badge: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
+   116→  { value: 'followup', label: 'Follow-up', badge: 'bg-sky-500/15 text-sky-300 border-sky-500/30' },
+   117→  { value: 'support', label: 'Support', badge: 'bg-violet-500/15 text-violet-300 border-violet-500/30' },
+   118→  { value: 'general', label: 'General', badge: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30' },
+   119→]
+   120→
+   121→function audienceLabel(v: string): string {
+   122→  return AUDIENCE_OPTIONS.find((a) => a.value === v)?.label ?? v
+   123→}
+   124→
+   125→function audienceBadgeClass(v: string): string {
+   126→  switch (v) {
+   127→    case 'hot':
+   128→      return 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+   129→    case 'leads':
+   130→      return 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+   131→    case 'active':
+   132→      return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+   133→    case 'customer':
+   134→      return 'bg-teal-500/15 text-teal-300 border-teal-500/30'
+   135→    case 'custom':
+   136→      return 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30'
+   137→    default:
+   138→      return 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+   139→  }
+   140→}
+   141→
+   142→function categoryBadgeClass(v: string): string {
+   143→  return (
+   144→    TEMPLATE_CATEGORIES.find((c) => c.value === v)?.badge ??
+   145→    'bg-zinc-500/15 text-zinc-300 border-zinc-500/30'
+   146→  )
+   147→}
+   148→
+   149→function categoryLabel(v: string): string {
+   150→  return TEMPLATE_CATEGORIES.find((c) => c.value === v)?.label ?? v
+   151→}
+   152→
+   153→function statusBadgeClass(s: string): string {
+   154→  if (s === 'sent') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+   155→  if (s === 'scheduled') return 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+   156→  return 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30'
+   157→}
+   158→
+   159→// ------------------------------------------------------------
+   160→// Main view
+   161→// ------------------------------------------------------------
+   162→export function BroadcastView() {
+   163→  const [tab, setTab] = React.useState<'campaigns' | 'templates'>('campaigns')
+   164→
+   165→  return (
+   166→    <div className="flex flex-col gap-6">
+   167→      {/* Header */}
+   168→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   169→        <div>
+   170→          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight sm:text-2xl">
+   171→            <Megaphone className="h-5 w-5 text-emerald-400" />
+   172→            Broadcast
+   173→          </h1>
+   174→          <p className="mt-1 text-sm text-muted-foreground">
+   175→            Send a message to many contacts at once and manage reusable templates.
+   176→          </p>
+   177→        </div>
+   178→      </div>
+   179→
+   180→      <Tabs value={tab} onValueChange={(v) => setTab(v as 'campaigns' | 'templates')}>
+   181→        <TabsList className="w-full sm:w-auto">
+   182→          <TabsTrigger value="campaigns" className="flex-1 sm:flex-none">
+   183→            <Send className="mr-1.5 h-4 w-4" /> Campaigns
+   184→          </TabsTrigger>
+   185→          <TabsTrigger value="templates" className="flex-1 sm:flex-none">
+   186→            <FileText className="mr-1.5 h-4 w-4" /> Templates
+   187→          </TabsTrigger>
+   188→        </TabsList>
+   189→
+   190→        <TabsContent value="campaigns" className="mt-4">
+   191→          <CampaignsTab />
+   192→        </TabsContent>
+   193→        <TabsContent value="templates" className="mt-4">
+   194→          <TemplatesTab />
+   195→        </TabsContent>
+   196→      </Tabs>
+   197→    </div>
+   198→  )
+   199→}
+   200→
+   201→// ============================================================
+   202→// Campaigns tab
+   203→// ============================================================
+   204→function CampaignsTab() {
+   205→  const [name, setName] = React.useState('')
+   206→  const [message, setMessage] = React.useState('')
+   207→  const [audience, setAudience] = React.useState<Audience>('all')
+   208→
+   209→  const [audienceCount, setAudienceCount] = React.useState<number | null>(null)
+   210→  const [audienceCountLoading, setAudienceCountLoading] = React.useState(false)
+   211→
+   212→  const [broadcasts, setBroadcasts] = React.useState<BroadcastRow[]>([])
+   213→  const [loadingList, setLoadingList] = React.useState(true)
+   214→  const [refreshing, setRefreshing] = React.useState(false)
+   215→
+   216→  const [templates, setTemplates] = React.useState<TemplateRow[]>([])
+   217→
+   218→  const [confirmOpen, setConfirmOpen] = React.useState(false)
+   219→  const [sending, setSending] = React.useState(false)
+   220→
+   221→  // --- Load templates (for the quick-fill chips) ---
+   222→  const fetchTemplates = React.useCallback(async () => {
+   223→    try {
+   224→      const d = await apiGet<{ items: TemplateRow[] }>('/api/templates')
+   225→      setTemplates(d.items.slice(0, 6))
+   226→    } catch {
+   227→      /* best-effort */
+   228→    }
+   229→  }, [])
+   230→
+   231→  // --- Load broadcast list ---
+   232→  const fetchBroadcasts = React.useCallback(
+   233→    async (opts?: { silent?: boolean }) => {
+   234→      if (opts?.silent) setRefreshing(true)
+   235→      else setLoadingList(true)
+   236→      try {
+   237→        const d = await apiGet<{ items: BroadcastRow[] }>('/api/broadcast')
+   238→        setBroadcasts(d.items)
+   239→      } catch (err) {
+   240→        toast.error('Failed to load campaigns', {
+   241→          description: err instanceof Error ? err.message : undefined,
+   242→        })
+   243→      } finally {
+   244→        setLoadingList(false)
+   245→        setRefreshing(false)
+   246→      }
+   247→    },
+   248→    [],
+   249→  )
+   250→
+   251→  React.useEffect(() => {
+   252→    void fetchBroadcasts()
+   253→    void fetchTemplates()
+   254→  }, [fetchBroadcasts, fetchTemplates])
+   255→
+   256→  // --- Audience count: re-fetch when audience changes ---
+   257→  React.useEffect(() => {
+   258→    let cancelled = false
+   259→    setAudienceCountLoading(true)
+   260→    apiGet<{ audience: string; count: number }>(
+   261→      `/api/broadcast/audience-count?audience=${encodeURIComponent(audience)}`,
+   262→    )
+   263→      .then((d) => {
+   264→        if (!cancelled) setAudienceCount(d.count)
+   265→      })
+   266→      .catch(() => {
+   267→        if (!cancelled) setAudienceCount(null)
+   268→      })
+   269→      .finally(() => {
+   270→        if (!cancelled) setAudienceCountLoading(false)
+   271→      })
+   272→    return () => {
+   273→      cancelled = true
+   274→    }
+   275→  }, [audience])
+   276→
+   277→  const canSend =
+   278→    name.trim().length > 0 &&
+   279→    message.trim().length > 0 &&
+   280→    message.length <= MAX_MESSAGE &&
+   281→    !sending
+   282→
+   283→  const handleOpenConfirm = () => {
+   284→    if (!name.trim()) {
+   285→      toast.error('Campaign name is required')
+   286→      return
+   287→    }
+   288→    if (!message.trim()) {
+   289→      toast.error('Message body is required')
+   290→      return
+   291→    }
+   292→    if (message.length > MAX_MESSAGE) {
+   293→      toast.error(`Message too long (max ${MAX_MESSAGE} chars)`)
+   294→      return
+   295→    }
+   296→    setConfirmOpen(true)
+   297→  }
+   298→
+   299→  const handleSend = async () => {
+   300→    setSending(true)
+   301→    try {
+   302→      const res = await apiPost<SendResult>('/api/broadcast', {
+   303→        name: name.trim(),
+   304→        message: message.trim(),
+   305→        audience,
+   306→      })
+   307→      if (res.warning) {
+   308→        toast.warning('Broadcast sent (empty audience)', { description: res.warning })
+   309→      } else {
+   310→        const failedNote =
+   311→          res.failedCount && res.failedCount > 0 ? ` · ${res.failedCount} failed` : ''
+   312→        toast.success('Broadcast sent', {
+   313→          description: `Delivered to ${res.sentCount} contact${res.sentCount === 1 ? '' : 's'}${failedNote}.`,
+   314→        })
+   315→      }
+   316→      // Reset form
+   317→      setName('')
+   318→      setMessage('')
+   319→      setConfirmOpen(false)
+   320→      // Refresh lists
+   321→      void fetchBroadcasts({ silent: true })
+   322→    } catch (err) {
+   323→      toast.error('Failed to send broadcast', {
+   324→        description: err instanceof Error ? err.message : undefined,
+   325→      })
+   326→    } finally {
+   327→      setSending(false)
+   328→    }
+   329→  }
+   330→
+   331→  return (
+   332→    <div className="grid gap-6 lg:grid-cols-2">
+   333→      {/* ----- New Broadcast form ----- */}
+   334→      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   335→        <CardHeader className="pb-3">
+   336→          <CardTitle className="flex items-center gap-2 text-base">
+   337→            <Send className="h-4 w-4 text-emerald-400" />
+   338→            New Broadcast
+   339→          </CardTitle>
+   340→        </CardHeader>
+   341→        <CardContent className="flex flex-col gap-4">
+   342→          {/* Name */}
+   343→          <div className="flex flex-col gap-1.5">
+   344→            <Label htmlFor="bc-name">Campaign name</Label>
+   345→            <Input
+   346→              id="bc-name"
+   347→              placeholder="e.g. Diwali Offer 2025"
+   348→              value={name}
+   349→              onChange={(e) => setName(e.target.value)}
+   350→              maxLength={80}
+   351→            />
+   352→          </div>
+   353→
+   354→          {/* Message */}
+   355→          <div className="flex flex-col gap-1.5">
+   356→            <div className="flex items-center justify-between">
+   357→              <Label htmlFor="bc-message">Message</Label>
+   358→              <span
+   359→                className={cn(
+   360→                  'text-[11px] tabular-nums',
+   361→                  message.length > MAX_MESSAGE
+   362→                    ? 'text-rose-400'
+   363→                    : 'text-muted-foreground',
+   364→                )}
+   365→              >
+   366→                {message.length} / {MAX_MESSAGE}
+   367→              </span>
+   368→            </div>
+   369→            <Textarea
+   370→              id="bc-message"
+   371→              placeholder="Type the broadcast message. Use {name} as a placeholder for the contact's name."
+   372→              value={message}
+   373→              onChange={(e) => setMessage(e.target.value)}
+   374→              rows={6}
+   375→              maxLength={MAX_MESSAGE}
+   376→              className="resize-y"
+   377→            />
+   378→          </div>
+   379→
+   380→          {/* Audience */}
+   381→          <div className="flex flex-col gap-1.5">
+   382→            <Label>Audience</Label>
+   383→            <Select
+   384→              value={audience}
+   385→              onValueChange={(v) => setAudience(v as Audience)}
+   386→            >
+   387→              <SelectTrigger className="w-full">
+   388→                <SelectValue placeholder="Select audience" />
+   389→              </SelectTrigger>
+   390→              <SelectContent>
+   391→                {AUDIENCE_OPTIONS.map((opt) => (
+   392→                  <SelectItem key={opt.value} value={opt.value}>
+   393→                    <div className="flex flex-col">
+   394→                      <span>{opt.label}</span>
+   395→                      <span className="text-[11px] text-muted-foreground">
+   396→                        {opt.hint}
+   397→                      </span>
+   398→                    </div>
+   399→                  </SelectItem>
+   400→                ))}
+   401→              </SelectContent>
+   402→            </Select>
+   403→          </div>
+   404→
+   405→          {/* Audience preview */}
+   406→          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm">
+   407→            <Users className="h-4 w-4 shrink-0 text-emerald-400" />
+   408→            <span className="text-muted-foreground">This will reach</span>
+   409→            {audienceCountLoading ? (
+   410→              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+   411→            ) : (
+   412→              <span className="font-semibold text-emerald-300 tabular-nums">
+   413→                {audienceCount ?? '—'}
+   414→              </span>
+   415→            )}
+   416→            <span className="text-muted-foreground">
+   417→              contact{(audienceCount ?? 0) === 1 ? '' : 's'}
+   418→            </span>
+   419→          </div>
+   420→
+   421→          {/* Quick templates */}
+   422→          {templates.length > 0 && (
+   423→            <div className="flex flex-col gap-2">
+   424→              <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+   425→                Quick templates
+   426→              </Label>
+   427→              <div className="flex flex-wrap gap-1.5">
+   428→                {templates.map((t) => (
+   429→                  <button
+   430→                    key={t.id}
+   431→                    type="button"
+   432→                    onClick={() => setMessage(t.body.slice(0, MAX_MESSAGE))}
+   433→                    className={cn(
+   434→                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+   435→                      'border-border bg-muted/40 text-muted-foreground hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-200',
+   436→                    )}
+   437→                    title={t.body}
+   438→                  >
+   439→                    <Copy className="h-3 w-3" />
+   440→                    {t.name}
+   441→                  </button>
+   442→                ))}
+   443→              </div>
+   444→            </div>
+   445→          )}
+   446→
+   447→          <Separator />
+   448→
+   449→          {/* Send button */}
+   450→          <Button
+   451→            type="button"
+   452→            onClick={handleOpenConfirm}
+   453→            disabled={!canSend}
+   454→            className={cn(
+   455→              'w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-orange-900/20 transition-all hover:from-amber-400 hover:to-orange-500',
+   456→              !canSend && 'opacity-50',
+   457→            )}
+   458→          >
+   459→            <Send className="mr-2 h-4 w-4" />
+   460→            Send Broadcast
+   461→          </Button>
+   462→          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+   463→            <AlertTriangle className="h-3 w-3 text-amber-400" />
+   464→            Mass-send is irreversible. You will be asked to confirm before any message goes out.
+   465→          </p>
+   466→        </CardContent>
+   467→      </Card>
+   468→
+   469→      {/* ----- Recent campaigns ----- */}
+   470→      <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur">
+   471→        <CardHeader className="flex-row items-center justify-between pb-3">
+   472→          <CardTitle className="flex items-center gap-2 text-base">
+   473→            <Clock className="h-4 w-4 text-emerald-400" />
+   474→            Recent Campaigns
+   475→          </CardTitle>
+   476→          <Button
+   477→            size="sm"
+   478→            variant="ghost"
+   479→            onClick={() => fetchBroadcasts({ silent: true })}
+   480→            disabled={refreshing}
+   481→          >
+   482→            <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+   483→            <span className="sr-only">Refresh</span>
+   484→          </Button>
+   485→        </CardHeader>
+   486→        <CardContent className="flex-1 p-0">
+   487→          {loadingList ? (
+   488→            <div className="flex items-center justify-center gap-2 px-6 py-12 text-sm text-muted-foreground">
+   489→              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+   490→            </div>
+   491→          ) : broadcasts.length === 0 ? (
+   492→            <div className="flex flex-col items-center gap-2 px-6 py-12 text-center text-sm text-muted-foreground">
+   493→              <Megaphone className="h-8 w-8 text-muted-foreground/40" />
+   494→              <div>No campaigns yet.</div>
+   495→              <div className="text-[11px]">Send your first broadcast using the form on the left.</div>
+   496→            </div>
+   497→          ) : (
+   498→            <ScrollArea className="max-h-[32rem]">
+   499→              <div className="flex flex-col gap-2 px-4 pb-4">
+   500→                {broadcasts.map((b) => (
+   501→                  <BroadcastCard key={b.id} b={b} />
+   502→                ))}
+   503→              </div>
+   504→            </ScrollArea>
+   505→          )}
+   506→        </CardContent>
+   507→      </Card>
+   508→
+   509→      {/* ----- Confirmation dialog ----- */}
+   510→      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+   511→        <DialogContent className="sm:max-w-md">
+   512→          <DialogHeader>
+   513→            <DialogTitle className="flex items-center gap-2">
+   514→              <AlertTriangle className="h-5 w-5 text-amber-400" />
+   515→              Confirm broadcast
+   516→            </DialogTitle>
+   517→            <DialogDescription>
+   518→              You&apos;re about to send a mass message. This action cannot be undone.
+   519→            </DialogDescription>
+   520→          </DialogHeader>
+   521→          <div className="flex flex-col gap-3 rounded-lg border bg-muted/40 p-3 text-sm">
+   522→            <div className="flex items-center justify-between gap-3">
+   523→              <span className="text-muted-foreground">Campaign</span>
+   524→              <span className="font-medium">{name.trim()}</span>
+   525→            </div>
+   526→            <div className="flex items-center justify-between gap-3">
+   527→              <span className="text-muted-foreground">Audience</span>
+   528→              <Badge variant="outline" className={audienceBadgeClass(audience)}>
+   529→                {audienceLabel(audience)}
+   530→              </Badge>
+   531→            </div>
+   532→            <div className="flex items-center justify-between gap-3">
+   533→              <span className="text-muted-foreground">Recipients</span>
+   534→              <span className="font-semibold tabular-nums text-emerald-300">
+   535→                {audienceCount ?? '—'}
+   536→              </span>
+   537→            </div>
+   538→            <Separator />
+   539→            <div className="flex flex-col gap-1">
+   540→              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+   541→                Message preview
+   542→              </span>
+   543→              <p className="line-clamp-4 text-xs text-foreground/90">
+   544→                {message.trim()}
+   545→              </p>
+   546→            </div>
+   547→          </div>
+   548→          <DialogFooter>
+   549→            <Button
+   550→              variant="outline"
+   551→              onClick={() => setConfirmOpen(false)}
+   552→              disabled={sending}
+   553→            >
+   554→              Cancel
+   555→            </Button>
+   556→            <Button
+   557→              onClick={handleSend}
+   558→              disabled={sending}
+   559→              className="bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-400 hover:to-orange-500"
+   560→            >
+   561→              {sending ? (
+   562→                <>
+   563→                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending…
+   564→                </>
+   565→              ) : (
+   566→                <>
+   567→                  <Send className="mr-2 h-4 w-4" /> Send to {audienceCount ?? '—'}
+   568→                </>
+   569→              )}
+   570→            </Button>
+   571→          </DialogFooter>
+   572→        </DialogContent>
+   573→      </Dialog>
+   574→    </div>
+   575→  )
+   576→}
+   577→
+   578→function BroadcastCard({ b }: { b: BroadcastRow }) {
+   579→  return (
+   580→    <div className="rounded-lg border bg-card/50 p-3 transition-colors hover:bg-card/80">
+   581→      <div className="flex items-start justify-between gap-3">
+   582→        <div className="min-w-0 flex-1">
+   583→          <div className="flex items-center gap-2">
+   584→            <span className="truncate font-medium">{b.name}</span>
+   585→            <Badge variant="outline" className={statusBadgeClass(b.status)}>
+   586→              {b.status}
+   587→            </Badge>
+   588→          </div>
+   589→          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+   590→            {b.message}
+   591→          </p>
+   592→          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   593→            <Badge variant="outline" className={audienceBadgeClass(b.audience)}>
+   594→              {audienceLabel(b.audience)}
+   595→            </Badge>
+   596→            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-300 border-emerald-500/30">
+   597→              <Send className="mr-1 h-3 w-3" />
+   598→              {b.sentCount} sent
+   599→            </Badge>
+   600→            {b.deliveredCount > 0 && b.deliveredCount !== b.sentCount && (
+   601→              <Badge variant="outline" className="bg-muted text-muted-foreground border-border">
+   602→                <Check className="mr-1 h-3 w-3" />
+   603→                {b.deliveredCount} delivered
+   604→              </Badge>
+   605→            )}
+   606→          </div>
+   607→        </div>
+   608→        <div className="shrink-0 text-right text-[11px] text-muted-foreground">
+   609→          <div>{timeAgo(b.createdAt)}</div>
+   610→          <div className="mt-0.5 text-[10px]">{formatDateTime(b.createdAt)}</div>
+   611→        </div>
+   612→      </div>
+   613→    </div>
+   614→  )
+   615→}
+   616→
+   617→// ============================================================
+   618→// Templates tab
+   619→// ============================================================
+   620→function TemplatesTab() {
+   621→  const [templates, setTemplates] = React.useState<TemplateRow[]>([])
+   622→  const [loading, setLoading] = React.useState(true)
+   623→  const [refreshing, setRefreshing] = React.useState(false)
+   624→
+   625→  const [editorOpen, setEditorOpen] = React.useState(false)
+   626→  const [editing, setEditing] = React.useState<TemplateRow | null>(null)
+   627→  const [deleteTarget, setDeleteTarget] = React.useState<TemplateRow | null>(null)
+   628→  const [deleting, setDeleting] = React.useState(false)
+   629→
+   630→  const fetchAll = React.useCallback(
+   631→    async (opts?: { silent?: boolean }) => {
+   632→      if (opts?.silent) setRefreshing(true)
+   633→      else setLoading(true)
+   634→      try {
+   635→        const d = await apiGet<{ items: TemplateRow[] }>('/api/templates')
+   636→        setTemplates(d.items)
+   637→      } catch (err) {
+   638→        toast.error('Failed to load templates', {
+   639→          description: err instanceof Error ? err.message : undefined,
+   640→        })
+   641→      } finally {
+   642→        setLoading(false)
+   643→        setRefreshing(false)
+   644→      }
+   645→    },
+   646→    [],
+   647→  )
+   648→
+   649→  React.useEffect(() => {
+   650→    void fetchAll()
+   651→  }, [fetchAll])
+   652→
+   653→  const openNew = () => {
+   654→    setEditing(null)
+   655→    setEditorOpen(true)
+   656→  }
+   657→  const openEdit = (t: TemplateRow) => {
+   658→    setEditing(t)
+   659→    setEditorOpen(true)
+   660→  }
+   661→
+   662→  const handleDelete = async () => {
+   663→    if (!deleteTarget) return
+   664→    setDeleting(true)
+   665→    try {
+   666→      await apiDelete(`/api/templates?id=${encodeURIComponent(deleteTarget.id)}`)
+   667→      toast.success('Template deleted', { description: deleteTarget.name })
+   668→      setDeleteTarget(null)
+   669→      void fetchAll({ silent: true })
+   670→    } catch (err) {
+   671→      toast.error('Failed to delete template', {
+   672→        description: err instanceof Error ? err.message : undefined,
+   673→      })
+   674→    } finally {
+   675→      setDeleting(false)
+   676→    }
+   677→  }
+   678→
+   679→  return (
+   680→    <div className="flex flex-col gap-4">
+   681→      <div className="flex items-center justify-between gap-3">
+   682→        <div>
+   683→          <h2 className="flex items-center gap-2 text-sm font-semibold">
+   684→            <FileText className="h-4 w-4 text-emerald-400" /> Message Templates
+   685→          </h2>
+   686→          <p className="text-[11px] text-muted-foreground">
+   687→            Reusable snippets. Click a chip in the broadcast form to drop one into the composer.
+   688→          </p>
+   689→        </div>
+   690→        <div className="flex items-center gap-2">
+   691→          <Button
+   692→            size="sm"
+   693→            variant="ghost"
+   694→            onClick={() => fetchAll({ silent: true })}
+   695→            disabled={refreshing}
+   696→          >
+   697→            <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+   698→            <span className="sr-only">Refresh</span>
+   699→          </Button>
+   700→          <Button size="sm" onClick={openNew}>
+   701→            <Plus className="mr-1 h-4 w-4" /> New Template
+   702→          </Button>
+   703→        </div>
+   704→      </div>
+   705→
+   706→      {loading ? (
+   707→        <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+   708→          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+   709→        </div>
+   710→      ) : templates.length === 0 ? (
+   711→        <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-muted-foreground">
+   712→          <FileText className="h-8 w-8 text-muted-foreground/40" />
+   713→          <div>No templates yet.</div>
+   714→        </div>
+   715→      ) : (
+   716→        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+   717→          {templates.map((t) => (
+   718→            <TemplateCard
+   719→              key={t.id}
+   720→              t={t}
+   721→              onEdit={() => openEdit(t)}
+   722→              onDelete={() => setDeleteTarget(t)}
+   723→            />
+   724→          ))}
+   725→        </div>
+   726→      )}
+   727→
+   728→      <TemplateEditorDialog
+   729→        open={editorOpen}
+   730→        onOpenChange={setEditorOpen}
+   731→        editing={editing}
+   732→        onSaved={() => {
+   733→          setEditorOpen(false)
+   734→          void fetchAll({ silent: true })
+   735→        }}
+   736→      />
+   737→
+   738→      {/* Delete confirmation */}
+   739→      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   740→        <DialogContent className="sm:max-w-md">
+   741→          <DialogHeader>
+   742→            <DialogTitle className="flex items-center gap-2">
+   743→              <AlertTriangle className="h-5 w-5 text-rose-400" />
+   744→              Delete template
+   745→            </DialogTitle>
+   746→            <DialogDescription>
+   747→              This action cannot be undone. The template will be removed permanently.
+   748→            </DialogDescription>
+   749→          </DialogHeader>
+   750→          {deleteTarget && (
+   751→            <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+   752→              <div className="flex items-center gap-2">
+   753→                <Badge variant="outline" className={categoryBadgeClass(deleteTarget.category)}>
+   754→                  {categoryLabel(deleteTarget.category)}
+   755→                </Badge>
+   756→                <span className="font-medium">{deleteTarget.name}</span>
+   757→              </div>
+   758→              <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
+   759→                {deleteTarget.body}
+   760→              </p>
+   761→            </div>
+   762→          )}
+   763→          <DialogFooter>
+   764→            <Button
+   765→              variant="outline"
+   766→              onClick={() => setDeleteTarget(null)}
+   767→              disabled={deleting}
+   768→            >
+   769→              Cancel
+   770→            </Button>
+   771→            <Button
+   772→              variant="destructive"
+   773→              onClick={handleDelete}
+   774→              disabled={deleting}
+   775→            >
+   776→              {deleting ? (
+   777→                <>
+   778→                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Deleting…
+   779→                </>
+   780→              ) : (
+   781→                <>
+   782→                  <Trash2 className="mr-2 h-4 w-4" /> Delete
+   783→                </>
+   784→              )}
+   785→            </Button>
+   786→          </DialogFooter>
+   787→        </DialogContent>
+   788→      </Dialog>
+   789→    </div>
+   790→  )
+   791→}
+   792→
+   793→function TemplateCard({
+   794→  t,
+   795→  onEdit,
+   796→  onDelete,
+   797→}: {
+   798→  t: TemplateRow
+   799→  onEdit: () => void
+   800→  onDelete: () => void
+   801→}) {
+   802→  const [copied, setCopied] = React.useState(false)
+   803→
+   804→  const handleCopy = async () => {
+   805→    try {
+   806→      await navigator.clipboard.writeText(t.body)
+   807→      setCopied(true)
+   808→      toast.success('Copied to clipboard')
+   809→      setTimeout(() => setCopied(false), 1500)
+   810→    } catch {
+   811→      toast.error('Clipboard not available')
+   812→    }
+   813→  }
+   814→
+   815→  return (
+   816→    <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur transition-colors hover:bg-card/80">
+   817→      <CardContent className="flex flex-1 flex-col gap-2 p-4">
+   818→        <div className="flex items-start justify-between gap-2">
+   819→          <div className="min-w-0">
+   820→            <div className="truncate font-medium">{t.name}</div>
+   821→            <Badge variant="outline" className={cn('mt-1', categoryBadgeClass(t.category))}>
+   822→              {categoryLabel(t.category)}
+   823→            </Badge>
+   824→          </div>
+   825→          <div className="flex shrink-0 items-center gap-1">
+   826→            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={handleCopy} title="Copy body">
+   827→              {copied ? (
+   828→                <Check className="h-3.5 w-3.5 text-emerald-400" />
+   829→              ) : (
+   830→                <Copy className="h-3.5 w-3.5" />
+   831→              )}
+   832→            </Button>
+   833→            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit} title="Edit">
+   834→              <Pencil className="h-3.5 w-3.5" />
+   835→            </Button>
+   836→            <Button
+   837→              size="icon"
+   838→              variant="ghost"
+   839→              className="h-7 w-7 hover:text-rose-400"
+   840→              onClick={onDelete}
+   841→              title="Delete"
+   842→            >
+   843→              <Trash2 className="h-3.5 w-3.5" />
+   844→            </Button>
+   845→          </div>
+   846→        </div>
+   847→        <p className="line-clamp-4 flex-1 text-xs text-muted-foreground">{t.body}</p>
+   848→        <div className="mt-1 text-[10px] text-muted-foreground">
+   849→          Updated {timeAgo(t.updatedAt)}
+   850→        </div>
+   851→      </CardContent>
+   852→    </Card>
+   853→  )
+   854→}
+   855→
+   856→// ============================================================
+   857→// Template editor dialog (create / edit)
+   858→// ============================================================
+   859→function TemplateEditorDialog({
+   860→  open,
+   861→  onOpenChange,
+   862→  editing,
+   863→  onSaved,
+   864→}: {
+   865→  open: boolean
+   866→  onOpenChange: (o: boolean) => void
+   867→  editing: TemplateRow | null
+   868→  onSaved: () => void
+   869→}) {
+   870→  const [name, setName] = React.useState('')
+   871→  const [body, setBody] = React.useState('')
+   872→  const [category, setCategory] = React.useState<TemplateCategory>('general')
+   873→  const [saving, setSaving] = React.useState(false)
+   874→
+   875→  // Sync fields when dialog opens or editing target changes
+   876→  React.useEffect(() => {
+   877→    if (!open) return
+   878→    setName(editing?.name ?? '')
+   879→    setBody(editing?.body ?? '')
+   880→    setCategory((editing?.category as TemplateCategory) ?? 'general')
+   881→  }, [open, editing])
+   882→
+   883→  const canSave =
+   884→    name.trim().length > 0 &&
+   885→    body.trim().length > 0 &&
+   886→    body.length <= 4000 &&
+   887→    !saving
+   888→
+   889→  const handleSave = async () => {
+   890→    if (!canSave) return
+   891→    setSaving(true)
+   892→    try {
+   893→      await apiPost('/api/templates', {
+   894→        id: editing?.id ?? undefined,
+   895→        name: name.trim(),
+   896→        body: body.trim(),
+   897→        category,
+   898→      })
+   899→      toast.success(editing ? 'Template updated' : 'Template created', {
+   900→        description: name.trim(),
+   901→      })
+   902→      onSaved()
+   903→    } catch (err) {
+   904→      toast.error('Failed to save template', {
+   905→        description: err instanceof Error ? err.message : undefined,
+   906→      })
+   907→    } finally {
+   908→      setSaving(false)
+   909→    }
+   910→  }
+   911→
+   912→  return (
+   913→    <Dialog open={open} onOpenChange={(o) => !saving && onOpenChange(o)}>
+   914→      <DialogContent className="sm:max-w-lg">
+   915→        <DialogHeader>
+   916→          <DialogTitle className="flex items-center gap-2">
+   917→            <FileText className="h-4 w-4 text-emerald-400" />
+   918→            {editing ? 'Edit template' : 'New template'}
+   919→          </DialogTitle>
+   920→          <DialogDescription>
+   921→            Templates can include the placeholder {'{name}'} which gets replaced
+   922→            with the contact&apos;s name when used.
+   923→          </DialogDescription>
+   924→        </DialogHeader>
+   925→
+   926→        <div className="flex flex-col gap-3">
+   927→          <div className="flex flex-col gap-1.5">
+   928→            <Label htmlFor="tpl-name">Name</Label>
+   929→            <Input
+   930→              id="tpl-name"
+   931→              placeholder="e.g. Holiday Greeting"
+   932→              value={name}
+   933→              onChange={(e) => setName(e.target.value)}
+   934→              maxLength={80}
+   935→            />
+   936→          </div>
+   937→          <div className="flex flex-col gap-1.5">
+   938→            <Label>Category</Label>
+   939→            <Select
+   940→              value={category}
+   941→              onValueChange={(v) => setCategory(v as TemplateCategory)}
+   942→            >
+   943→              <SelectTrigger className="w-full">
+   944→                <SelectValue />
+   945→              </SelectTrigger>
+   946→              <SelectContent>
+   947→                {TEMPLATE_CATEGORIES.map((c) => (
+   948→                  <SelectItem key={c.value} value={c.value}>
+   949→                    <span className="flex items-center gap-2">
+   950→                      <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />
+   951→                      {c.label}
+   952→                    </span>
+   953→                  </SelectItem>
+   954→                ))}
+   955→              </SelectContent>
+   956→            </Select>
+   957→          </div>
+   958→          <div className="flex flex-col gap-1.5">
+   959→            <div className="flex items-center justify-between">
+   960→              <Label htmlFor="tpl-body">Body</Label>
+   961→              <span
+   962→                className={cn(
+   963→                  'text-[11px] tabular-nums',
+   964→                  body.length > 4000 ? 'text-rose-400' : 'text-muted-foreground',
+   965→                )}
+   966→              >
+   967→                {body.length} / 4000
+   968→              </span>
+   969→            </div>
+   970→            <Textarea
+   971→              id="tpl-body"
+   972→              placeholder="Hi {name}, thanks for reaching out to QorvixNode Technologies…"
+   973→              value={body}
+   974→              onChange={(e) => setBody(e.target.value)}
+   975→              rows={6}
+   976→              maxLength={4000}
+   977→              className="resize-y"
+   978→            />
+   979→          </div>
+   980→        </div>
+   981→
+   982→        <DialogFooter>
+   983→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+   984→            Cancel
+   985→          </Button>
+   986→          <Button onClick={handleSave} disabled={!canSave}>
+   987→            {saving ? (
+   988→              <>
+   989→                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
+   990→              </>
+   991→            ) : (
+   992→              <>
+   993→                <Check className="mr-2 h-4 w-4" /> Save
+   994→              </>
+   995→            )}
+   996→          </Button>
+   997→        </DialogFooter>
+   998→      </DialogContent>
+   999→    </Dialog>
+  1000→  )
+  1001→}
+  1002→

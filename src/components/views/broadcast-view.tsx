@@ -331,7 +331,7 @@ function CampaignsTab() {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       {/* ----- New Broadcast form ----- */}
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Send className="h-4 w-4 text-emerald-400" />
@@ -467,7 +467,7 @@ function CampaignsTab() {
       </Card>
 
       {/* ----- Recent campaigns ----- */}
-      <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader className="flex-row items-center justify-between pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Clock className="h-4 w-4 text-emerald-400" />
@@ -577,7 +577,7 @@ function CampaignsTab() {
 
 function BroadcastCard({ b }: { b: BroadcastRow }) {
   return (
-    <div className="rounded-lg border bg-card/50 p-3 transition-colors hover:bg-card/80">
+    <div className="rounded-lg border bg-card/50 p-3 transition-colors card-hover hover:bg-card/80">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -813,7 +813,7 @@ function TemplateCard({
   }
 
   return (
-    <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur transition-colors hover:bg-card/80">
+    <Card className="flex flex-col rounded-xl border bg-card/60 backdrop-blur card-hover transition-colors hover:bg-card/80">
       <CardContent className="flex flex-1 flex-col gap-2 p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">

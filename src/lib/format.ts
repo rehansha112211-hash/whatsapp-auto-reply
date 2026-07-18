@@ -124,3 +124,40 @@ export function toCsv(rows: Record<string, unknown>[]): string {
   for (const r of rows) lines.push(headers.map((h) => escape(r[h])).join(','))
   return lines.join('\n')
 }
+
+// ---------------- Match highlighting ----------------
+// Splits `text` into segments, marking the portions that case-insensitively
+// match `query`. The view renders <mark> for segments where match === true.
+// All occurrences of the query are highlighted (not just the first).
+// If the query is empty or no match is found, returns a single segment
+// containing the original text with match=false.
+export interface MatchSegment {
+  text: string
+  match: boolean
+}
+
+export function findMatchSegments(text: string, query: string): MatchSegment[] {
+  const q = query.trim()
+  if (!q) return [{ text, match: false }]
+  const lower = text.toLowerCase()
+  const needle = q.toLowerCase()
+  const segments: MatchSegment[] = []
+  let i = 0
+  while (i < text.length) {
+    const idx = lower.indexOf(needle, i)
+    if (idx === -1) {
+      segments.push({ text: text.slice(i), match: false })
+      break
+    }
+    if (idx > i) {
+      segments.push({ text: text.slice(i, idx), match: false })
+    }
+    segments.push({ text: text.slice(idx, idx + needle.length), match: true })
+    i = idx + needle.length
+    if (i === idx) {
+      // zero-length needle guard (shouldn't happen because of trim, but safe)
+      i = idx + 1
+    }
+  }
+  return segments
+}

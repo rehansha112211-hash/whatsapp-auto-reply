@@ -1,0 +1,991 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { toast } from 'sonner'
+     5→import {
+     6→  Activity,
+     7→  Server,
+     8→  Cpu,
+     9→  HardDrive,
+    10→  Clock,
+    11→  RefreshCw,
+    12→  AlertTriangle,
+    13→  CheckCircle2,
+    14→  XCircle,
+    15→  Wifi,
+    16→  Shield,
+    17→  Zap,
+    18→  Database,
+    19→  Monitor,
+    20→  Loader2,
+    21→  Archive,
+    22→  FileBox,
+    23→  RotateCcw,
+    24→  Trash2,
+    25→  Download,
+    26→} from 'lucide-react'
+    27→import { cn } from '@/lib/utils'
+    28→import { apiGet, apiPost, apiDelete } from '@/lib/api-client'
+    29→import { formatUptime, formatDateTime, timeAgo } from '@/lib/format'
+    30→import type { LogRow, SystemHealth, WhatsAppState } from '@/lib/types'
+    31→import {
+    32→  Card,
+    33→  CardContent,
+    34→  CardHeader,
+    35→  CardTitle,
+    36→} from '@/components/ui/card'
+    37→import { Button } from '@/components/ui/button'
+    38→import { Badge } from '@/components/ui/badge'
+    39→import { Progress } from '@/components/ui/progress'
+    40→import { Separator } from '@/components/ui/separator'
+    41→import {
+    42→  AlertDialog,
+    43→  AlertDialogAction,
+    44→  AlertDialogCancel,
+    45→  AlertDialogContent,
+    46→  AlertDialogDescription,
+    47→  AlertDialogFooter,
+    48→  AlertDialogHeader,
+    49→  AlertDialogTitle,
+    50→} from '@/components/ui/alert-dialog'
+    51→import { StatusDot, WhatsAppStatusBadge } from '@/components/status'
+    52→
+    53→interface SystemViewProps {
+    54→  onOpenContact?: (contactId: string) => void
+    55→}
+    56→
+    57→interface HealthWithMeta extends SystemHealth {
+    58→  aiModel?: string
+    59→  aiProviderName?: string
+    60→  startedAt?: string
+    61→}
+    62→
+    63→function overallOk(h: SystemHealth | null): boolean {
+    64→  if (!h) return false
+    65→  if (h.backend !== 'ok') return false
+    66→  if (h.database !== 'ok') return false
+    67→  if (h.aiProvider === 'error') return false
+    68→  if (h.whatsapp === 'logged_out' || h.whatsapp === 'disconnected')
+    69→    return false
+    70→  return true
+    71→}
+    72→
+    73→function statusAccent(state: 'ok' | 'error' | 'warn' | 'idle'): string {
+    74→  switch (state) {
+    75→    case 'ok':
+    76→      return 'border-l-emerald-500'
+    77→    case 'warn':
+    78→      return 'border-l-amber-500'
+    79→    case 'error':
+    80→      return 'border-l-rose-500'
+    81→    default:
+    82→      return 'border-l-zinc-500'
+    83→  }
+    84→}
+    85→
+    86→function ResourceCard({
+    87→  icon,
+    88→  label,
+    89→  value,
+    90→  detail,
+    91→}: {
+    92→  icon: React.ReactNode
+    93→  label: string
+    94→  value: number
+    95→  detail?: string
+    96→}) {
+    97→  const pct = Math.max(0, Math.min(100, Math.round(value)))
+    98→  const color =
+    99→    pct >= 85 ? 'text-rose-300' : pct >= 65 ? 'text-amber-300' : 'text-emerald-300'
+   100→  return (
+   101→    <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+   102→      <CardHeader className="flex flex-row items-center justify-between space-y-0 p-0 pb-3">
+   103→        <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   104→          {icon}
+   105→          {label}
+   106→        </CardTitle>
+   107→        <span className={cn('font-mono text-sm font-semibold tabular-nums', color)}>
+   108→          {pct}%
+   109→        </span>
+   110→      </CardHeader>
+   111→      <CardContent className="p-0">
+   112→        <Progress
+   113→          value={pct}
+   114→          className={cn(
+   115→            'h-2.5 transition-all duration-700 ease-out',
+   116→            pct >= 85 && '[&_[data-slot=progress-indicator]]:bg-rose-500',
+   117→            pct >= 65 &&
+   118→              pct < 85 &&
+   119→              '[&_[data-slot=progress-indicator]]:bg-amber-500',
+   120→            pct < 65 && '[&_[data-slot=progress-indicator]]:bg-emerald-500',
+   121→          )}
+   122→        />
+   123→        {detail && (
+   124→          <div className="mt-2 text-[11px] text-muted-foreground">{detail}</div>
+   125→        )}
+   126→      </CardContent>
+   127→    </Card>
+   128→  )
+   129→}
+   130→
+   131→function StatusCard({
+   132→  icon,
+   133→  label,
+   134→  state,
+   135→  accent,
+   136→  children,
+   137→}: {
+   138→  icon: React.ReactNode
+   139→  label: string
+   140→  state: 'ok' | 'error' | 'warn' | 'idle'
+   141→  accent: string
+   142→  children?: React.ReactNode
+   143→}) {
+   144→  return (
+   145→    <div
+   146→      className={cn(
+   147→        'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+   148→        accent,
+   149→      )}
+   150→    >
+   151→      <div className="flex items-center justify-between">
+   152→        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   153→          {icon}
+   154→          {label}
+   155→        </div>
+   156→      </div>
+   157→      <div className="mt-3 flex items-center gap-2">
+   158→        {children ?? (
+   159→          <StatusDot
+   160→            state={state === 'warn' ? 'warning' : state}
+   161→            pulse={state === 'ok'}
+   162→          />
+   163→        )}
+   164→        <span
+   165→          className={cn(
+   166→            'text-sm font-medium',
+   167→            state === 'ok' && 'text-emerald-300',
+   168→            state === 'warn' && 'text-amber-300',
+   169→            state === 'error' && 'text-rose-300',
+   170→            state === 'idle' && 'text-muted-foreground',
+   171→          )}
+   172→        >
+   173→          {state === 'ok' && 'Operational'}
+   174→          {state === 'warn' && 'Warning'}
+   175→          {state === 'error' && 'Error'}
+   176→          {state === 'idle' && 'Idle'}
+   177→        </span>
+   178→      </div>
+   179→    </div>
+   180→  )
+   181→}
+   182→
+   183→function waStateToStatus(
+   184→  s: WhatsAppState,
+   185→): 'ok' | 'error' | 'warn' | 'idle' {
+   186→  if (s === 'connected') return 'ok'
+   187→  if (s === 'logged_out') return 'error'
+   188→  if (s === 'qr_ready' || s === 'connecting') return 'warn'
+   189→  return 'idle'
+   190→}
+   191→
+   192→// ============================================================
+   193→// Backup & Recovery — real SQLite backup / restore / delete
+   194→// ============================================================
+   195→
+   196→interface BackupItem {
+   197→  id: string
+   198→  filename: string
+   199→  sizeBytes: number
+   200→  createdAt: string
+   201→}
+   202→
+   203→interface DbInfo {
+   204→  path: string
+   205→  sizeBytes: number
+   206→  counts: { contacts: number; messages: number; logs: number }
+   207→}
+   208→
+   209→interface BackupListResponse {
+   210→  items: BackupItem[]
+   211→  dbInfo: DbInfo
+   212→}
+   213→
+   214→interface BackupCreateResponse {
+   215→  ok: true
+   216→  backup: BackupItem
+   217→}
+   218→
+   219→function formatBytes(bytes: number): string {
+   220→  if (!bytes || bytes <= 0) return '0 B'
+   221→  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+   222→  const i = Math.min(
+   223→    units.length - 1,
+   224→    Math.floor(Math.log(bytes) / Math.log(1024)),
+   225→  )
+   226→  const v = bytes / Math.pow(1024, i)
+   227→  const digits = i > 0 && v < 10 ? 1 : 0
+   228→  return `${v.toFixed(digits)} ${units[i]}`
+   229→}
+   230→
+   231→function BackupRecoveryCard() {
+   232→  const [backups, setBackups] = React.useState<BackupItem[]>([])
+   233→  const [dbInfo, setDbInfo] = React.useState<DbInfo | null>(null)
+   234→  const [loading, setLoading] = React.useState(true)
+   235→  const [creating, setCreating] = React.useState(false)
+   236→  const [busyFilename, setBusyFilename] = React.useState<string | null>(null)
+   237→  const [restoreTarget, setRestoreTarget] =
+   238→    React.useState<BackupItem | null>(null)
+   239→  const [deleteTarget, setDeleteTarget] = React.useState<BackupItem | null>(
+   240→    null,
+   241→  )
+   242→
+   243→  const fetchBackups = React.useCallback(async () => {
+   244→    setLoading(true)
+   245→    try {
+   246→      const data = await apiGet<BackupListResponse>('/api/system/backup')
+   247→      setBackups(data.items)
+   248→      setDbInfo(data.dbInfo)
+   249→    } catch {
+   250→      /* silent */
+   251→    } finally {
+   252→      setLoading(false)
+   253→    }
+   254→  }, [])
+   255→
+   256→  React.useEffect(() => {
+   257→    fetchBackups()
+   258→  }, [fetchBackups])
+   259→
+   260→  const handleCreate = async () => {
+   261→    setCreating(true)
+   262→    try {
+   263→      const data = await apiPost<BackupCreateResponse>('/api/system/backup')
+   264→      toast.success('Backup created', {
+   265→        description: `${data.backup.filename} · ${formatBytes(
+   266→          data.backup.sizeBytes,
+   267→        )}`,
+   268→      })
+   269→      await fetchBackups()
+   270→    } catch (err) {
+   271→      const msg = err instanceof Error ? err.message : 'Unknown error'
+   272→      toast.error('Backup failed', { description: msg })
+   273→    } finally {
+   274→      setCreating(false)
+   275→    }
+   276→  }
+   277→
+   278→  const handleRestore = async (item: BackupItem) => {
+   279→    setBusyFilename(item.filename)
+   280→    try {
+   281→      await apiPost('/api/system/backup/restore', {
+   282→        filename: item.filename,
+   283→      })
+   284→      toast.success('Database restored', {
+   285→        description: `Restored from ${item.filename}. Reload to see all changes.`,
+   286→      })
+   287→      setRestoreTarget(null)
+   288→      await fetchBackups()
+   289→    } catch (err) {
+   290→      const msg = err instanceof Error ? err.message : 'Unknown error'
+   291→      toast.error('Restore failed', { description: msg })
+   292→    } finally {
+   293→      setBusyFilename(null)
+   294→    }
+   295→  }
+   296→
+   297→  const handleDelete = async (item: BackupItem) => {
+   298→    setBusyFilename(item.filename)
+   299→    try {
+   300→      await apiDelete(
+   301→        `/api/system/backup/${encodeURIComponent(item.filename)}`,
+   302→      )
+   303→      toast.success('Backup deleted', { description: item.filename })
+   304→      setDeleteTarget(null)
+   305→      await fetchBackups()
+   306→    } catch (err) {
+   307→      const msg = err instanceof Error ? err.message : 'Unknown error'
+   308→      toast.error('Delete failed', { description: msg })
+   309→    } finally {
+   310→      setBusyFilename(null)
+   311→    }
+   312→  }
+   313→
+   314→  return (
+   315→    <Card className="rounded-xl border bg-card/60 p-5 backdrop-blur">
+   316→      <CardHeader className="p-0 pb-4">
+   317→        <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   318→          <span className="flex items-center gap-2">
+   319→            <Archive className="h-4 w-4 text-emerald-400" />
+   320→            Backup &amp; Recovery
+   321→          </span>
+   322→          <Badge
+   323→            variant="outline"
+   324→            className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+   325→          >
+   326→            {backups.length} {backups.length === 1 ? 'backup' : 'backups'}
+   327→          </Badge>
+   328→        </CardTitle>
+   329→      </CardHeader>
+   330→      <CardContent className="flex flex-col gap-4 p-0">
+   331→        {/* Create backup row */}
+   332→        <div className="flex flex-wrap items-center justify-between gap-3">
+   333→          <div className="min-w-0 flex-1">
+   334→            <p className="text-sm font-medium">
+   335→              Create a snapshot of the live database
+   336→            </p>
+   337→            <p className="text-[11px] text-muted-foreground">
+   338→              Copies the SQLite DB file and exports all settings (Company,
+   339→              Owner, AI, Auto-Reply) as a companion JSON file.
+   340→            </p>
+   341→          </div>
+   342→          <Button
+   343→            onClick={handleCreate}
+   344→            disabled={creating}
+   345→            className="gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+   346→          >
+   347→            {creating ? (
+   348→              <Loader2 className="h-4 w-4 animate-spin" />
+   349→            ) : (
+   350→              <Download className="h-4 w-4" />
+   351→            )}
+   352→            {creating ? 'Creating…' : 'Create Backup'}
+   353→          </Button>
+   354→        </div>
+   355→
+   356→        <Separator />
+   357→
+   358→        {/* Backup history */}
+   359→        <div>
+   360→          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+   361→            <FileBox className="h-3.5 w-3.5 text-emerald-400" />
+   362→            Backup History
+   363→          </div>
+   364→          <div className="max-h-64 overflow-y-auto rounded-md border bg-background/40 scrollbar-thin">
+   365→            {loading ? (
+   366→              <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+   367→                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   368→                Loading backups…
+   369→              </div>
+   370→            ) : backups.length === 0 ? (
+   371→              <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+   372→                <FileBox className="h-8 w-8 text-muted-foreground/50" />
+   373→                <p className="text-xs text-muted-foreground">
+   374→                  No backups yet. Create your first backup.
+   375→                </p>
+   376→              </div>
+   377→            ) : (
+   378→              <ul className="flex flex-col divide-y divide-border/50">
+   379→                {backups.map((item) => {
+   380→                  const isBusy = busyFilename === item.filename
+   381→                  return (
+   382→                    <li
+   383→                      key={item.id}
+   384→                      className="group flex items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50"
+   385→                    >
+   386→                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-300">
+   387→                        <Database className="h-4 w-4" />
+   388→                      </div>
+   389→                      <div className="min-w-0 flex-1">
+   390→                        <div className="truncate font-mono text-xs font-medium">
+   391→                          {item.filename}
+   392→                        </div>
+   393→                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+   394→                          <span className="tabular-nums">
+   395→                            {formatBytes(item.sizeBytes)}
+   396→                          </span>
+   397→                          <span>·</span>
+   398→                          <span>{timeAgo(item.createdAt)}</span>
+   399→                        </div>
+   400→                      </div>
+   401→                      <div className="flex shrink-0 items-center gap-1">
+   402→                        <Button
+   403→                          size="sm"
+   404→                          variant="outline"
+   405→                          className="h-7 gap-1 border-amber-500/30 px-2 text-[11px] text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+   406→                          disabled={isBusy}
+   407→                          onClick={() => setRestoreTarget(item)}
+   408→                        >
+   409→                          <RotateCcw className="h-3 w-3" />
+   410→                          Restore
+   411→                        </Button>
+   412→                        <Button
+   413→                          size="sm"
+   414→                          variant="ghost"
+   415→                          className="h-7 gap-1 px-2 text-[11px] text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+   416→                          disabled={isBusy}
+   417→                          onClick={() => setDeleteTarget(item)}
+   418→                        >
+   419→                          {isBusy ? (
+   420→                            <Loader2 className="h-3 w-3 animate-spin" />
+   421→                          ) : (
+   422→                            <Trash2 className="h-3 w-3" />
+   423→                          )}
+   424→                          Delete
+   425→                        </Button>
+   426→                      </div>
+   427→                    </li>
+   428→                  )
+   429→                })}
+   430→              </ul>
+   431→            )}
+   432→          </div>
+   433→        </div>
+   434→
+   435→        <Separator />
+   436→
+   437→        {/* Database info */}
+   438→        <div>
+   439→          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+   440→            <HardDrive className="h-3.5 w-3.5 text-emerald-400" />
+   441→            Database Info
+   442→          </div>
+   443→          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+   444→            <div className="rounded-md border bg-background/40 px-3 py-2">
+   445→              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+   446→                DB Path
+   447→              </div>
+   448→              <div
+   449→                className="mt-0.5 truncate font-mono text-[11px]"
+   450→                title={dbInfo?.path ?? ''}
+   451→              >
+   452→                {dbInfo?.path ?? '—'}
+   453→              </div>
+   454→            </div>
+   455→            <div className="rounded-md border bg-background/40 px-3 py-2">
+   456→              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+   457→                File Size
+   458→              </div>
+   459→              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+   460→                {dbInfo ? formatBytes(dbInfo.sizeBytes) : '—'}
+   461→              </div>
+   462→            </div>
+   463→            <div className="rounded-md border bg-background/40 px-3 py-2">
+   464→              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+   465→                Contacts
+   466→              </div>
+   467→              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+   468→                {dbInfo
+   469→                  ? dbInfo.counts.contacts.toLocaleString()
+   470→                  : '—'}
+   471→              </div>
+   472→            </div>
+   473→            <div className="rounded-md border bg-background/40 px-3 py-2">
+   474→              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+   475→                Messages / Logs
+   476→              </div>
+   477→              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+   478→                {dbInfo
+   479→                  ? `${dbInfo.counts.messages.toLocaleString()} / ${dbInfo.counts.logs.toLocaleString()}`
+   480→                  : '—'}
+   481→              </div>
+   482→            </div>
+   483→          </div>
+   484→        </div>
+   485→      </CardContent>
+   486→
+   487→      {/* Restore confirmation dialog */}
+   488→      <AlertDialog
+   489→        open={restoreTarget !== null}
+   490→        onOpenChange={(open) => !open && setRestoreTarget(null)}
+   491→      >
+   492→        <AlertDialogContent>
+   493→          <AlertDialogHeader>
+   494→            <AlertDialogTitle className="flex items-center gap-2">
+   495→              <AlertTriangle className="h-5 w-5 text-amber-400" />
+   496→              Restore Database?
+   497→            </AlertDialogTitle>
+   498→            <AlertDialogDescription>
+   499→              Restore from{' '}
+   500→              <span className="font-mono font-semibold">
+   501→                {restoreTarget?.filename}
+   502→              </span>
+   503→              ? This will overwrite the current database. The platform may need
+   504→              a moment to reconnect afterwards.
+   505→            </AlertDialogDescription>
+   506→          </AlertDialogHeader>
+   507→          <AlertDialogFooter>
+   508→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   509→            <AlertDialogAction
+   510→              className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700"
+   511→              onClick={() => restoreTarget && handleRestore(restoreTarget)}
+   512→            >
+   513→              <RotateCcw className="h-4 w-4" />
+   514→              Restore now
+   515→            </AlertDialogAction>
+   516→          </AlertDialogFooter>
+   517→        </AlertDialogContent>
+   518→      </AlertDialog>
+   519→
+   520→      {/* Delete confirmation dialog */}
+   521→      <AlertDialog
+   522→        open={deleteTarget !== null}
+   523→        onOpenChange={(open) => !open && setDeleteTarget(null)}
+   524→      >
+   525→        <AlertDialogContent>
+   526→          <AlertDialogHeader>
+   527→            <AlertDialogTitle className="flex items-center gap-2">
+   528→              <AlertTriangle className="h-5 w-5 text-rose-400" />
+   529→              Delete Backup?
+   530→            </AlertDialogTitle>
+   531→            <AlertDialogDescription>
+   532→              Delete{' '}
+   533→              <span className="font-mono font-semibold">
+   534→                {deleteTarget?.filename}
+   535→              </span>
+   536→              ? This action cannot be undone.
+   537→            </AlertDialogDescription>
+   538→          </AlertDialogHeader>
+   539→          <AlertDialogFooter>
+   540→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   541→            <AlertDialogAction
+   542→              className="gap-1.5 bg-rose-600 text-white hover:bg-rose-700"
+   543→              onClick={() => deleteTarget && handleDelete(deleteTarget)}
+   544→            >
+   545→              <Trash2 className="h-4 w-4" />
+   546→              Delete
+   547→            </AlertDialogAction>
+   548→          </AlertDialogFooter>
+   549→        </AlertDialogContent>
+   550→      </AlertDialog>
+   551→    </Card>
+   552→  )
+   553→}
+   554→
+   555→export function SystemView(_props: SystemViewProps) {
+   556→  const [health, setHealth] = React.useState<HealthWithMeta | null>(null)
+   557→  const [loading, setLoading] = React.useState(true)
+   558→  const [refreshing, setRefreshing] = React.useState(false)
+   559→  const [recentErrors, setRecentErrors] = React.useState<LogRow[]>([])
+   560→  const [recentStartup, setRecentStartup] = React.useState<LogRow[]>([])
+   561→
+   562→  const refresh = React.useCallback(async (mode: 'init' | 'silent') => {
+   563→    if (mode === 'init') setLoading(true)
+   564→    if (mode === 'silent') setRefreshing(true)
+   565→    try {
+   566→      const data = await apiGet<HealthWithMeta>('/api/system/health')
+   567→      // Augment with AI model/provider info from dashboard if available;
+   568→      // otherwise derive sensible defaults.
+   569→      data.aiModel = data.aiModel ?? 'glm-4.5'
+   570→      data.aiProviderName = data.aiProviderName ?? 'zai'
+   571→      data.startedAt = data.startedAt ?? new Date(Date.now() - data.uptimeSec * 1000).toISOString()
+   572→      setHealth(data)
+   573→    } catch {
+   574→      /* silent */
+   575→    } finally {
+   576→      setLoading(false)
+   577→      setRefreshing(false)
+   578→    }
+   579→  }, [])
+   580→
+   581→  const refreshEvents = React.useCallback(async () => {
+   582→    try {
+   583→      const [errs, startup] = await Promise.all([
+   584→        apiGet<{ items: LogRow[]; hasMore: boolean }>(
+   585→          '/api/logs?category=errors&limit=5',
+   586→        ).catch(() => ({ items: [], hasMore: false })),
+   587→        apiGet<{ items: LogRow[]; hasMore: boolean }>(
+   588→          '/api/logs?category=startup&limit=10',
+   589→        ).catch(() => ({ items: [], hasMore: false })),
+   590→      ])
+   591→      setRecentErrors(errs.items)
+   592→      setRecentStartup(startup.items)
+   593→    } catch {
+   594→      /* silent */
+   595→    }
+   596→  }, [])
+   597→
+   598→  React.useEffect(() => {
+   599→    refresh('init')
+   600→    refreshEvents()
+   601→    const t = setInterval(() => {
+   602→      refresh('silent')
+   603→      refreshEvents()
+   604→    }, 5000)
+   605→    return () => clearInterval(t)
+   606→  }, [refresh, refreshEvents])
+   607→
+   608→  const ok = overallOk(health)
+   609→  const waStatus = health ? waStateToStatus(health.whatsapp) : 'idle'
+   610→
+   611→  const aiStatus: 'ok' | 'error' | 'warn' | 'idle' =
+   612→    health?.aiProvider === 'ok'
+   613→      ? 'ok'
+   614→      : health?.aiProvider === 'error'
+   615→        ? 'error'
+   616→        : 'idle'
+   617→
+   618→  const sessionStatus: 'ok' | 'error' | 'warn' | 'idle' =
+   619→    health?.session === 'ok' ? 'ok' : 'idle'
+   620→
+   621→  const dbStatus: 'ok' | 'error' = health?.database ?? 'error'
+   622→
+   623→  if (loading && !health) {
+   624→    return (
+   625→      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+   626→        <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
+   627→        <span className="text-sm">Loading system health…</span>
+   628→      </div>
+   629→    )
+   630→  }
+   631→
+   632→  return (
+   633→    <div className="flex flex-col gap-4">
+   634→      {/* Header */}
+   635→      <div className="flex flex-wrap items-center justify-between gap-3">
+   636→        <div>
+   637→          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+   638→            <Activity className="h-5 w-5 text-emerald-400" />
+   639→            System Health
+   640→          </h1>
+   641→          <p className="text-xs text-muted-foreground">
+   642→            Live monitoring of all platform subsystems · refreshes every 5s
+   643→          </p>
+   644→        </div>
+   645→        <Button
+   646→          variant="outline"
+   647→          size="sm"
+   648→          className="gap-1.5"
+   649→          onClick={() => {
+   650→            refresh('silent')
+   651→            refreshEvents()
+   652→          }}
+   653→          disabled={refreshing}
+   654→        >
+   655→          {refreshing ? (
+   656→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   657→          ) : (
+   658→            <RefreshCw className="h-3.5 w-3.5" />
+   659→          )}
+   660→          Refresh now
+   661→        </Button>
+   662→      </div>
+   663→
+   664→      {/* Overall status banner */}
+   665→      <div
+   666→        className={cn(
+   667→          'relative overflow-hidden rounded-xl border bg-card/60 p-6 backdrop-blur',
+   668→          ok ? 'border-emerald-500/30' : 'border-amber-500/30',
+   669→        )}
+   670→      >
+   671→        <div
+   672→          className={cn(
+   673→            'pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full blur-3xl',
+   674→            ok ? 'bg-emerald-500/20' : 'bg-amber-500/20',
+   675→          )}
+   676→        />
+   677→        <div className="relative flex flex-wrap items-center gap-4">
+   678→          <div className="relative">
+   679→            <span
+   680→              className={cn(
+   681→                'absolute inline-flex h-14 w-14 animate-ping rounded-full opacity-60',
+   682→                ok ? 'bg-emerald-500' : 'bg-amber-500',
+   683→              )}
+   684→            />
+   685→            <span
+   686→              className={cn(
+   687→                'relative inline-flex h-14 w-14 items-center justify-center rounded-full text-white',
+   688→                ok ? 'bg-emerald-500' : 'bg-amber-500',
+   689→              )}
+   690→            >
+   691→              {ok ? (
+   692→                <CheckCircle2 className="h-7 w-7" />
+   693→              ) : (
+   694→                <AlertTriangle className="h-7 w-7" />
+   695→              )}
+   696→            </span>
+   697→          </div>
+   698→          <div className="min-w-0 flex-1">
+   699→            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+   700→              Overall Status
+   701→            </div>
+   702→            <div
+   703→              className={cn(
+   704→                'text-2xl font-bold tracking-tight',
+   705→                ok ? 'text-emerald-300' : 'text-amber-300',
+   706→              )}
+   707→            >
+   708→              {ok ? 'Operational' : 'Degraded'}
+   709→            </div>
+   710→            <div className="mt-1 text-xs text-muted-foreground">
+   711→              {ok
+   712→                ? 'All systems are running normally.'
+   713→                : 'Some subsystems require attention.'}
+   714→            </div>
+   715→          </div>
+   716→          <div className="flex flex-col items-end gap-1 text-right">
+   717→            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+   718→              <Clock className="h-3.5 w-3.5" />
+   719→              Uptime
+   720→            </div>
+   721→            <div className="font-mono text-lg font-semibold tabular-nums">
+   722→              {formatUptime(health?.uptimeSec ?? 0)}
+   723→            </div>
+   724→            <div className="text-[10px] text-muted-foreground">
+   725→              since {formatDateTime(health?.startedAt ?? null)}
+   726→            </div>
+   727→          </div>
+   728→        </div>
+   729→      </div>
+   730→
+   731→      {/* Status cards grid */}
+   732→      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+   733→        <StatusCard
+   734→          icon={<Server className="h-4 w-4" />}
+   735→          label="Backend"
+   736→          state="ok"
+   737→          accent={statusAccent('ok')}
+   738→        />
+   739→        <StatusCard
+   740→          icon={<Monitor className="h-4 w-4" />}
+   741→          label="Frontend"
+   742→          state="ok"
+   743→          accent={statusAccent('ok')}
+   744→        />
+   745→        <div
+   746→          className={cn(
+   747→            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+   748→            statusAccent(waStatus),
+   749→          )}
+   750→        >
+   751→          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   752→            <Wifi className="h-4 w-4" />
+   753→            WhatsApp
+   754→          </div>
+   755→          <div className="mt-3">
+   756→            <WhatsAppStatusBadge state={health?.whatsapp ?? 'disconnected'} />
+   757→          </div>
+   758→        </div>
+   759→        <StatusCard
+   760→          icon={<Database className="h-4 w-4" />}
+   761→          label="Database"
+   762→          state={dbStatus}
+   763→          accent={statusAccent(dbStatus === 'ok' ? 'ok' : 'error')}
+   764→        />
+   765→        <div
+   766→          className={cn(
+   767→            'rounded-xl border border-l-4 bg-card/60 p-4 backdrop-blur',
+   768→            statusAccent(aiStatus),
+   769→          )}
+   770→        >
+   771→          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   772→            <Zap className="h-4 w-4" />
+   773→            AI Provider
+   774→          </div>
+   775→          <div className="mt-3 flex flex-col gap-1">
+   776→            <div className="flex items-center gap-2">
+   777→              <StatusDot state={aiStatus === 'ok' ? 'ok' : aiStatus === 'error' ? 'error' : 'untested'} pulse={aiStatus === 'ok'} />
+   778→              <span
+   779→                className={cn(
+   780→                  'text-sm font-medium',
+   781→                  aiStatus === 'ok' && 'text-emerald-300',
+   782→                  aiStatus === 'error' && 'text-rose-300',
+   783→                  aiStatus === 'idle' && 'text-muted-foreground',
+   784→                )}
+   785→              >
+   786→                {aiStatus === 'ok'
+   787→                  ? 'Connected'
+   788→                  : aiStatus === 'error'
+   789→                    ? 'Error'
+   790→                    : 'Untested'}
+   791→              </span>
+   792→            </div>
+   793→            <div className="font-mono text-[11px] text-muted-foreground">
+   794→              {health?.aiModel ?? 'glm-4.5'}
+   795→            </div>
+   796→          </div>
+   797→        </div>
+   798→        <StatusCard
+   799→          icon={<Shield className="h-4 w-4" />}
+   800→          label="Session"
+   801→          state={sessionStatus}
+   802→          accent={statusAccent(sessionStatus === 'ok' ? 'ok' : 'idle')}
+   803→        >
+   804→          <StatusDot state={sessionStatus === 'ok' ? 'ok' : 'idle'} pulse={sessionStatus === 'ok'} />
+   805→          <span
+   806→            className={cn(
+   807→              'text-sm font-medium',
+   808→              sessionStatus === 'ok' ? 'text-emerald-300' : 'text-muted-foreground',
+   809→            )}
+   810→          >
+   811→            {sessionStatus === 'ok' ? 'Authenticated' : 'No session'}
+   812→          </span>
+   813→        </StatusCard>
+   814→      </div>
+   815→
+   816→      {/* Resource usage */}
+   817→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   818→        <ResourceCard
+   819→          icon={<Cpu className="h-4 w-4 text-emerald-400" />}
+   820→          label="CPU Usage"
+   821→          value={health?.cpu ?? 0}
+   822→          detail="Slowly-varying synthetic load"
+   823→        />
+   824→        <ResourceCard
+   825→          icon={<HardDrive className="h-4 w-4 text-emerald-400" />}
+   826→          label="RAM Usage"
+   827→          value={health?.ram ?? 0}
+   828→          detail={
+   829→            health
+   830→              ? `${Math.round(((health.ram / 100) * 512)).toString()} MB approx`
+   831→              : undefined
+   832→          }
+   833→        />
+   834→        <ResourceCard
+   835→          icon={<HardDrive className="h-4 w-4 text-emerald-400" />}
+   836→          label="Disk Usage"
+   837→          value={health?.disk ?? 0}
+   838→          detail="Stable storage baseline"
+   839→        />
+   840→      </div>
+   841→
+   842→      {/* Uptime & availability (full width) */}
+   843→      <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+   844→        <CardHeader className="p-0 pb-3">
+   845→          <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   846→            <Clock className="h-4 w-4 text-emerald-400" />
+   847→            Uptime & Availability
+   848→          </CardTitle>
+   849→        </CardHeader>
+   850→        <CardContent className="grid grid-cols-2 gap-4 p-0 sm:grid-cols-4">
+   851→          <div>
+   852→            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+   853→              Uptime
+   854→            </div>
+   855→            <div className="mt-1 font-mono text-lg font-semibold tabular-nums">
+   856→              {formatUptime(health?.uptimeSec ?? 0)}
+   857→            </div>
+   858→          </div>
+   859→          <div>
+   860→            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+   861→              Started
+   862→            </div>
+   863→            <div className="mt-1 font-mono text-sm">
+   864→              {formatDateTime(health?.startedAt ?? null)}
+   865→            </div>
+   866→          </div>
+   867→          <div>
+   868→            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+   869→              Backend
+   870→            </div>
+   871→            <div className="mt-1 flex items-center gap-1.5 text-sm">
+   872→              <StatusDot state="ok" pulse />
+   873→              <span className="text-emerald-300">OK</span>
+   874→            </div>
+   875→          </div>
+   876→          <div>
+   877→            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+   878→              Database
+   879→            </div>
+   880→            <div className="mt-1 flex items-center gap-1.5 text-sm">
+   881→              <StatusDot state={dbStatus} pulse={dbStatus === 'ok'} />
+   882→              <span
+   883→                className={cn(
+   884→                  dbStatus === 'ok' ? 'text-emerald-300' : 'text-rose-300',
+   885→                )}
+   886→              >
+   887→                {dbStatus === 'ok' ? 'OK' : 'Error'}
+   888→              </span>
+   889→            </div>
+   890→          </div>
+   891→        </CardContent>
+   892→      </Card>
+   893→
+   894→      {/* Backup & recovery (real SQLite backup / restore) */}
+   895→      <BackupRecoveryCard />
+   896→
+   897→      {/* Recent events */}
+   898→      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+   899→        {/* Recent errors */}
+   900→        <Card className="rounded-xl border border-rose-500/20 bg-rose-500/[0.03] p-4 backdrop-blur">
+   901→          <CardHeader className="p-0 pb-3">
+   902→            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-rose-300">
+   903→              <XCircle className="h-4 w-4" />
+   904→              Recent Errors
+   905→              {recentErrors.length > 0 && (
+   906→                <Badge
+   907→                  variant="outline"
+   908→                  className="ml-1 border-rose-500/30 bg-rose-500/10 text-rose-300"
+   909→                >
+   910→                  {recentErrors.length}
+   911→                </Badge>
+   912→              )}
+   913→            </CardTitle>
+   914→          </CardHeader>
+   915→          <CardContent className="p-0">
+   916→            <div className="max-h-72 overflow-y-auto scrollbar-thin">
+   917→              {recentErrors.length === 0 ? (
+   918→                <div className="flex items-center gap-2 py-6 text-center text-xs text-muted-foreground">
+   919→                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+   920→                  No recent errors. All good!
+   921→                </div>
+   922→              ) : (
+   923→                <ul className="flex flex-col gap-1.5">
+   924→                  {recentErrors.map((e) => (
+   925→                    <li
+   926→                      key={e.id}
+   927→                      className="rounded-md border border-rose-500/15 bg-rose-500/5 px-2.5 py-1.5"
+   928→                    >
+   929→                      <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+   930→                        <span className="font-mono">
+   931→                          {formatDateTime(e.createdAt)}
+   932→                        </span>
+   933→                        <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] uppercase text-rose-300">
+   934→                          {e.category}
+   935→                        </span>
+   936→                      </div>
+   937→                      <div className="mt-1 break-words font-mono text-xs text-rose-200">
+   938→                        {e.message}
+   939→                      </div>
+   940→                    </li>
+   941→                  ))}
+   942→                </ul>
+   943→              )}
+   944→            </div>
+   945→          </CardContent>
+   946→        </Card>
+   947→
+   948→        {/* Recent startup events */}
+   949→        <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+   950→          <CardHeader className="p-0 pb-3">
+   951→            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   952→              <Activity className="h-4 w-4 text-emerald-400" />
+   953→              Recent System Events
+   954→            </CardTitle>
+   955→          </CardHeader>
+   956→          <CardContent className="p-0">
+   957→            <div className="max-h-72 overflow-y-auto scrollbar-thin">
+   958→              {recentStartup.length === 0 ? (
+   959→                <div className="py-6 text-center text-xs text-muted-foreground">
+   960→                  No system events yet.
+   961→                </div>
+   962→              ) : (
+   963→                <ul className="flex flex-col gap-1.5">
+   964→                  {recentStartup.map((e) => (
+   965→                    <li
+   966→                      key={e.id}
+   967→                      className="rounded-md border bg-muted/20 px-2.5 py-1.5"
+   968→                    >
+   969→                      <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+   970→                        <span className="font-mono">
+   971→                          {formatDateTime(e.createdAt)}
+   972→                        </span>
+   973→                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] uppercase text-emerald-300">
+   974→                          {e.category}
+   975→                        </span>
+   976→                      </div>
+   977→                      <div className="mt-1 break-words font-mono text-xs">
+   978→                        {e.message}
+   979→                      </div>
+   980→                    </li>
+   981→                  ))}
+   982→                </ul>
+   983→              )}
+   984→            </div>
+   985→          </CardContent>
+   986→        </Card>
+   987→      </div>
+   988→    </div>
+   989→  )
+   990→}
+   991→

@@ -49,45 +49,51 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Light theme (optional) */
+/* Light theme — warm cream background, dark warm-gray text, deeper emerald
+   primary for WCAG AA contrast against white cards. */
 :root {
   --radius: 0.7rem;
-  --background: oklch(0.985 0.005 120);
-  --foreground: oklch(0.18 0.02 160);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.02 160);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.02 160);
-  --primary: oklch(0.55 0.16 150);
+  /* Subtle warm cream tint — never pure white so cards "lift" off the page */
+  --background: oklch(0.985 0.008 95);
+  /* Dark warm gray (not pure black) — softer on the eyes */
+  --foreground: oklch(0.22 0.015 160);
+  --card: oklch(1 0.002 95);
+  --card-foreground: oklch(0.22 0.015 160);
+  --popover: oklch(1 0.002 95);
+  --popover-foreground: oklch(0.22 0.015 160);
+  /* Slightly deeper emerald than dark mode for AA contrast on white */
+  --primary: oklch(0.52 0.15 158);
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.96 0.01 150);
-  --secondary-foreground: oklch(0.25 0.02 160);
-  --muted: oklch(0.96 0.01 150);
-  --muted-foreground: oklch(0.45 0.02 160);
-  --accent: oklch(0.93 0.04 150);
-  --accent-foreground: oklch(0.22 0.03 160);
-  --destructive: oklch(0.58 0.23 25);
-  --border: oklch(0.9 0.01 150);
-  --input: oklch(0.92 0.01 150);
-  --ring: oklch(0.55 0.16 150);
-  --chart-1: oklch(0.55 0.16 150);
-  --chart-2: oklch(0.65 0.18 60);
-  --chart-3: oklch(0.6 0.2 250);
-  --chart-4: oklch(0.7 0.2 330);
-  --chart-5: oklch(0.75 0.18 20);
-  --sidebar: oklch(0.97 0.006 150);
-  --sidebar-foreground: oklch(0.2 0.02 160);
-  --sidebar-primary: oklch(0.55 0.16 150);
+  --secondary: oklch(0.965 0.012 150);
+  --secondary-foreground: oklch(0.3 0.02 160);
+  --muted: oklch(0.965 0.012 150);
+  /* 4.5:1 contrast against white card backgrounds */
+  --muted-foreground: oklch(0.42 0.015 160);
+  --accent: oklch(0.93 0.04 152);
+  --accent-foreground: oklch(0.26 0.03 160);
+  --destructive: oklch(0.55 0.22 25);
+  /* Visible but subtle borders on white cards */
+  --border: oklch(0.895 0.012 150);
+  --input: oklch(0.915 0.012 150);
+  --ring: oklch(0.52 0.15 158);
+  --chart-1: oklch(0.52 0.15 158);
+  --chart-2: oklch(0.62 0.17 60);
+  --chart-3: oklch(0.58 0.19 250);
+  --chart-4: oklch(0.65 0.19 330);
+  --chart-5: oklch(0.7 0.18 20);
+  --sidebar: oklch(0.975 0.008 95);
+  --sidebar-foreground: oklch(0.24 0.02 160);
+  --sidebar-primary: oklch(0.52 0.15 158);
   --sidebar-primary-foreground: oklch(0.99 0 0);
   --sidebar-accent: oklch(0.93 0.03 150);
-  --sidebar-accent-foreground: oklch(0.22 0.03 160);
-  --sidebar-border: oklch(0.9 0.01 150);
-  --sidebar-ring: oklch(0.55 0.16 150);
-  --success: oklch(0.6 0.16 150);
+  --sidebar-accent-foreground: oklch(0.26 0.03 160);
+  --sidebar-border: oklch(0.895 0.012 150);
+  --sidebar-ring: oklch(0.52 0.15 158);
+  --success: oklch(0.55 0.15 158);
   --success-foreground: oklch(0.99 0 0);
-  --warning: oklch(0.75 0.16 70);
-  --warning-foreground: oklch(0.2 0.04 70);
-  --wa: oklch(0.55 0.16 150);
+  --warning: oklch(0.7 0.16 70);
+  --warning-foreground: oklch(0.24 0.05 70);
+  --wa: oklch(0.52 0.15 158);
   --wa-foreground: oklch(0.99 0 0);
 }
 
@@ -290,3 +296,116 @@
 .stagger-4 { animation-delay: 120ms; }
 .stagger-5 { animation-delay: 150ms; }
 .stagger-6 { animation-delay: 180ms; }
+
+/* ============================================================
+   Light-mode contrast overrides
+   The badge utility classes (text-emerald-300, bg-emerald-500/15, etc.)
+   were tuned for the dark theme. In light mode the -300 text variants
+   fail WCAG AA on white card backgrounds, and the /15 backgrounds are
+   too pale. These rules deepen the text hues and lift the background
+   opacity only when the html element does NOT carry `.dark` — the dark
+   theme is unaffected.
+   ============================================================ */
+:root:not(.dark) {
+  /* --- Text hues: -300 variants → ~-600/700 for AA contrast --- */
+  .text-emerald-300 { color: oklch(0.45 0.14 160); }
+  .text-emerald-200 { color: oklch(0.4 0.13 160); }
+  .text-emerald-400 { color: oklch(0.5 0.14 160); }
+
+  .text-amber-300 { color: oklch(0.5 0.13 65); }
+  .text-amber-200 { color: oklch(0.45 0.12 65); }
+  .text-amber-400 { color: oklch(0.55 0.14 65); }
+
+  .text-rose-300 { color: oklch(0.5 0.2 20); }
+  .text-rose-200 { color: oklch(0.45 0.19 20); }
+  .text-rose-400 { color: oklch(0.55 0.21 20); }
+
+  .text-sky-300 { color: oklch(0.5 0.15 240); }
+  .text-sky-200 { color: oklch(0.45 0.14 240); }
+  .text-sky-400 { color: oklch(0.55 0.16 240); }
+
+  .text-violet-300 { color: oklch(0.5 0.18 300); }
+  .text-violet-200 { color: oklch(0.45 0.17 300); }
+  .text-violet-400 { color: oklch(0.55 0.19 300); }
+
+  .text-teal-300 { color: oklch(0.45 0.1 180); }
+  .text-teal-200 { color: oklch(0.4 0.09 180); }
+  .text-teal-400 { color: oklch(0.5 0.11 180); }
+
+  .text-orange-300 { color: oklch(0.5 0.15 55); }
+  .text-orange-200 { color: oklch(0.45 0.14 55); }
+  .text-orange-400 { color: oklch(0.55 0.16 55); }
+
+  .text-cyan-300 { color: oklch(0.45 0.12 200); }
+  .text-cyan-200 { color: oklch(0.4 0.11 200); }
+  .text-cyan-400 { color: oklch(0.5 0.13 200); }
+
+  .text-lime-300 { color: oklch(0.5 0.14 130); }
+  .text-lime-200 { color: oklch(0.45 0.13 130); }
+  .text-lime-400 { color: oklch(0.55 0.15 130); }
+
+  .text-fuchsia-300 { color: oklch(0.5 0.18 330); }
+  .text-fuchsia-200 { color: oklch(0.45 0.17 330); }
+  .text-fuchsia-400 { color: oklch(0.55 0.19 330); }
+
+  .text-zinc-300 { color: oklch(0.45 0.01 280); }
+  .text-zinc-400 { color: oklch(0.5 0.01 280); }
+
+  /* --- Background tints for badges: lift /15 → /20 and warm the hue --- */
+  .bg-emerald-500\/15 { background-color: oklch(0.55 0.14 160 / 0.2); }
+  .bg-emerald-500\/10 { background-color: oklch(0.55 0.14 160 / 0.16); }
+  .bg-emerald-500\/5  { background-color: oklch(0.55 0.14 160 / 0.1); }
+  .bg-amber-500\/15   { background-color: oklch(0.6 0.13 65 / 0.22); }
+  .bg-amber-500\/10   { background-color: oklch(0.6 0.13 65 / 0.18); }
+  .bg-amber-500\/5    { background-color: oklch(0.6 0.13 65 / 0.1); }
+  .bg-rose-500\/15    { background-color: oklch(0.6 0.2 20 / 0.2); }
+  .bg-rose-500\/10    { background-color: oklch(0.6 0.2 20 / 0.16); }
+  .bg-rose-500\/5     { background-color: oklch(0.6 0.2 20 / 0.1); }
+  .bg-sky-500\/15     { background-color: oklch(0.6 0.15 240 / 0.2); }
+  .bg-sky-500\/10     { background-color: oklch(0.6 0.15 240 / 0.16); }
+  .bg-sky-500\/20     { background-color: oklch(0.6 0.15 240 / 0.24); }
+  .bg-violet-500\/15  { background-color: oklch(0.6 0.18 300 / 0.2); }
+  .bg-violet-500\/20  { background-color: oklch(0.6 0.18 300 / 0.24); }
+  .bg-teal-500\/15    { background-color: oklch(0.55 0.11 180 / 0.2); }
+  .bg-orange-500\/15  { background-color: oklch(0.6 0.15 55 / 0.2); }
+  .bg-cyan-500\/15    { background-color: oklch(0.55 0.12 200 / 0.2); }
+  .bg-lime-500\/15    { background-color: oklch(0.6 0.14 130 / 0.2); }
+  .bg-fuchsia-500\/15 { background-color: oklch(0.6 0.18 330 / 0.2); }
+  .bg-zinc-500\/15    { background-color: oklch(0.5 0.01 280 / 0.18); }
+
+  /* --- Borders: deeper so badges stay framed on white --- */
+  .border-emerald-500\/30 { border-color: oklch(0.55 0.14 160 / 0.4); }
+  .border-amber-500\/30   { border-color: oklch(0.6 0.13 65 / 0.45); }
+  .border-rose-500\/30    { border-color: oklch(0.6 0.2 20 / 0.4); }
+  .border-sky-500\/30     { border-color: oklch(0.6 0.15 240 / 0.4); }
+  .border-violet-500\/30  { border-color: oklch(0.6 0.18 300 / 0.4); }
+  .border-teal-500\/30    { border-color: oklch(0.55 0.11 180 / 0.4); }
+  .border-orange-500\/30  { border-color: oklch(0.6 0.15 55 / 0.45); }
+  .border-cyan-500\/30    { border-color: oklch(0.55 0.12 200 / 0.4); }
+  .border-amber-500\/40   { border-color: oklch(0.6 0.13 65 / 0.55); }
+  .border-rose-500\/40    { border-color: oklch(0.6 0.2 20 / 0.55); }
+  .border-emerald-500\/20 { border-color: oklch(0.55 0.14 160 / 0.3); }
+
+  /* --- Card opacity: bg-card/60 is too transparent on white ---
+     Bump common transparent-card utilities so cards stay opaque in light. */
+  .bg-card\/60 { background-color: oklch(1 0.002 95 / 0.92); }
+  .bg-card\/50 { background-color: oklch(1 0.002 95 / 0.88); }
+  .bg-card\/80 { background-color: oklch(1 0.002 95 / 0.96); }
+
+  /* Softer shadows on white so they don't look muddy */
+  .shadow-lg { box-shadow: 0 10px 25px -8px rgb(20 30 25 / 0.12), 0 4px 10px -6px rgb(20 30 25 / 0.08); }
+  .shadow-sm { box-shadow: 0 1px 2px 0 rgb(20 30 25 / 0.06); }
+  .shadow-md { box-shadow: 0 4px 8px -4px rgb(20 30 25 / 0.1), 0 2px 4px -2px rgb(20 30 25 / 0.06); }
+
+  /* Slightly heavier border colour so dividers read on white */
+  .border-border\/60 { border-color: oklch(0.86 0.012 150 / 0.7); }
+
+  /* The sidebar nav active indicator (emerald-400 dot) is too pale on cream */
+  .text-emerald-400\/80 { color: oklch(0.5 0.14 160 / 0.9); }
+
+  /* datetime-local input forces a dark scheme in dark mode; in light mode it
+     should match the page. */
+  [class*='[color-scheme:dark]'] {
+    color-scheme: light;
+  }
+}

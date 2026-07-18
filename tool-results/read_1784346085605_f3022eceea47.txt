@@ -1,0 +1,1084 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// AnalyticsView — deep-insights dashboard for QorvixNode WA Auto Reply.
+     5→//
+     6→// Pulls a comprehensive payload from /api/analytics (every 30s) and renders:
+     7→//   1. Overview KPIs (6 cards) — contacts, messages, AI/owner replies,
+     8→//      avg response time, conversion rate.
+     9→//   2. Response Time Trend (LineChart, 7d) + AI vs Owner (stacked BarChart, 7d).
+    10→//   3. Peak Hours — full-width bar chart, peak hour highlighted with callout.
+    11→//   4. Conversion Funnel — custom 5-stage horizontal funnel (divs).
+    12→//   5. Category Breakdown (horizontal BarChart) + Language Distribution (Donut).
+    13→//   6. Contact Growth — 14-day Area chart (newContacts + newMessages).
+    14→//   7. Top Contacts — top-5 by message count.
+    15→//
+    16→// Every section is wrapped in a staggered framer-motion fade-in.
+    17→// ============================================================
+    18→import * as React from 'react'
+    19→import { motion } from 'framer-motion'
+    20→import { toast } from 'sonner'
+    21→import {
+    22→  Activity,
+    23→  Award,
+    24→  BarChart3,
+    25→  Bot,
+    26→  Clock,
+    27→  Flame,
+    28→  Globe,
+    29→  MessageSquare,
+    30→  Target,
+    31→  TrendingDown,
+    32→  TrendingUp,
+    33→  Users,
+    34→  Zap,
+    35→} from 'lucide-react'
+    36→import {
+    37→  Area,
+    38→  AreaChart,
+    39→  Bar,
+    40→  BarChart,
+    41→  CartesianGrid,
+    42→  Cell,
+    43→  Legend,
+    44→  Line,
+    45→  LineChart,
+    46→  Pie,
+    47→  PieChart,
+    48→  XAxis,
+    49→  YAxis,
+    50→} from 'recharts'
+    51→
+    52→import { cn } from '@/lib/utils'
+    53→import { apiGet } from '@/lib/api-client'
+    54→import {
+    55→  colorFromString,
+    56→  formatDateTime,
+    57→  initials,
+    58→  leadBadge,
+    59→  timeAgo,
+    60→} from '@/lib/format'
+    61→import { Card } from '@/components/ui/card'
+    62→import { Skeleton } from '@/components/ui/skeleton'
+    63→import { Badge } from '@/components/ui/badge'
+    64→import {
+    65→  Table,
+    66→  TableBody,
+    67→  TableCell,
+    68→  TableHead,
+    69→  TableHeader,
+    70→  TableRow,
+    71→} from '@/components/ui/table'
+    72→import {
+    73→  ChartContainer,
+    74→  ChartTooltip,
+    75→  ChartTooltipContent,
+    76→  type ChartConfig,
+    77→} from '@/components/ui/chart'
+    78→
+    79→// ---------------------------------------------------------------------------
+    80→// API payload types (mirrors /api/analytics/route.ts)
+    81→// ---------------------------------------------------------------------------
+    82→interface OverviewPayload {
+    83→  totalContacts: number
+    84→  totalMessages: number
+    85→  aiReplies: number
+    86→  ownerReplies: number
+    87→  avgResponseMs: number
+    88→  conversionRate: number
+    89→  hotLeadRate: number
+    90→}
+    91→interface ResponseTrendPoint { date: string; avgMs: number }
+    92→interface AiVsOwnerPoint { day: string; ai: number; owner: number }
+    93→interface PeakHourPoint { hour: string; count: number }
+    94→interface FunnelStage { stage: string; count: number }
+    95→interface CategoryBreakdownRow { category: string; count: number; avgScore: number }
+    96→interface TopContactRow {
+    97→  id: string
+    98→  name: string
+    99→  phone: string
+   100→  leadScore: number
+   101→  messageCount: number
+   102→  lastMessageAt: string | null
+   103→}
+   104→interface GrowthTrendPoint { date: string; newContacts: number; newMessages: number }
+   105→interface LanguageRow { language: string; count: number }
+   106→
+   107→interface AnalyticsPayload {
+   108→  overview: OverviewPayload
+   109→  responseTimeTrend: ResponseTrendPoint[]
+   110→  aiVsOwner: AiVsOwnerPoint[]
+   111→  peakHours: PeakHourPoint[]
+   112→  leadFunnel: FunnelStage[]
+   113→  categoryBreakdown: CategoryBreakdownRow[]
+   114→  topContacts: TopContactRow[]
+   115→  growthTrend: GrowthTrendPoint[]
+   116→  languageDistribution: LanguageRow[]
+   117→}
+   118→
+   119→// ---------------------------------------------------------------------------
+   120→// Chart configs — each series maps to a label + WhatsApp-green color.
+   121→// ChartContainer injects `--color-<key>` CSS vars usable in strokes/fills.
+   122→// ---------------------------------------------------------------------------
+   123→const RESPONSE_TIME_CONFIG: ChartConfig = {
+   124→  avgMs: { label: 'Avg Response', color: '#10b981' }, // emerald-500
+   125→}
+   126→const AI_OWNER_CONFIG: ChartConfig = {
+   127→  ai: { label: 'AI Replies', color: '#34d399' }, // emerald-400
+   128→  owner: { label: 'Owner Replies', color: '#38bdf8' }, // sky-400 (owner series)
+   129→}
+   130→const PEAK_HOURS_CONFIG: ChartConfig = {
+   131→  count: { label: 'Messages', color: '#14b8a6' }, // teal-500
+   132→}
+   133→const CATEGORY_CONFIG: ChartConfig = {
+   134→  count: { label: 'Contacts', color: '#14b8a6' }, // teal-500
+   135→}
+   136→const GROWTH_CONFIG: ChartConfig = {
+   137→  newContacts: { label: 'New Contacts', color: '#10b981' }, // emerald-500
+   138→  newMessages: { label: 'New Messages', color: '#f59e0b' }, // amber-500
+   139→}
+   140→const LANGUAGE_CONFIG: ChartConfig = {
+   141→  count: { label: 'Contacts', color: '#14b8a6' },
+   142→}
+   143→
+   144→// Donut palette — emerald / teal / amber / orange / cyan / lime / zinc.
+   145→const LANGUAGE_COLORS = [
+   146→  '#10b981', '#14b8a6', '#f59e0b', '#f97316',
+   147→  '#06b6d4', '#84cc16', '#71717a', '#fb7185',
+   148→]
+   149→
+   150→// ---------------------------------------------------------------------------
+   151→// Helpers
+   152→// ---------------------------------------------------------------------------
+   153→function formatResponseTime(ms: number): string {
+   154→  if (!ms || ms <= 0) return '—'
+   155→  if (ms < 1000) return `${ms}ms`
+   156→  return `${(ms / 1000).toFixed(1)}s`
+   157→}
+   158→
+   159→function formatHourLabel(hh: string): string {
+   160→  const h = Number(hh)
+   161→  if (!Number.isFinite(h)) return hh
+   162→  const period = h >= 12 ? 'PM' : 'AM'
+   163→  const display = h % 12 === 0 ? 12 : h % 12
+   164→  return `${display} ${period}`
+   165→}
+   166→
+   167→function titleCase(s: string): string {
+   168→  return s
+   169→    .replace(/_/g, ' ')
+   170→    .replace(/\b\w/g, (c) => c.toUpperCase())
+   171→}
+   172→
+   173→// ---------------------------------------------------------------------------
+   174→// Shared shells
+   175→// ---------------------------------------------------------------------------
+   176→const CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 shadow-sm'
+   177→
+   178→function SectionHeader({
+   179→  icon,
+   180→  title,
+   181→  description,
+   182→}: {
+   183→  icon: React.ReactNode
+   184→  title: string
+   185→  description?: string
+   186→}) {
+   187→  return (
+   188→    <div className="flex items-center gap-3 border-b border-border/60 pb-3">
+   189→      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   190→        {icon}
+   191→      </span>
+   192→      <div className="min-w-0">
+   193→        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+   194→        {description && (
+   195→          <p className="truncate text-xs text-muted-foreground">{description}</p>
+   196→        )}
+   197→      </div>
+   198→    </div>
+   199→  )
+   200→}
+   201→
+   202→function ChartSkeleton() {
+   203→  return (
+   204→    <div className="flex h-[240px] w-full items-end justify-around gap-2 px-2">
+   205→      {Array.from({ length: 8 }).map((_, i) => (
+   206→        <Skeleton
+   207→          key={i}
+   208→          className="w-full rounded-md"
+   209→          style={{ height: `${30 + ((i * 17) % 70)}%` }}
+   210→        />
+   211→      ))}
+   212→    </div>
+   213→  )
+   214→}
+   215→
+   216→function EmptyState({ text }: { text: string }) {
+   217→  return (
+   218→    <div className="flex h-[240px] w-full items-center justify-center text-xs text-muted-foreground">
+   219→      {text}
+   220→    </div>
+   221→  )
+   222→}
+   223→
+   224→function ChartCardShell({
+   225→  icon,
+   226→  title,
+   227→  children,
+   228→}: {
+   229→  icon: React.ReactNode
+   230→  title: string
+   231→  children: React.ReactNode
+   232→}) {
+   233→  return (
+   234→    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+   235→      <div className="flex items-center gap-2 text-sm font-medium">
+   236→        <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   237→          {icon}
+   238→        </span>
+   239→        <span className="truncate">{title}</span>
+   240→      </div>
+   241→      <div className="mt-3 flex-1">{children}</div>
+   242→    </Card>
+   243→  )
+   244→}
+   245→
+   246→// ---------------------------------------------------------------------------
+   247→// Section 1 — Overview KPIs
+   248→// ---------------------------------------------------------------------------
+   249→interface KpiCardProps {
+   250→  icon: React.ReactNode
+   251→  label: string
+   252→  value: string
+   253→  sub?: React.ReactNode
+   254→  accent: string // tailwind gradient classes
+   255→  index: number
+   256→}
+   257→
+   258→function KpiCard({ icon, label, value, sub, accent, index }: KpiCardProps) {
+   259→  return (
+   260→    <motion.div
+   261→      initial={{ opacity: 0, y: 8 }}
+   262→      animate={{ opacity: 1, y: 0 }}
+   263→      transition={{ delay: index * 0.05, duration: 0.25 }}
+   264→    >
+   265→      <Card className={cn(CARD_CLS, 'relative overflow-hidden')}>
+   266→        <div
+   267→          className={cn(
+   268→            'pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-20 blur-2xl',
+   269→            accent,
+   270→          )}
+   271→        />
+   272→        <div className="flex items-center justify-between">
+   273→          <span
+   274→            className={cn(
+   275→              'grid h-9 w-9 place-items-center rounded-lg',
+   276→              accent,
+   277→            )}
+   278→          >
+   279→            {icon}
+   280→          </span>
+   281→        </div>
+   282→        <div className="mt-3 text-3xl font-bold tabular-nums leading-none">
+   283→          {value}
+   284→        </div>
+   285→        <div className="mt-1.5 text-xs font-medium text-muted-foreground">
+   286→          {label}
+   287→        </div>
+   288→        {sub && <div className="mt-2 text-[11px] text-muted-foreground">{sub}</div>}
+   289→      </Card>
+   290→    </motion.div>
+   291→  )
+   292→}
+   293→
+   294→function OverviewSection({ data }: { data: OverviewPayload }) {
+   295→  const total = data.aiReplies + data.ownerReplies
+   296→  const aiPct = total > 0 ? Math.round((data.aiReplies / total) * 100) : 0
+   297→  const ownerPct = total > 0 ? Math.round((data.ownerReplies / total) * 100) : 0
+   298→
+   299→  const kpis: KpiCardProps[] = [
+   300→    {
+   301→      icon: <Users className="h-4 w-4" />,
+   302→      label: 'Total Contacts',
+   303→      value: data.totalContacts.toLocaleString(),
+   304→      sub: <span className="inline-flex items-center gap-1 text-emerald-400"><TrendingUp className="h-3 w-3" />All-time</span>,
+   305→      accent: 'bg-emerald-500/15 text-emerald-300',
+   306→      index: 0,
+   307→    },
+   308→    {
+   309→      icon: <MessageSquare className="h-4 w-4" />,
+   310→      label: 'Total Messages',
+   311→      value: data.totalMessages.toLocaleString(),
+   312→      sub: <span className="inline-flex items-center gap-1 text-emerald-400"><TrendingUp className="h-3 w-3" />All-time</span>,
+   313→      accent: 'bg-teal-500/15 text-teal-300',
+   314→      index: 1,
+   315→    },
+   316→    {
+   317→      icon: <Bot className="h-4 w-4" />,
+   318→      label: 'AI Replies',
+   319→      value: data.aiReplies.toLocaleString(),
+   320→      sub: <span>{aiPct}% of replies</span>,
+   321→      accent: 'bg-emerald-500/15 text-emerald-300',
+   322→      index: 2,
+   323→    },
+   324→    {
+   325→      icon: <MessageSquare className="h-4 w-4" />,
+   326→      label: 'Owner Replies',
+   327→      value: data.ownerReplies.toLocaleString(),
+   328→      sub: <span>{ownerPct}% of replies</span>,
+   329→      accent: 'bg-sky-500/15 text-sky-300',
+   330→      index: 3,
+   331→    },
+   332→    {
+   333→      icon: <Clock className="h-4 w-4" />,
+   334→      label: 'Avg Response Time',
+   335→      value: formatResponseTime(data.avgResponseMs),
+   336→      sub: <span className="inline-flex items-center gap-1 text-emerald-400"><Zap className="h-3 w-3" />AI engine</span>,
+   337→      accent: 'bg-amber-500/15 text-amber-300',
+   338→      index: 4,
+   339→    },
+   340→    {
+   341→      icon: <Target className="h-4 w-4" />,
+   342→      label: 'Conversion Rate',
+   343→      value: `${data.conversionRate}%`,
+   344→      sub: (
+   345→        <span className="inline-flex items-center gap-1">
+   346→          <Flame className="h-3 w-3 text-emerald-400" />
+   347→          {data.hotLeadRate}% hot leads
+   348→        </span>
+   349→      ),
+   350→      accent: 'bg-emerald-500/15 text-emerald-300',
+   351→      index: 5,
+   352→    },
+   353→  ]
+   354→
+   355→  return (
+   356→    <motion.div
+   357→      initial={{ opacity: 0, y: 8 }}
+   358→      animate={{ opacity: 1, y: 0 }}
+   359→      transition={{ delay: 0, duration: 0.25 }}
+   360→    >
+   361→      <Card className={cn(CARD_CLS)}>
+   362→        <SectionHeader
+   363→          icon={<Activity className="h-4 w-4" />}
+   364→          title="Overview"
+   365→          description="Real-time totals across all conversations"
+   366→        />
+   367→        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+   368→          {kpis.map((k) => (
+   369→            <KpiCard key={k.label} {...k} />
+   370→          ))}
+   371→        </div>
+   372→      </Card>
+   373→    </motion.div>
+   374→  )
+   375→}
+   376→
+   377→function OverviewSkeleton() {
+   378→  return (
+   379→    <Card className={cn(CARD_CLS)}>
+   380→      <div className="flex items-center gap-3 border-b border-border/60 pb-3">
+   381→        <Skeleton className="h-9 w-9 rounded-lg" />
+   382→        <div className="flex flex-col gap-1">
+   383→          <Skeleton className="h-4 w-32" />
+   384→          <Skeleton className="h-3 w-48" />
+   385→        </div>
+   386→      </div>
+   387→      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+   388→        {Array.from({ length: 6 }).map((_, i) => (
+   389→          <Card key={i} className={cn(CARD_CLS)}>
+   390→            <Skeleton className="h-9 w-9 rounded-lg" />
+   391→            <Skeleton className="mt-3 h-7 w-20" />
+   392→            <Skeleton className="mt-2 h-3 w-24" />
+   393→          </Card>
+   394→        ))}
+   395→      </div>
+   396→    </Card>
+   397→  )
+   398→}
+   399→
+   400→// ---------------------------------------------------------------------------
+   401→// Section 2 — Response Time Trend (LineChart) + AI vs Owner (BarChart)
+   402→// ---------------------------------------------------------------------------
+   403→function ResponseTimeLineChart({ data }: { data: ResponseTrendPoint[] }) {
+   404→  const hasData = data.some((p) => p.avgMs > 0)
+   405→  if (!hasData) {
+   406→    return <EmptyState text="No AI response-time data yet — send a message via the Simulator to populate this chart." />
+   407→  }
+   408→  return (
+   409→    <ChartContainer config={RESPONSE_TIME_CONFIG} className="h-[240px] w-full">
+   410→      <LineChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+   411→        <defs>
+   412→          <linearGradient id="rtLine" x1="0" y1="0" x2="0" y2="1">
+   413→            <stop offset="0%" stopColor="var(--color-avgMs)" stopOpacity={0.9} />
+   414→            <stop offset="100%" stopColor="var(--color-avgMs)" stopOpacity={0.4} />
+   415→          </linearGradient>
+   416→        </defs>
+   417→        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   418→        <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} />
+   419→        <YAxis
+   420→          allowDecimals={false}
+   421→          tickLine={false}
+   422→          axisLine={false}
+   423→          width={48}
+   424→          tickFormatter={(v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`)}
+   425→        />
+   426→        <ChartTooltip
+   427→          content={
+   428→            <ChartTooltipContent
+   429→              indicator="dot"
+   430→              formatter={(value) => (
+   431→                <span className="font-mono tabular-nums text-foreground">
+   432→                  {formatResponseTime(Number(value))}
+   433→                </span>
+   434→              )}
+   435→            />
+   436→          }
+   437→        />
+   438→        <Line
+   439→          dataKey="avgMs"
+   440→          type="monotone"
+   441→          stroke="url(#rtLine)"
+   442→          strokeWidth={2.5}
+   443→          dot={{ r: 3, fill: 'var(--color-avgMs)', strokeWidth: 0 }}
+   444→          activeDot={{ r: 5 }}
+   445→        />
+   446→      </LineChart>
+   447→    </ChartContainer>
+   448→  )
+   449→}
+   450→
+   451→function AiVsOwnerBarChart({ data }: { data: AiVsOwnerPoint[] }) {
+   452→  const hasData = data.some((p) => p.ai > 0 || p.owner > 0)
+   453→  if (!hasData) {
+   454→    return <EmptyState text="No reply data for the last 7 days yet." />
+   455→  }
+   456→  return (
+   457→    <ChartContainer config={AI_OWNER_CONFIG} className="h-[240px] w-full">
+   458→      <BarChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+   459→        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   460→        <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} />
+   461→        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+   462→        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+   463→        <Legend />
+   464→        <Bar dataKey="ai" stackId="a" fill="var(--color-ai)" radius={[0, 0, 0, 0]} />
+   465→        <Bar dataKey="owner" stackId="a" fill="var(--color-owner)" radius={[4, 4, 0, 0]} />
+   466→      </BarChart>
+   467→    </ChartContainer>
+   468→  )
+   469→}
+   470→
+   471→function ChartsRow1Section({
+   472→  responseTrend,
+   473→  aiVsOwner,
+   474→}: {
+   475→  responseTrend: ResponseTrendPoint[]
+   476→  aiVsOwner: AiVsOwnerPoint[]
+   477→}) {
+   478→  return (
+   479→    <motion.div
+   480→      initial={{ opacity: 0, y: 8 }}
+   481→      animate={{ opacity: 1, y: 0 }}
+   482→      transition={{ delay: 0.05, duration: 0.25 }}
+   483→    >
+   484→      <Card className={cn(CARD_CLS)}>
+   485→        <SectionHeader
+   486→          icon={<TrendingUp className="h-4 w-4" />}
+   487→          title="Response Performance"
+   488→          description="AI response speed and AI vs owner reply mix over the last 7 days"
+   489→        />
+   490→        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+   491→          <ChartCardShell
+   492→            icon={<Clock className="h-4 w-4" />}
+   493→            title="Response Time Trend (7 days)"
+   494→          >
+   495→            <ResponseTimeLineChart data={responseTrend} />
+   496→          </ChartCardShell>
+   497→          <ChartCardShell
+   498→            icon={<Bot className="h-4 w-4" />}
+   499→            title="AI vs Owner Replies (7 days)"
+   500→          >
+   501→            <AiVsOwnerBarChart data={aiVsOwner} />
+   502→          </ChartCardShell>
+   503→        </div>
+   504→      </Card>
+   505→    </motion.div>
+   506→  )
+   507→}
+   508→
+   509→// ---------------------------------------------------------------------------
+   510→// Section 3 — Peak Hours (full-width BarChart with peak hour callout)
+   511→// ---------------------------------------------------------------------------
+   512→function PeakHoursSection({ data }: { data: PeakHourPoint[] }) {
+   513→  const peakIdx = data.reduce(
+   514→    (best, cur, idx) => (cur.count > data[best]!.count ? idx : best),
+   515→    0,
+   516→  )
+   517→  const peak = data[peakIdx]
+   518→  const peakLabel = peak ? formatHourLabel(peak.hour) : '—'
+   519→  const peakCount = peak?.count ?? 0
+   520→  const hasData = data.some((p) => p.count > 0)
+   521→
+   522→  return (
+   523→    <motion.div
+   524→      initial={{ opacity: 0, y: 8 }}
+   525→      animate={{ opacity: 1, y: 0 }}
+   526→      transition={{ delay: 0.1, duration: 0.25 }}
+   527→    >
+   528→      <Card className={cn(CARD_CLS)}>
+   529→        <SectionHeader
+   530→          icon={<Activity className="h-4 w-4" />}
+   531→          title="Peak Hours"
+   532→          description="Message volume by hour of day — when your audience is most active"
+   533→        />
+   534→        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+   535→          <div className="flex flex-wrap items-center gap-2">
+   536→            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-300">
+   537→              <Zap className="h-3 w-3" />
+   538→              Peak: {peakLabel} ({peakCount} msgs)
+   539→            </span>
+   540→            <span className="text-[11px] text-muted-foreground">
+   541→              24-hour distribution · local time
+   542→            </span>
+   543→          </div>
+   544→        </div>
+   545→        <div className="mt-3">
+   546→          {!hasData ? (
+   547→            <EmptyState text="No message-timestamp data yet — peak hours will appear here." />
+   548→          ) : (
+   549→            <ChartContainer config={PEAK_HOURS_CONFIG} className="h-[240px] w-full">
+   550→              <BarChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+   551→                <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   552→                <XAxis
+   553→                  dataKey="hour"
+   554→                  tickLine={false}
+   555→                  axisLine={false}
+   556→                  tickMargin={8}
+   557→                  interval={0}
+   558→                  tick={{ fontSize: 10 }}
+   559→                  tickFormatter={(v: string) => {
+   560→                    const h = Number(v)
+   561→                    if (h % 3 !== 0) return ''
+   562→                    return v
+   563→                  }}
+   564→                />
+   565→                <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+   566→                <ChartTooltip
+   567→                  content={
+   568→                    <ChartTooltipContent
+   569→                      indicator="dot"
+   570→                      labelFormatter={(_, payload) => {
+   571→                        const hour = payload?.[0]?.payload?.hour
+   572→                        return hour ? formatHourLabel(String(hour)) : ''
+   573→                      }}
+   574→                    />
+   575→                  }
+   576→                />
+   577→                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+   578→                  {data.map((entry, idx) => (
+   579→                    <Cell
+   580→                      key={entry.hour}
+   581→                      fill={idx === peakIdx ? '#f59e0b' : 'var(--color-count)'}
+   582→                    />
+   583→                  ))}
+   584→                </Bar>
+   585→              </BarChart>
+   586→            </ChartContainer>
+   587→          )}
+   588→        </div>
+   589→      </Card>
+   590→    </motion.div>
+   591→  )
+   592→}
+   593→
+   594→// ---------------------------------------------------------------------------
+   595→// Section 4 — Conversion Funnel (custom divs)
+   596→// ---------------------------------------------------------------------------
+   597→function FunnelSection({ data }: { data: FunnelStage[] }) {
+   598→  const total = data[0]?.count ?? 0
+   599→  const totalOrOne = total > 0 ? total : 1
+   600→
+   601→  // Gradient stops emerald → teal for the 5 stages.
+   602→  const stageColors = [
+   603→    'from-emerald-500 to-emerald-600',
+   604→    'from-emerald-500 to-teal-600',
+   605→    'from-teal-500 to-teal-600',
+   606→    'from-teal-500 to-cyan-600',
+   607→    'from-cyan-500 to-cyan-700',
+   608→  ]
+   609→
+   610→  return (
+   611→    <motion.div
+   612→      initial={{ opacity: 0, y: 8 }}
+   613→      animate={{ opacity: 1, y: 0 }}
+   614→      transition={{ delay: 0.15, duration: 0.25 }}
+   615→    >
+   616→      <Card className={cn(CARD_CLS)}>
+   617→        <SectionHeader
+   618→          icon={<Target className="h-4 w-4" />}
+   619→          title="Conversion Funnel"
+   620→          description="From first contact all the way to closed customer"
+   621→        />
+   622→        <div className="mt-4 flex flex-col gap-3">
+   623→          {data.map((stage, idx) => {
+   624→            const pct = Math.round((stage.count / totalOrOne) * 100)
+   625→            const width = total > 0 ? Math.max(pct, 6) : 0
+   626→            return (
+   627→              <div key={stage.stage} className="flex flex-col gap-1.5">
+   628→                <div className="flex items-center justify-between text-xs">
+   629→                  <span className="font-medium text-foreground">{stage.stage}</span>
+   630→                  <span className="tabular-nums text-muted-foreground">
+   631→                    <span className="font-semibold text-foreground">{stage.count.toLocaleString()}</span>
+   632→                    <span className="mx-1.5 text-muted-foreground/60">·</span>
+   633→                    <span>{total > 0 ? `${pct}%` : '—'}</span>
+   634→                  </span>
+   635→                </div>
+   636→                <div className="h-7 w-full overflow-hidden rounded-lg bg-muted/40">
+   637→                  <div
+   638→                    className={cn(
+   639→                      'flex h-full items-center rounded-lg bg-gradient-to-r shadow-sm transition-all duration-500',
+   640→                      stageColors[idx] ?? stageColors[0],
+   641→                    )}
+   642→                    style={{ width: `${width}%` }}
+   643→                  />
+   644→                </div>
+   645→              </div>
+   646→            )
+   647→          })}
+   648→        </div>
+   649→        {total === 0 && (
+   650→          <p className="mt-3 text-xs text-muted-foreground">
+   651→            No contacts yet — the funnel will populate as conversations arrive.
+   652→          </p>
+   653→        )}
+   654→      </Card>
+   655→    </motion.div>
+   656→  )
+   657→}
+   658→
+   659→// ---------------------------------------------------------------------------
+   660→// Section 5 — Category Breakdown + Language Distribution
+   661→// ---------------------------------------------------------------------------
+   662→function CategoryBarChart({ data }: { data: CategoryBreakdownRow[] }) {
+   663→  const rows = data.slice(0, 8)
+   664→  const labelled = rows.map((r) => ({
+   665→    ...r,
+   666→    label: titleCase(r.category),
+   667→  }))
+   668→  if (labelled.length === 0) {
+   669→    return <EmptyState text="No service categories detected yet." />
+   670→  }
+   671→  return (
+   672→    <ChartContainer config={CATEGORY_CONFIG} className="h-[240px] w-full">
+   673→      <BarChart
+   674→        data={labelled}
+   675→        layout="vertical"
+   676→        margin={{ left: 8, right: 16, top: 8, bottom: 0 }}
+   677→      >
+   678→        <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-muted" />
+   679→        <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} />
+   680→        <YAxis
+   681→          type="category"
+   682→          dataKey="label"
+   683→          tickLine={false}
+   684→          axisLine={false}
+   685→          width={100}
+   686→          tick={{ fontSize: 11 }}
+   687→        />
+   688→        <ChartTooltip
+   689→          content={
+   690→            <ChartTooltipContent
+   691→              indicator="dot"
+   692→              formatter={(value, _name, item) => {
+   693→                const avg = (item?.payload as CategoryBreakdownRow | undefined)?.avgScore
+   694→                return (
+   695→                  <span className="font-mono tabular-nums text-foreground">
+   696→                    {value} contacts{avg != null ? ` · avg ${avg}` : ''}
+   697→                  </span>
+   698→                )
+   699→              }}
+   700→            />
+   701→          }
+   702→        />
+   703→        <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} />
+   704→      </BarChart>
+   705→    </ChartContainer>
+   706→  )
+   707→}
+   708→
+   709→function LanguageDonut({ data }: { data: LanguageRow[] }) {
+   710→  const labelled = data.map((r) => ({
+   711→    ...r,
+   712→    label: titleCase(r.language),
+   713→  }))
+   714→  if (labelled.length === 0) {
+   715→    return <EmptyState text="No language data available." />
+   716→  }
+   717→  return (
+   718→    <ChartContainer config={LANGUAGE_CONFIG} className="h-[240px] w-full">
+   719→      <PieChart>
+   720→        <ChartTooltip
+   721→          content={<ChartTooltipContent nameKey="label" indicator="dot" />}
+   722→        />
+   723→        <Pie
+   724→          data={labelled}
+   725→          dataKey="count"
+   726→          nameKey="label"
+   727→          innerRadius={48}
+   728→          outerRadius={80}
+   729→          paddingAngle={2}
+   730→          stroke="none"
+   731→        >
+   732→          {labelled.map((entry, i) => (
+   733→            <Cell
+   734→              key={entry.language}
+   735→              fill={LANGUAGE_COLORS[i % LANGUAGE_COLORS.length]}
+   736→            />
+   737→          ))}
+   738→        </Pie>
+   739→        <Legend />
+   740→      </PieChart>
+   741→    </ChartContainer>
+   742→  )
+   743→}
+   744→
+   745→function ChartsRow2Section({
+   746→  categories,
+   747→  languages,
+   748→}: {
+   749→  categories: CategoryBreakdownRow[]
+   750→  languages: LanguageRow[]
+   751→}) {
+   752→  return (
+   753→    <motion.div
+   754→      initial={{ opacity: 0, y: 8 }}
+   755→      animate={{ opacity: 1, y: 0 }}
+   756→      transition={{ delay: 0.2, duration: 0.25 }}
+   757→    >
+   758→      <Card className={cn(CARD_CLS)}>
+   759→        <SectionHeader
+   760→          icon={<Globe className="h-4 w-4" />}
+   761→          title="Audience Breakdown"
+   762→          description="Which services prospects ask about and the languages they use"
+   763→        />
+   764→        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+   765→          <ChartCardShell
+   766→            icon={<BarChart3 className="h-4 w-4" />}
+   767→            title="Contacts by Service Category"
+   768→          >
+   769→            <CategoryBarChart data={categories} />
+   770→          </ChartCardShell>
+   771→          <ChartCardShell
+   772→            icon={<Globe className="h-4 w-4" />}
+   773→            title="Language Distribution"
+   774→          >
+   775→            <LanguageDonut data={languages} />
+   776→          </ChartCardShell>
+   777→        </div>
+   778→      </Card>
+   779→    </motion.div>
+   780→  )
+   781→}
+   782→
+   783→// ---------------------------------------------------------------------------
+   784→// Section 6 — Contact Growth (14-day Area chart, 2 series)
+   785→// ---------------------------------------------------------------------------
+   786→function GrowthAreaChart({ data }: { data: GrowthTrendPoint[] }) {
+   787→  const hasData = data.some((p) => p.newContacts > 0 || p.newMessages > 0)
+   788→  if (!hasData) {
+   789→    return <EmptyState text="No growth activity in the last 14 days yet." />
+   790→  }
+   791→  return (
+   792→    <ChartContainer config={GROWTH_CONFIG} className="h-[240px] w-full">
+   793→      <AreaChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+   794→        <defs>
+   795→          <linearGradient id="growContacts" x1="0" y1="0" x2="0" y2="1">
+   796→            <stop offset="5%" stopColor="var(--color-newContacts)" stopOpacity={0.45} />
+   797→            <stop offset="95%" stopColor="var(--color-newContacts)" stopOpacity={0.05} />
+   798→          </linearGradient>
+   799→          <linearGradient id="growMessages" x1="0" y1="0" x2="0" y2="1">
+   800→            <stop offset="5%" stopColor="var(--color-newMessages)" stopOpacity={0.45} />
+   801→            <stop offset="95%" stopColor="var(--color-newMessages)" stopOpacity={0.05} />
+   802→          </linearGradient>
+   803→        </defs>
+   804→        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   805→        <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} />
+   806→        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+   807→        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+   808→        <Legend />
+   809→        <Area
+   810→          dataKey="newContacts"
+   811→          type="monotone"
+   812→          stroke="var(--color-newContacts)"
+   813→          fill="url(#growContacts)"
+   814→          strokeWidth={2}
+   815→          dot={false}
+   816→        />
+   817→        <Area
+   818→          dataKey="newMessages"
+   819→          type="monotone"
+   820→          stroke="var(--color-newMessages)"
+   821→          fill="url(#growMessages)"
+   822→          strokeWidth={2}
+   823→          dot={false}
+   824→        />
+   825→      </AreaChart>
+   826→    </ChartContainer>
+   827→  )
+   828→}
+   829→
+   830→function GrowthSection({ data }: { data: GrowthTrendPoint[] }) {
+   831→  const totalContacts14 = data.reduce((s, p) => s + p.newContacts, 0)
+   832→  const totalMessages14 = data.reduce((s, p) => s + p.newMessages, 0)
+   833→  const lastDay = data[data.length - 1]
+   834→  const prevDay = data[data.length - 2]
+   835→  const todayContacts = lastDay?.newContacts ?? 0
+   836→  const yesterdayContacts = prevDay?.newContacts ?? 0
+   837→  const delta = todayContacts - yesterdayContacts
+   838→  const trendUp = delta > 0
+   839→  const trendDown = delta < 0
+   840→
+   841→  return (
+   842→    <motion.div
+   843→      initial={{ opacity: 0, y: 8 }}
+   844→      animate={{ opacity: 1, y: 0 }}
+   845→      transition={{ delay: 0.25, duration: 0.25 }}
+   846→    >
+   847→      <Card className={cn(CARD_CLS)}>
+   848→        <SectionHeader
+   849→          icon={<TrendingUp className="h-4 w-4" />}
+   850→          title="Contact Growth"
+   851→          description="New contacts and new messages over the last 14 days"
+   852→        />
+   853→        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+   854→          <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+   855→            <div className="text-[11px] text-muted-foreground">New contacts (14d)</div>
+   856→            <div className="mt-1 text-2xl font-bold tabular-nums">
+   857→              {totalContacts14.toLocaleString()}
+   858→            </div>
+   859→          </div>
+   860→          <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+   861→            <div className="text-[11px] text-muted-foreground">New messages (14d)</div>
+   862→            <div className="mt-1 text-2xl font-bold tabular-nums">
+   863→              {totalMessages14.toLocaleString()}
+   864→            </div>
+   865→          </div>
+   866→          <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+   867→            <div className="text-[11px] text-muted-foreground">Today vs yesterday</div>
+   868→            <div className="mt-1 flex items-center gap-2 text-2xl font-bold tabular-nums">
+   869→              {todayContacts}
+   870→              {trendUp && (
+   871→                <span className="inline-flex items-center gap-0.5 text-xs font-medium text-emerald-400">
+   872→                  <TrendingUp className="h-3 w-3" />+{delta}
+   873→                </span>
+   874→              )}
+   875→              {trendDown && (
+   876→                <span className="inline-flex items-center gap-0.5 text-xs font-medium text-rose-400">
+   877→                  <TrendingDown className="h-3 w-3" />{delta}
+   878→                </span>
+   879→              )}
+   880→              {!trendUp && !trendDown && (
+   881→                <span className="text-xs font-medium text-muted-foreground">—</span>
+   882→              )}
+   883→            </div>
+   884→          </div>
+   885→        </div>
+   886→        <div className="mt-4">
+   887→          <GrowthAreaChart data={data} />
+   888→        </div>
+   889→      </Card>
+   890→    </motion.div>
+   891→  )
+   892→}
+   893→
+   894→// ---------------------------------------------------------------------------
+   895→// Section 7 — Top Contacts (table)
+   896→// ---------------------------------------------------------------------------
+   897→function TopContactsSection({ data }: { data: TopContactRow[] }) {
+   898→  return (
+   899→    <motion.div
+   900→      initial={{ opacity: 0, y: 8 }}
+   901→      animate={{ opacity: 1, y: 0 }}
+   902→      transition={{ delay: 0.3, duration: 0.25 }}
+   903→    >
+   904→      <Card className={cn(CARD_CLS)}>
+   905→        <SectionHeader
+   906→          icon={<Award className="h-4 w-4" />}
+   907→          title="Top Contacts"
+   908→          description="The 5 most engaged contacts by message count"
+   909→        />
+   910→        <div className="mt-4">
+   911→          {data.length === 0 ? (
+   912→            <EmptyState text="No contact activity yet." />
+   913→          ) : (
+   914→            <div className="overflow-x-auto">
+   915→              <Table>
+   916→                <TableHeader>
+   917→                  <TableRow>
+   918→                    <TableHead className="w-12 text-center">#</TableHead>
+   919→                    <TableHead>Contact</TableHead>
+   920→                    <TableHead className="text-right">Lead</TableHead>
+   921→                    <TableHead className="text-right">Messages</TableHead>
+   922→                    <TableHead className="text-right">Last Message</TableHead>
+   923→                  </TableRow>
+   924→                </TableHeader>
+   925→                <TableBody>
+   926→                  {data.map((c, idx) => (
+   927→                    <TableRow key={c.id}>
+   928→                      <TableCell className="text-center text-xs font-semibold text-muted-foreground">
+   929→                        {idx + 1}
+   930→                      </TableCell>
+   931→                      <TableCell>
+   932→                        <div className="flex items-center gap-3">
+   933→                          <div
+   934→                            className={cn(
+   935→                              'grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold',
+   936→                              colorFromString(c.name || c.phone),
+   937→                            )}
+   938→                          >
+   939→                            {initials(c.name || c.phone)}
+   940→                          </div>
+   941→                          <div className="min-w-0">
+   942→                            <div className="truncate text-sm font-medium">{c.name}</div>
+   943→                            <div className="truncate text-[11px] text-muted-foreground">
+   944→                              {c.phone}
+   945→                            </div>
+   946→                          </div>
+   947→                        </div>
+   948→                      </TableCell>
+   949→                      <TableCell className="text-right">
+   950→                        <Badge
+   951→                          variant="outline"
+   952→                          className={cn('tabular-nums', leadBadge(c.leadScore))}
+   953→                        >
+   954→                          {c.leadScore}
+   955→                        </Badge>
+   956→                      </TableCell>
+   957→                      <TableCell className="text-right font-mono tabular-nums">
+   958→                        {c.messageCount.toLocaleString()}
+   959→                      </TableCell>
+   960→                      <TableCell className="text-right text-xs text-muted-foreground">
+   961→                        {c.lastMessageAt ? (
+   962→                          <span title={formatDateTime(c.lastMessageAt)}>
+   963→                            {timeAgo(c.lastMessageAt)}
+   964→                          </span>
+   965→                        ) : (
+   966→                          '—'
+   967→                        )}
+   968→                      </TableCell>
+   969→                    </TableRow>
+   970→                  ))}
+   971→                </TableBody>
+   972→              </Table>
+   973→            </div>
+   974→          )}
+   975→        </div>
+   976→      </Card>
+   977→    </motion.div>
+   978→  )
+   979→}
+   980→
+   981→// ---------------------------------------------------------------------------
+   982→// Main view component
+   983→// ---------------------------------------------------------------------------
+   984→export function AnalyticsView() {
+   985→  const [data, setData] = React.useState<AnalyticsPayload | null>(null)
+   986→  const [loading, setLoading] = React.useState(true)
+   987→  const [error, setError] = React.useState<string | null>(null)
+   988→
+   989→  React.useEffect(() => {
+   990→    let active = true
+   991→    const load = async () => {
+   992→      try {
+   993→        const payload = await apiGet<AnalyticsPayload>('/api/analytics')
+   994→        if (active) {
+   995→          setData(payload)
+   996→          setError(null)
+   997→          setLoading(false)
+   998→        }
+   999→      } catch (err) {
+  1000→        if (active) {
+  1001→          setError(err instanceof Error ? err.message : 'Failed to load analytics')
+  1002→          setLoading(false)
+  1003→        }
+  1004→      }
+  1005→    }
+  1006→    void load()
+  1007→    const id = setInterval(() => void load(), 30_000)
+  1008→    return () => {
+  1009→      active = false
+  1010→      clearInterval(id)
+  1011→    }
+  1012→  }, [])
+  1013→
+  1014→  // Show toast on hard error once.
+  1015→  React.useEffect(() => {
+  1016→    if (error) {
+  1017→      toast.error('Analytics load failed', { description: error })
+  1018→    }
+  1019→  }, [error])
+  1020→
+  1021→  if (loading) {
+  1022→    return (
+  1023→      <div className="flex flex-col gap-5">
+  1024→        <OverviewSkeleton />
+  1025→        <Card className={CARD_CLS}>
+  1026→          <Skeleton className="h-9 w-48 rounded-lg" />
+  1027→          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+  1028→            <Card className={CARD_CLS}>
+  1029→              <Skeleton className="h-8 w-40 rounded-lg" />
+  1030→              <div className="mt-3"><ChartSkeleton /></div>
+  1031→            </Card>
+  1032→            <Card className={CARD_CLS}>
+  1033→              <Skeleton className="h-8 w-40 rounded-lg" />
+  1034→              <div className="mt-3"><ChartSkeleton /></div>
+  1035→            </Card>
+  1036→          </div>
+  1037→        </Card>
+  1038→        <Card className={CARD_CLS}>
+  1039→          <Skeleton className="h-9 w-48 rounded-lg" />
+  1040→          <div className="mt-4"><ChartSkeleton /></div>
+  1041→        </Card>
+  1042→        <Card className={CARD_CLS}>
+  1043→          <Skeleton className="h-9 w-48 rounded-lg" />
+  1044→          <div className="mt-4 flex flex-col gap-3">
+  1045→            {Array.from({ length: 5 }).map((_, i) => (
+  1046→              <Skeleton key={i} className="h-7 w-full rounded-lg" />
+  1047→            ))}
+  1048→          </div>
+  1049→        </Card>
+  1050→      </div>
+  1051→    )
+  1052→  }
+  1053→
+  1054→  if (!data) {
+  1055→    return (
+  1056→      <Card className={cn(CARD_CLS, 'flex flex-col items-center gap-3 py-12')}>
+  1057→        <BarChart3 className="h-8 w-8 text-muted-foreground" />
+  1058→        <div className="text-sm font-medium">Analytics unavailable</div>
+  1059→        <p className="text-xs text-muted-foreground">
+  1060→          {error ?? 'Please try again in a moment.'}
+  1061→        </p>
+  1062→      </Card>
+  1063→    )
+  1064→  }
+  1065→
+  1066→  return (
+  1067→    <div className="flex flex-col gap-5">
+  1068→      <OverviewSection data={data.overview} />
+  1069→      <ChartsRow1Section
+  1070→        responseTrend={data.responseTimeTrend}
+  1071→        aiVsOwner={data.aiVsOwner}
+  1072→      />
+  1073→      <PeakHoursSection data={data.peakHours} />
+  1074→      <FunnelSection data={data.leadFunnel} />
+  1075→      <ChartsRow2Section
+  1076→        categories={data.categoryBreakdown}
+  1077→        languages={data.languageDistribution}
+  1078→      />
+  1079→      <GrowthSection data={data.growthTrend} />
+  1080→      <TopContactsSection data={data.topContacts} />
+  1081→    </div>
+  1082→  )
+  1083→}
+  1084→

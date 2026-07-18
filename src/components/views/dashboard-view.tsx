@@ -1,8 +1,10 @@
 'use client'
 
 import * as React from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   BarChart3,
   Bell,
@@ -12,8 +14,11 @@ import {
   MessageCircle,
   MessagesSquare,
   PieChart as PieChartIcon,
+  Radio,
   Tag,
   TrendingUp,
+  UserCog,
+  UserPlus,
   Users,
 } from 'lucide-react'
 import {
@@ -758,6 +763,359 @@ function RecentConversationsCard({
 }
 
 // ----------------------------------------------------------------
+// Live Activity Feed — unified real-time timeline
+// ----------------------------------------------------------------
+type ActivityType =
+  | 'ai_reply'
+  | 'owner_message'
+  | 'new_contact'
+  | 'new_lead'
+  | 'owner_request'
+  | 'whatsapp_event'
+  | 'ai_error'
+  | 'scheduled_sent'
+
+type Severity = 'info' | 'success' | 'warning' | 'error'
+
+type IconKey =
+  | 'bot'
+  | 'user'
+  | 'user-plus'
+  | 'flame'
+  | 'bell'
+  | 'message-circle'
+  | 'alert'
+  | 'clock'
+
+interface ActivityItem {
+  id: string
+  type: ActivityType
+  title: string
+  description: string
+  timestamp: string
+  contactId: string | null
+  contactName: string | null
+  contactPhone: string | null
+  severity: Severity
+  icon: IconKey
+  meta: {
+    replyMs?: number
+    leadScore?: number
+    category?: string
+  }
+}
+
+interface ActivityResponse {
+  items: ActivityItem[]
+}
+
+// Icon → lucide element + accent color for the trailing icon chip.
+const ACTIVITY_ICON: Record<
+  IconKey,
+  { node: React.ReactNode; chip: string }
+> = {
+  bot: {
+    node: <Bot className="h-3.5 w-3.5" />,
+    chip: 'bg-emerald-500/15 text-emerald-300',
+  },
+  user: {
+    node: <UserCog className="h-3.5 w-3.5" />,
+    chip: 'bg-sky-500/15 text-sky-300',
+  },
+  'user-plus': {
+    node: <UserPlus className="h-3.5 w-3.5" />,
+    chip: 'bg-teal-500/15 text-teal-300',
+  },
+  flame: {
+    node: <Flame className="h-3.5 w-3.5" />,
+    chip: 'bg-amber-500/15 text-amber-300',
+  },
+  bell: {
+    node: <Bell className="h-3.5 w-3.5" />,
+    chip: 'bg-amber-500/15 text-amber-300',
+  },
+  'message-circle': {
+    node: <MessageCircle className="h-3.5 w-3.5" />,
+    chip: 'bg-emerald-500/15 text-emerald-300',
+  },
+  alert: {
+    node: <AlertTriangle className="h-3.5 w-3.5" />,
+    chip: 'bg-rose-500/15 text-rose-300',
+  },
+  clock: {
+    node: <Clock className="h-3.5 w-3.5" />,
+    chip: 'bg-violet-500/15 text-violet-300',
+  },
+}
+
+// Severity → dot color (timeline marker on the left rail).
+const SEVERITY_DOT_COLOR: Record<Severity, string> = {
+  info: 'bg-sky-500',
+  success: 'bg-emerald-500',
+  warning: 'bg-amber-500',
+  error: 'bg-rose-500',
+}
+
+// Severity → meta badge text color (for "1.2s reply" / "score 82" chips).
+const SEVERITY_BADGE: Record<Severity, string> = {
+  info: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
+  success: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+  warning: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+  error: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+}
+
+// Format replyMs (e.g. 1240) as "1.2s" or "240ms" if sub-second.
+function formatReplyMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+// Title-case a snake_case category for display.
+function prettyCategory(cat?: string): string | null {
+  if (!cat) return null
+  return cat
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function LiveActivityFeed({
+  onNavigate,
+}: {
+  onNavigate?: (v: ViewKey) => void
+}) {
+  const [items, setItems] = React.useState<ActivityItem[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState(false)
+  const firstLoadRef = React.useRef(true)
+
+  // Poll /api/dashboard/activity every 8s.
+  React.useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        const data = await apiGet<ActivityResponse | ActivityItem[]>(
+          '/api/dashboard/activity',
+        )
+        if (!active) return
+        const next = Array.isArray(data)
+          ? (data as ActivityItem[])
+          : (data as ActivityResponse).items ?? []
+        setItems(next)
+        setLoading(false)
+        setError(false)
+      } catch {
+        if (active) {
+          // Keep showing previous items on transient errors.
+          setLoading(false)
+          setError(true)
+        }
+      } finally {
+        if (active) firstLoadRef.current = false
+      }
+    }
+    void load()
+    const id = setInterval(() => void load(), 8_000)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [])
+
+  return (
+    <Card
+      className={cn(
+        CARD_CLS,
+        'flex flex-col gap-0 overflow-hidden p-0',
+      )}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-gradient-to-r from-emerald-500/5 to-transparent px-5 py-4">
+        <div className="flex items-center gap-2">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+            <Activity className="h-4 w-4" />
+          </span>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold leading-tight">
+              Live Activity
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              AI replies · leads · owner actions · system events
+            </span>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          </span>
+          LIVE
+        </span>
+      </div>
+
+      {/* Body — scrollable timeline */}
+      <div className="flex-1">
+        {loading && items.length === 0 ? (
+          <div className="space-y-3 p-5">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex gap-3">
+                <Skeleton className="h-2.5 w-2.5 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3.5 w-2/3" />
+                  <Skeleton className="h-3 w-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyState
+            icon={<Radio className="h-5 w-5" />}
+            text="No activity yet. Send a test message via the Simulator to see AI replies appear here."
+          />
+        ) : (
+          <ol
+            className="relative max-h-[500px] overflow-y-auto p-3 scrollbar-thin"
+            aria-live="polite"
+          >
+            <AnimatePresence initial={firstLoadRef.current}>
+              {items.map((item, i) => {
+                const isLatest = i === 0
+                const icon = ACTIVITY_ICON[item.icon] ?? ACTIVITY_ICON.bot
+                const dotColor =
+                  SEVERITY_DOT_COLOR[item.severity] ?? 'bg-emerald-500'
+                const badgeCls =
+                  SEVERITY_BADGE[item.severity] ?? SEVERITY_BADGE.info
+                const clickable = !!item.contactId
+                return (
+                  <motion.li
+                    key={item.id}
+                    layout
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{
+                      opacity: 1,
+                      height: 'auto',
+                      transition: {
+                        opacity: { duration: 0.25 },
+                        height: { duration: 0.25 },
+                        delay: firstLoadRef.current
+                          ? Math.min(i * 0.04, 0.3)
+                          : 0,
+                      },
+                    }}
+                    exit={{ opacity: 0, height: 0, transition: { duration: 0.2 } }}
+                    className="relative"
+                  >
+                    <button
+                      type="button"
+                      disabled={!clickable}
+                      onClick={() => clickable && onNavigate?.('chats')}
+                      className={cn(
+                        'group flex w-full items-start gap-3 rounded-lg border border-transparent px-2 py-2.5 text-left transition-colors',
+                        clickable
+                          ? 'cursor-pointer hover:border-primary/30 hover:bg-background/60'
+                          : 'cursor-default',
+                      )}
+                    >
+                      {/* Timeline rail */}
+                      <span className="relative flex w-4 shrink-0 flex-col items-center self-stretch">
+                        <span
+                          className={cn(
+                            'mt-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-background',
+                            dotColor,
+                            isLatest && 'pulse-ring',
+                          )}
+                          aria-hidden
+                        />
+                        {i < items.length - 1 && (
+                          <span className="mt-1 w-px flex-1 bg-border" />
+                        )}
+                      </span>
+
+                      {/* Content */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="truncate text-sm font-medium leading-snug">
+                            {item.title}
+                          </p>
+                          <span
+                            className={cn(
+                              'grid h-6 w-6 shrink-0 place-items-center rounded-md',
+                              icon.chip,
+                            )}
+                            aria-hidden
+                          >
+                            {icon.node}
+                          </span>
+                        </div>
+                        {item.description && (
+                          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                            {item.description}
+                          </p>
+                        )}
+                        {/* Meta row */}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                          {item.contactName && (
+                            <span className="inline-flex items-center gap-1 truncate font-medium text-foreground/70">
+                              <Users className="h-3 w-3 opacity-70" />
+                              <span className="truncate">{item.contactName}</span>
+                            </span>
+                          )}
+                          <span className="opacity-60">·</span>
+                          <span>{timeAgo(item.timestamp)}</span>
+                          {item.meta.replyMs !== undefined && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+                                badgeCls,
+                              )}
+                            >
+                              <Clock className="h-2.5 w-2.5" />
+                              {formatReplyMs(item.meta.replyMs)} reply
+                            </span>
+                          )}
+                          {item.meta.leadScore !== undefined && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+                                badgeCls,
+                              )}
+                            >
+                              <Flame className="h-2.5 w-2.5" />
+                              score {item.meta.leadScore}
+                            </span>
+                          )}
+                          {item.meta.category && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+                                badgeCls,
+                              )}
+                            >
+                              <Tag className="h-2.5 w-2.5" />
+                              {prettyCategory(item.meta.category)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  </motion.li>
+                )
+              })}
+            </AnimatePresence>
+          </ol>
+        )}
+      </div>
+
+      {/* Footer */}
+      {error && items.length > 0 && (
+        <div className="border-t border-border/60 px-5 py-2 text-[10px] text-muted-foreground">
+          Showing last cached activity (refresh failed)
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ----------------------------------------------------------------
 // Main dashboard view
 // ----------------------------------------------------------------
 export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
@@ -869,10 +1227,21 @@ export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
       {/* Last 7 days — 4 charts (area + bar + pie + horizontal bar) */}
       <TrendsSection />
 
-      {/* Recent activity + recent conversations */}
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <RecentActivityCard notifications={notifications} />
-        <RecentConversationsCard conversations={conversations} onNavigate={onNavigate} />
+      {/* Live activity feed (full-width timeline) + side rail with
+          recent notifications & recent conversations.
+
+          On large screens the timeline spans 7 of 12 columns while the
+          notification + conversations stack fills the remaining 5, giving
+          the feed the room it needs for a tall scrollable list while the
+          side cards stay readable. */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          <LiveActivityFeed onNavigate={onNavigate} />
+        </div>
+        <div className="flex flex-col gap-4 lg:col-span-5">
+          <RecentActivityCard notifications={notifications} />
+          <RecentConversationsCard conversations={conversations} onNavigate={onNavigate} />
+        </div>
       </section>
     </div>
   )

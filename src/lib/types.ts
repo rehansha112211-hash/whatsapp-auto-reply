@@ -70,6 +70,7 @@ export type ViewKey =
   | 'scheduled'
   | 'analytics'
   | 'contact-profile'
+  | 'search'
 
 export interface AuthUser {
   id: string
@@ -258,4 +259,37 @@ export interface QuickReplyRow {
   usageCount: number
   createdAt: string
   updatedAt: string
+}
+
+// ---------------- Global message search ----------------
+export interface SearchMessageItem {
+  messageId: string
+  contactId: string
+  contactName: string
+  contactPhone: string
+  text: string
+  direction: MessageDirection
+  source: MessageSource
+  timestamp: string
+  leadScore: number
+  // ~120 char window around the first match (lowercased query position preserved).
+  matchedSnippet: string
+  // Index in matchedSnippet where the query starts (for client-side highlight).
+  matchStart: number
+  // Length of the matched query portion within matchedSnippet.
+  matchLength: number
+}
+
+export interface ContactFacetItem {
+  contactId: string
+  contactName: string
+  count: number
+}
+
+export interface SearchResponse {
+  items: SearchMessageItem[]
+  total: number
+  limit: number
+  q: string
+  contactsFacet: ContactFacetItem[]
 }

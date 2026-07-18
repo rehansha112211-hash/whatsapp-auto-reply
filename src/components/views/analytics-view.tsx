@@ -61,6 +61,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { AnimatedCounter } from '@/components/ui/animated-counter'
 import {
   Table,
   TableBody,
@@ -173,7 +174,7 @@ function titleCase(s: string): string {
 // ---------------------------------------------------------------------------
 // Shared shells
 // ---------------------------------------------------------------------------
-const CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 shadow-sm'
+const CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 shadow-sm card-hover'
 
 function SectionHeader({
   icon,
@@ -249,7 +250,7 @@ function ChartCardShell({
 interface KpiCardProps {
   icon: React.ReactNode
   label: string
-  value: string
+  value: React.ReactNode
   sub?: React.ReactNode
   accent: string // tailwind gradient classes
   index: number
@@ -300,7 +301,7 @@ function OverviewSection({ data }: { data: OverviewPayload }) {
     {
       icon: <Users className="h-4 w-4" />,
       label: 'Total Contacts',
-      value: data.totalContacts.toLocaleString(),
+      value: <AnimatedCounter value={data.totalContacts} />,
       sub: <span className="inline-flex items-center gap-1 text-emerald-400"><TrendingUp className="h-3 w-3" />All-time</span>,
       accent: 'bg-emerald-500/15 text-emerald-300',
       index: 0,
@@ -308,7 +309,7 @@ function OverviewSection({ data }: { data: OverviewPayload }) {
     {
       icon: <MessageSquare className="h-4 w-4" />,
       label: 'Total Messages',
-      value: data.totalMessages.toLocaleString(),
+      value: <AnimatedCounter value={data.totalMessages} />,
       sub: <span className="inline-flex items-center gap-1 text-emerald-400"><TrendingUp className="h-3 w-3" />All-time</span>,
       accent: 'bg-teal-500/15 text-teal-300',
       index: 1,
@@ -316,7 +317,7 @@ function OverviewSection({ data }: { data: OverviewPayload }) {
     {
       icon: <Bot className="h-4 w-4" />,
       label: 'AI Replies',
-      value: data.aiReplies.toLocaleString(),
+      value: <AnimatedCounter value={data.aiReplies} />,
       sub: <span>{aiPct}% of replies</span>,
       accent: 'bg-emerald-500/15 text-emerald-300',
       index: 2,
@@ -324,7 +325,7 @@ function OverviewSection({ data }: { data: OverviewPayload }) {
     {
       icon: <MessageSquare className="h-4 w-4" />,
       label: 'Owner Replies',
-      value: data.ownerReplies.toLocaleString(),
+      value: <AnimatedCounter value={data.ownerReplies} />,
       sub: <span>{ownerPct}% of replies</span>,
       accent: 'bg-sky-500/15 text-sky-300',
       index: 3,
@@ -340,7 +341,7 @@ function OverviewSection({ data }: { data: OverviewPayload }) {
     {
       icon: <Target className="h-4 w-4" />,
       label: 'Conversion Rate',
-      value: `${data.conversionRate}%`,
+      value: <><AnimatedCounter value={data.conversionRate} />%</>,
       sub: (
         <span className="inline-flex items-center gap-1">
           <Flame className="h-3 w-3 text-emerald-400" />

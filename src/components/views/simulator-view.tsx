@@ -40,6 +40,7 @@ import { apiPost, apiGet } from '@/lib/api-client'
 import { leadBadge } from '@/lib/format'
 import { useRealtime } from '@/hooks/use-realtime'
 import type { ViewKey, ChatMessage } from '@/lib/types'
+import { motion } from 'framer-motion'
 
 interface SimulatorResult {
   ok: boolean
@@ -212,7 +213,12 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="space-y-6"
+    >
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
@@ -220,7 +226,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
             <FlaskConical className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+            <h1 className="text-xl font-bold tracking-tight sm:text-2xl text-gradient-premium">
               Message Simulator
             </h1>
             <p className="text-sm text-muted-foreground">
@@ -235,9 +241,14 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05, duration: 0.25 }}
+        className="grid grid-cols-1 gap-6 lg:grid-cols-2"
+      >
         {/* ============ LEFT: FORM ============ */}
-        <Card className="rounded-xl border bg-card/60 backdrop-blur">
+        <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Send className="h-4 w-4 text-emerald-400" />
@@ -364,7 +375,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
         </Card>
 
         {/* ============ RIGHT: RESULT ============ */}
-        <Card className="rounded-xl border bg-card/60 backdrop-blur">
+        <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <MessageCircle className="h-4 w-4 text-emerald-400" />
@@ -548,10 +559,15 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
             )}
           </CardContent>
         </Card>
-      </div>
+      </motion.div>
 
       {/* ============ BOTTOM: CONVERSATION HISTORY ============ */}
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1, duration: 0.25 }}
+      >
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             <span className="flex items-center gap-2">
@@ -669,7 +685,8 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
           )}
         </CardContent>
       </Card>
-    </div>
+      </motion.div>
+    </motion.div>
   )
 }
 

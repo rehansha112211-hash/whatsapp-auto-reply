@@ -136,7 +136,7 @@ export function OwnerSettingsView() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-xl border border-amber-500/40 bg-amber-500/5 backdrop-blur">
+      <Card className="rounded-xl border border-amber-500/40 bg-amber-500/5 backdrop-blur card-hover">
         <CardContent className="flex items-start gap-3 py-4">
           <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-500" />
           <div className="space-y-1 text-sm">
@@ -151,7 +151,7 @@ export function OwnerSettingsView() {
         </CardContent>
       </Card>
 
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <UserCog className="size-5 text-primary" />

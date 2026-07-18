@@ -1,0 +1,986 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { toast } from 'sonner'
+     5→import {
+     6→  MessageCircle,
+     7→  QrCode,
+     8→  RefreshCw,
+     9→  LogOut,
+    10→  Check,
+    11→  Smartphone,
+    12→  Wifi,
+    13→  WifiOff,
+    14→  Clock,
+    15→  ShieldCheck,
+    16→  Loader2,
+    17→  ChevronDown,
+    18→  ChevronRight,
+    19→  Activity,
+    20→  ScrollText,
+    21→  Power,
+    22→  AlertTriangle,
+    23→} from 'lucide-react'
+    24→import { Button } from '@/components/ui/button'
+    25→import {
+    26→  Card,
+    27→  CardContent,
+    28→  CardDescription,
+    29→  CardFooter,
+    30→  CardHeader,
+    31→  CardTitle,
+    32→} from '@/components/ui/card'
+    33→import {
+    34→  Collapsible,
+    35→  CollapsibleContent,
+    36→  CollapsibleTrigger,
+    37→} from '@/components/ui/collapsible'
+    38→import { Separator } from '@/components/ui/separator'
+    39→import { ScrollArea } from '@/components/ui/scroll-area'
+    40→import { Badge } from '@/components/ui/badge'
+    41→import { cn } from '@/lib/utils'
+    42→import { apiGet, apiPost, ApiError } from '@/lib/api-client'
+    43→import { formatDateTime, formatUptime, timeAgo } from '@/lib/format'
+    44→import type { WhatsAppState, LogRow } from '@/lib/types'
+    45→
+    46→interface WaSession {
+    47→  state: WhatsAppState
+    48→  connectedNumber: string
+    49→  connectedName: string
+    50→  connectedAt: string | null
+    51→  deviceInfo: string
+    52→  qrCode: string
+    53→  lastSeen: string | null
+    54→}
+    55→
+    56→const QR_COUNTDOWN_SEC = 60
+    57→
+    58→// ============================================================
+    59→// QrVisual — pure SVG QR mockup, deterministic from payload
+    60→// 25x25 grid with 3 finder patterns + 1 alignment pattern
+    61→// ============================================================
+    62→const QR_GRID = 25
+    63→const FINDER_PATTERN: boolean[][] = [
+    64→  [true, true, true, true, true, true, true],
+    65→  [true, false, false, false, false, false, true],
+    66→  [true, false, true, true, true, false, true],
+    67→  [true, false, true, true, true, false, true],
+    68→  [true, false, true, true, true, false, true],
+    69→  [true, false, false, false, false, false, true],
+    70→  [true, true, true, true, true, true, true],
+    71→]
+    72→const ALIGN_PATTERN: boolean[][] = [
+    73→  [true, true, true, true, true],
+    74→  [true, false, false, false, true],
+    75→  [true, false, true, false, true],
+    76→  [true, false, false, false, true],
+    77→  [true, true, true, true, true],
+    78→]
+    79→
+    80→function buildQrGrid(payload: string): boolean[] {
+    81→  const cells = new Array<boolean>(QR_GRID * QR_GRID).fill(false)
+    82→
+    83→  // Deterministic seed from payload (xor-fold of char codes)
+    84→  let seed = 0x811c9dc5
+    85→  for (let i = 0; i < payload.length; i++) {
+    86→    seed ^= payload.charCodeAt(i)
+    87→    seed = Math.imul(seed, 0x01000193) >>> 0
+    88→  }
+    89→  // Mulberry32-style LCG for stable bits
+    90→  const next = () => {
+    91→    seed = (seed + 0x6d2b79f5) >>> 0
+    92→    let t = seed
+    93→    t = Math.imul(t ^ (t >>> 15), t | 1)
+    94→    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    95→    return ((t ^ (t >>> 14)) >>> 0)
+    96→  }
+    97→  for (let i = 0; i < cells.length; i++) {
+    98→    cells[i] = (next() & 1) === 1
+    99→  }
+   100→
+   101→  // Stamp finder patterns at (0,0), (0,18), (18,0)
+   102→  const stamp = (row: number, col: number, mat: boolean[][], size: number) => {
+   103→    for (let r = 0; r < size; r++) {
+   104→      for (let c = 0; c < size; c++) {
+   105→        cells[(row + r) * QR_GRID + (col + c)] = mat[r][c]
+   106→      }
+   107→    }
+   108→  }
+   109→  stamp(0, 0, FINDER_PATTERN, 7)
+   110→  stamp(0, QR_GRID - 7, FINDER_PATTERN, 7)
+   111→  stamp(QR_GRID - 7, 0, FINDER_PATTERN, 7)
+   112→  // Stamp alignment pattern at bottom-right (16, 16)
+   113→  stamp(16, 16, ALIGN_PATTERN, 5)
+   114→
+   115→  // Clear white separators around each finder
+   116→  const clearRow = (row: number, from: number, to: number) => {
+   117→    for (let c = from; c <= to; c++) cells[row * QR_GRID + c] = false
+   118→  }
+   119→  const clearCol = (col: number, from: number, to: number) => {
+   120→    for (let r = from; r <= to; r++) cells[r * QR_GRID + col] = false
+   121→  }
+   122→  // top-left
+   123→  clearRow(7, 0, 7)
+   124→  clearCol(7, 0, 7)
+   125→  // top-right
+   126→  clearRow(7, QR_GRID - 8, QR_GRID - 1)
+   127→  clearCol(QR_GRID - 8, 0, 7)
+   128→  // bottom-left
+   129→  clearRow(QR_GRID - 8, 0, 7)
+   130→  clearCol(7, QR_GRID - 8, QR_GRID - 1)
+   131→
+   132→  // Timing patterns (alternating modules on row 6 and col 6)
+   133→  for (let i = 8; i < QR_GRID - 8; i++) {
+   134→    cells[6 * QR_GRID + i] = i % 2 === 0
+   135→    cells[i * QR_GRID + 6] = i % 2 === 0
+   136→  }
+   137→
+   138→  return cells
+   139→}
+   140→
+   141→function QrVisual({ payload, size = 220 }: { payload: string; size?: number }) {
+   142→  const cells = React.useMemo(() => buildQrGrid(payload), [payload])
+   143→  const cellSize = size / QR_GRID
+   144→  const moduleColor = '#0b0f14'
+   145→  const bgColor = '#ffffff'
+   146→
+   147→  return (
+   148→    <svg
+   149→      viewBox={`0 0 ${size} ${size}`}
+   150→      width={size}
+   151→      height={size}
+   152→      role="img"
+   153→      aria-label="WhatsApp pairing QR code (simulated)"
+   154→      shapeRendering="crispEdges"
+   155→      className="block h-full w-full max-w-full"
+   156→    >
+   157→      <rect x={0} y={0} width={size} height={size} fill={bgColor} />
+   158→      {cells.map((on, idx) => {
+   159→        if (!on) return null
+   160→        const row = Math.floor(idx / QR_GRID)
+   161→        const col = idx % QR_GRID
+   162→        return (
+   163→          <rect
+   164→            key={idx}
+   165→            x={col * cellSize}
+   166→            y={row * cellSize}
+   167→            width={cellSize}
+   168→            height={cellSize}
+   169→            fill={moduleColor}
+   170→          />
+   171→        )
+   172→      })}
+   173→    </svg>
+   174→  )
+   175→}
+   176→
+   177→// ============================================================
+   178→// State label helper
+   179→// ============================================================
+   180→const STATE_META: Record<
+   181→  WhatsAppState,
+   182→  { label: string; tone: 'ok' | 'warning' | 'idle' | 'error' }
+   183→> = {
+   184→  connected: { label: 'Connected', tone: 'ok' },
+   185→  qr_ready: { label: 'Awaiting QR scan', tone: 'warning' },
+   186→  connecting: { label: 'Connecting', tone: 'warning' },
+   187→  disconnected: { label: 'Disconnected', tone: 'idle' },
+   188→  logged_out: { label: 'Logged out', tone: 'error' },
+   189→}
+   190→
+   191→// ============================================================
+   192→// Main view
+   193→// ============================================================
+   194→export function WhatsAppView() {
+   195→  const [session, setSession] = React.useState<WaSession | null>(null)
+   196→  const [loading, setLoading] = React.useState(true)
+   197→  const [busy, setBusy] = React.useState(false)
+   198→  const [logs, setLogs] = React.useState<LogRow[]>([])
+   199→  const [now, setNow] = React.useState(() => new Date())
+   200→
+   201→  // Polling the session state every 4s
+   202→  const refresh = React.useCallback(async () => {
+   203→    try {
+   204→      const data = await apiGet<WaSession>('/api/whatsapp')
+   205→      setSession(data)
+   206→    } catch {
+   207→      /* silent — keep last known state */
+   208→    } finally {
+   209→      setLoading(false)
+   210→    }
+   211→  }, [])
+   212→
+   213→  React.useEffect(() => {
+   214→    refresh()
+   215→    const t = setInterval(refresh, 4000)
+   216→    return () => clearInterval(t)
+   217→  }, [refresh])
+   218→
+   219→  // Refresh logs every 8s (graceful if route not yet available)
+   220→  const refreshLogs = React.useCallback(async () => {
+   221→    try {
+   222→      const res = await fetch('/api/logs?category=whatsapp&limit=5', {
+   223→        cache: 'no-store',
+   224→      })
+   225→      if (!res.ok) return
+   226→      const data = (await res.json()) as unknown
+   227→      if (Array.isArray(data)) {
+   228→        setLogs(data as LogRow[])
+   229→      } else if (
+   230→        data &&
+   231→        typeof data === 'object' &&
+   232→        Array.isArray((data as { items?: unknown }).items)
+   233→      ) {
+   234→        setLogs((data as { items: LogRow[] }).items)
+   235→      }
+   236→    } catch {
+   237→      /* ignore — another agent owns this route */
+   238→    }
+   239→  }, [])
+   240→
+   241→  React.useEffect(() => {
+   242→    refreshLogs()
+   243→    const t = setInterval(refreshLogs, 8000)
+   244→    return () => clearInterval(t)
+   245→  }, [refreshLogs])
+   246→
+   247→  // Tick for live uptime / countdown
+   248→  React.useEffect(() => {
+   249→    const t = setInterval(() => setNow(new Date()), 1000)
+   250→    return () => clearInterval(t)
+   251→  }, [])
+   252→
+   253→  const handleGenerateQr = async () => {
+   254→    setBusy(true)
+   255→    try {
+   256→      await apiPost<{ ok: true; qr: string }>('/api/whatsapp/qr')
+   257→      toast.success('QR code generated', {
+   258→        description: 'Open WhatsApp → Settings → Linked Devices → Scan QR',
+   259→      })
+   260→      await refresh()
+   261→    } catch (err) {
+   262→      toast.error(err instanceof ApiError ? err.message : 'Failed to generate QR')
+   263→    } finally {
+   264→      setBusy(false)
+   265→    }
+   266→  }
+   267→
+   268→  const handleConnect = async () => {
+   269→    setBusy(true)
+   270→    try {
+   271→      const data = await apiPost<{ ok: true; number: string; name: string }>(
+   272→        '/api/whatsapp/connect',
+   273→      )
+   274→      toast.success('WhatsApp connected', {
+   275→        description: `${data.name} · ${data.number}`,
+   276→      })
+   277→      await refresh()
+   278→      await refreshLogs()
+   279→    } catch (err) {
+   280→      toast.error(err instanceof ApiError ? err.message : 'Login failed')
+   281→    } finally {
+   282→      setBusy(false)
+   283→    }
+   284→  }
+   285→
+   286→  const handleReconnect = async () => {
+   287→    setBusy(true)
+   288→    try {
+   289→      await apiPost('/api/whatsapp/disconnect')
+   290→      await apiPost<{ ok: true; qr: string }>('/api/whatsapp/qr')
+   291→      toast.success('Reconnecting…', {
+   292→        description: 'A fresh QR code has been generated.',
+   293→      })
+   294→      await refresh()
+   295→      await refreshLogs()
+   296→    } catch (err) {
+   297→      toast.error(err instanceof ApiError ? err.message : 'Reconnect failed')
+   298→    } finally {
+   299→      setBusy(false)
+   300→    }
+   301→  }
+   302→
+   303→  const handleLogout = async () => {
+   304→    setBusy(true)
+   305→    try {
+   306→      await apiPost('/api/whatsapp/logout')
+   307→      toast.success('Logged out', {
+   308→        description: 'WhatsApp session ended and unlinked from this device.',
+   309→      })
+   310→      await refresh()
+   311→      await refreshLogs()
+   312→    } catch (err) {
+   313→      toast.error(err instanceof ApiError ? err.message : 'Logout failed')
+   314→    } finally {
+   315→      setBusy(false)
+   316→    }
+   317→  }
+   318→
+   319→  const state = session?.state ?? 'disconnected'
+   320→
+   321→  return (
+   322→    <div className="mx-auto w-full max-w-5xl">
+   323→      {/* Page heading */}
+   324→      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   325→        <div>
+   326→          <h1 className="text-2xl font-bold tracking-tight">WhatsApp Connection</h1>
+   327→          <p className="mt-1 text-sm text-muted-foreground">
+   328→            Connect your WhatsApp account via QR pairing. Multi-device,
+   329→            end-to-end encrypted, auto-reconnecting.
+   330→          </p>
+   331→        </div>
+   332→        <div className="flex items-center gap-2 rounded-lg border bg-card/60 px-3 py-2 text-xs backdrop-blur">
+   333→          <StatePill state={state} />
+   334→          {session?.connectedNumber && state === 'connected' && (
+   335→            <>
+   336→              <Separator orientation="vertical" className="h-4" />
+   337→              <span className="font-mono text-muted-foreground">
+   338→                {session.connectedNumber}
+   339→              </span>
+   340→            </>
+   341→          )}
+   342→        </div>
+   343→      </div>
+   344→
+   345→      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+   346→        {/* Main column */}
+   347→        <div className="min-w-0">
+   348→          {loading && !session ? (
+   349→            <ConnectingCard label="Loading session…" />
+   350→          ) : state === 'connected' ? (
+   351→            <ConnectedCard
+   352→              session={session!}
+   353→              now={now}
+   354→              busy={busy}
+   355→              onReconnect={handleReconnect}
+   356→              onLogout={handleLogout}
+   357→            />
+   358→          ) : state === 'qr_ready' ? (
+   359→            <QrReadyCard
+   360→              qr={session?.qrCode ?? ''}
+   361→              busy={busy}
+   362→              now={now}
+   363→              onRefresh={handleGenerateQr}
+   364→              onSimulateScan={handleConnect}
+   365→            />
+   366→          ) : state === 'connecting' ? (
+   367→            <ConnectingCard label="Establishing connection…" />
+   368→          ) : (
+   369→            <DisconnectedCard
+   370→              isLoggedOut={state === 'logged_out'}
+   371→              busy={busy}
+   372→              onGenerate={handleGenerateQr}
+   373→            />
+   374→          )}
+   375→        </div>
+   376→
+   377→        {/* Side panel */}
+   378→        <aside className="flex flex-col gap-4">
+   379→          <SessionHealthCard session={session} now={now} />
+   380→          <LogPreviewCard logs={logs} />
+   381→        </aside>
+   382→      </div>
+   383→    </div>
+   384→  )
+   385→}
+   386→
+   387→// ============================================================
+   388→// State pill
+   389→// ============================================================
+   390→function StatePill({ state }: { state: WhatsAppState }) {
+   391→  const meta = STATE_META[state] ?? STATE_META.disconnected
+   392→  const toneCls = {
+   393→    ok: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   394→    warning: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   395→    idle: 'bg-muted text-muted-foreground border-border',
+   396→    error: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   397→  }[meta.tone]
+   398→  const dotCls = {
+   399→    ok: 'bg-emerald-500',
+   400→    warning: 'bg-amber-500',
+   401→    idle: 'bg-zinc-500',
+   402→    error: 'bg-rose-500',
+   403→  }[meta.tone]
+   404→  return (
+   405→    <span
+   406→      className={cn(
+   407→        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+   408→        toneCls,
+   409→      )}
+   410→    >
+   411→      <span className="relative inline-flex h-2 w-2">
+   412→        {state === 'connected' && (
+   413→          <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 bg-emerald-500" />
+   414→        )}
+   415→        <span className={cn('relative inline-flex h-2 w-2 rounded-full', dotCls)} />
+   416→      </span>
+   417→      {meta.label}
+   418→    </span>
+   419→  )
+   420→}
+   421→
+   422→// ============================================================
+   423→// Disconnected / Logged-out card
+   424→// ============================================================
+   425→function DisconnectedCard({
+   426→  isLoggedOut,
+   427→  busy,
+   428→  onGenerate,
+   429→}: {
+   430→  isLoggedOut: boolean
+   431→  busy: boolean
+   432→  onGenerate: () => void
+   433→}) {
+   434→  const [howOpen, setHowOpen] = React.useState(false)
+   435→  return (
+   436→    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur">
+   437→      <CardContent className="flex flex-col items-center px-6 py-10 text-center sm:py-14">
+   438→        <div className="relative mb-6 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30">
+   439→          <MessageCircle className="h-10 w-10" />
+   440→          <span className="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full border-2 border-card bg-background">
+   441→            <QrCode className="h-3.5 w-3.5 text-emerald-500" />
+   442→          </span>
+   443→        </div>
+   444→
+   445→        <h2 className="text-xl font-semibold tracking-tight">Connect WhatsApp</h2>
+   446→        <p className="mt-2 max-w-md text-sm text-muted-foreground">
+   447→          Scan a QR code with your WhatsApp app to link this device. Uses
+   448→          WhatsApp&apos;s official multi-device protocol — your phone stays
+   449→          optional after the first sync.
+   450→        </p>
+   451→
+   452→        {isLoggedOut && (
+   453→          <div className="mt-4 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-300">
+   454→            <AlertTriangle className="h-3.5 w-3.5" />
+   455→            Previous session was logged out. Generate a new QR to reconnect.
+   456→          </div>
+   457→        )}
+   458→
+   459→        <Button
+   460→          onClick={onGenerate}
+   461→          disabled={busy}
+   462→          className="mt-6 h-11 gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 px-6 text-white hover:from-emerald-600 hover:to-teal-700"
+   463→        >
+   464→          {busy ? (
+   465→            <>
+   466→              <Loader2 className="h-4 w-4 animate-spin" />
+   467→              Generating…
+   468→            </>
+   469→          ) : (
+   470→            <>
+   471→              <QrCode className="h-4 w-4" />
+   472→              Generate QR Code
+   473→            </>
+   474→          )}
+   475→        </Button>
+   476→
+   477→        <div className="mt-3 text-[11px] text-muted-foreground/70">
+   478→          Secure pairing · No password required
+   479→        </div>
+   480→
+   481→        <Separator className="my-6" />
+   482→
+   483→        <Collapsible open={howOpen} onOpenChange={setHowOpen} className="w-full">
+   484→          <CollapsibleTrigger asChild>
+   485→            <button className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium hover:bg-muted/60">
+   486→              <span className="flex items-center gap-2">
+   487→                <ShieldCheck className="h-4 w-4 text-emerald-400" />
+   488→                How it works
+   489→              </span>
+   490→              {howOpen ? (
+   491→                <ChevronDown className="h-4 w-4" />
+   492→              ) : (
+   493→                <ChevronRight className="h-4 w-4" />
+   494→              )}
+   495→            </button>
+   496→          </CollapsibleTrigger>
+   497→          <CollapsibleContent className="overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
+   498→            <ol className="mt-2 space-y-3 px-3 py-2">
+   499→              {[
+   500→                {
+   501→                  step: '1',
+   502→                  title: 'Open WhatsApp',
+   503→                  body: 'Launch WhatsApp on your phone (Android or iPhone).',
+   504→                },
+   505→                {
+   506→                  step: '2',
+   507→                  title: 'Go to Settings',
+   508→                  body: 'Tap the menu (⋮) on Android or Settings tab on iPhone.',
+   509→                },
+   510→                {
+   511→                  step: '3',
+   512→                  title: 'Linked Devices',
+   513→                  body: 'Tap “Linked devices” → “Link a device”. Verify your identity.',
+   514→                },
+   515→                {
+   516→                  step: '4',
+   517→                  title: 'Scan the QR',
+   518→                  body: 'Point your phone at the QR shown here. Pairing completes in seconds.',
+   519→                },
+   520→              ].map((s) => (
+   521→                <li key={s.step} className="flex gap-3">
+   522→                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-[11px] font-bold text-emerald-300">
+   523→                    {s.step}
+   524→                  </span>
+   525→                  <div>
+   526→                    <div className="text-sm font-medium">{s.title}</div>
+   527→                    <div className="text-xs text-muted-foreground">{s.body}</div>
+   528→                  </div>
+   529→                </li>
+   530→              ))}
+   531→            </ol>
+   532→          </CollapsibleContent>
+   533→        </Collapsible>
+   534→      </CardContent>
+   535→    </Card>
+   536→  )
+   537→}
+   538→
+   539→// ============================================================
+   540→// QR ready card
+   541→// ============================================================
+   542→function QrReadyCard({
+   543→  qr,
+   544→  busy,
+   545→  now,
+   546→  onRefresh,
+   547→  onSimulateScan,
+   548→}: {
+   549→  qr: string
+   550→  busy: boolean
+   551→  now: Date
+   552→  onRefresh: () => void
+   553→  onSimulateScan: () => void
+   554→}) {
+   555→  // Countdown tied to QR generation time — we don't have exact server time,
+   556→  // so we anchor to component mount and reset on qr change.
+   557→  const [anchor, setAnchor] = React.useState(() => Date.now())
+   558→  React.useEffect(() => {
+   559→    setAnchor(Date.now())
+   560→  }, [qr])
+   561→
+   562→  const elapsed = Math.floor((now.getTime() - anchor) / 1000)
+   563→  const remaining = Math.max(0, QR_COUNTDOWN_SEC - elapsed)
+   564→
+   565→  // Auto-refresh when countdown hits 0
+   566→  React.useEffect(() => {
+   567→    if (remaining === 0) {
+   568→      onRefresh()
+   569→    }
+   570→  }, [remaining, onRefresh])
+   571→
+   572→  return (
+   573→    <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur">
+   574→      <CardHeader>
+   575→        <div className="flex items-start justify-between">
+   576→          <div>
+   577→            <CardTitle className="flex items-center gap-2 text-lg">
+   578→              <QrCode className="h-5 w-5 text-emerald-400" />
+   579→              Scan to Link Device
+   580→            </CardTitle>
+   581→            <CardDescription className="mt-1">
+   582→              Open WhatsApp → Settings → Linked Devices → Link a Device.
+   583→            </CardDescription>
+   584→          </div>
+   585→          <Badge
+   586→            variant="secondary"
+   587→            className={cn(
+   588→              'shrink-0 font-mono tabular-nums',
+   589→              remaining <= 10
+   590→                ? 'bg-rose-500/15 text-rose-300'
+   591→                : 'bg-amber-500/15 text-amber-300',
+   592→            )}
+   593→          >
+   594→            <Clock className="mr-1 h-3 w-3" />
+   595→            {remaining}s
+   596→          </Badge>
+   597→        </div>
+   598→      </CardHeader>
+   599→
+   600→      <CardContent>
+   601→        <div className="flex flex-col items-center gap-4">
+   602→          <div className="relative rounded-xl border-2 border-emerald-500/20 bg-white p-3 shadow-inner">
+   603→            <div className="relative h-[220px] w-[220px] max-w-full">
+   604→              <QrVisual payload={qr} size={220} />
+   605→              {/* Center logo overlay */}
+   606→              <div className="pointer-events-none absolute inset-0 grid place-items-center">
+   607→                <div className="grid h-9 w-9 place-items-center rounded-lg bg-white shadow-md ring-1 ring-black/5">
+   608→                  <MessageCircle className="h-5 w-5 text-emerald-600" />
+   609→                </div>
+   610→              </div>
+   611→            </div>
+   612→            {/* Corner accents */}
+   613→            <span className="pointer-events-none absolute -left-0.5 -top-0.5 h-4 w-4 border-l-2 border-t-2 border-emerald-500" />
+   614→            <span className="pointer-events-none absolute -right-0.5 -top-0.5 h-4 w-4 border-r-2 border-t-2 border-emerald-500" />
+   615→            <span className="pointer-events-none absolute -bottom-0.5 -left-0.5 h-4 w-4 border-b-2 border-l-2 border-emerald-500" />
+   616→            <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 h-4 w-4 border-b-2 border-r-2 border-emerald-500" />
+   617→          </div>
+   618→
+   619→          <div className="max-w-xs text-center text-xs text-muted-foreground">
+   620→            QR refreshes automatically every {QR_COUNTDOWN_SEC}s. Stay on this
+   621→            screen while scanning.
+   622→          </div>
+   623→
+   624→          <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
+   625→            <Button
+   626→              variant="outline"
+   627→              onClick={onRefresh}
+   628→              disabled={busy}
+   629→              className="gap-2"
+   630→            >
+   631→              <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} />
+   632→              Refresh QR
+   633→            </Button>
+   634→            <Button
+   635→              onClick={onSimulateScan}
+   636→              disabled={busy}
+   637→              className="gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+   638→            >
+   639→              {busy ? (
+   640→                <Loader2 className="h-4 w-4 animate-spin" />
+   641→              ) : (
+   642→                <Check className="h-4 w-4" />
+   643→              )}
+   644→              I&apos;ve scanned it (simulate)
+   645→            </Button>
+   646→          </div>
+   647→        </div>
+   648→      </CardContent>
+   649→    </Card>
+   650→  )
+   651→}
+   652→
+   653→// ============================================================
+   654→// Connected card
+   655→// ============================================================
+   656→function ConnectedCard({
+   657→  session,
+   658→  now,
+   659→  busy,
+   660→  onReconnect,
+   661→  onLogout,
+   662→}: {
+   663→  session: WaSession
+   664→  now: Date
+   665→  busy: boolean
+   666→  onReconnect: () => void
+   667→  onLogout: () => void
+   668→}) {
+   669→  const connectedAt = session.connectedAt ? new Date(session.connectedAt) : null
+   670→  const uptimeSec = connectedAt
+   671→    ? Math.max(0, Math.floor((now.getTime() - connectedAt.getTime()) / 1000))
+   672→    : 0
+   673→
+   674→  return (
+   675→    <Card className="overflow-hidden rounded-xl border border-emerald-500/20 bg-card/60 backdrop-blur">
+   676→      <CardHeader>
+   677→        <div className="flex items-start justify-between">
+   678→          <div>
+   679→            <CardTitle className="flex items-center gap-2 text-lg">
+   680→              <span className="relative inline-flex h-3 w-3">
+   681→                <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 bg-emerald-500" />
+   682→                <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
+   683→              </span>
+   684→              WhatsApp Connected
+   685→            </CardTitle>
+   686→            <CardDescription>
+   687→              Your account is linked and ready to receive messages.
+   688→            </CardDescription>
+   689→          </div>
+   690→          <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+   691→            <Check className="mr-1 h-3 w-3" /> Live
+   692→          </Badge>
+   693→        </div>
+   694→      </CardHeader>
+   695→
+   696→      <CardContent className="space-y-5">
+   697→        {/* Identity block */}
+   698→        <div className="flex flex-col items-center gap-3 rounded-xl border border-emerald-500/10 bg-emerald-500/[0.04] p-5 text-center sm:flex-row sm:text-left">
+   699→          <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30">
+   700→            <Smartphone className="h-7 w-7" />
+   701→          </div>
+   702→          <div className="min-w-0 flex-1">
+   703→            <div className="truncate text-lg font-semibold">
+   704→              {session.connectedName || 'WhatsApp Account'}
+   705→            </div>
+   706→            <div className="font-mono text-sm text-muted-foreground">
+   707→              {session.connectedNumber || '—'}
+   708→            </div>
+   709→          </div>
+   710→        </div>
+   711→
+   712→        {/* Details grid */}
+   713→        <div className="grid gap-3 sm:grid-cols-2">
+   714→          <DetailRow
+   715→            icon={<Smartphone className="h-4 w-4" />}
+   716→            label="Device"
+   717→            value={session.deviceInfo || '—'}
+   718→          />
+   719→          <DetailRow
+   720→            icon={<Clock className="h-4 w-4" />}
+   721→            label="Connected at"
+   722→            value={formatDateTime(connectedAt)}
+   723→          />
+   724→          <DetailRow
+   725→            icon={<Activity className="h-4 w-4" />}
+   726→            label="Session uptime"
+   727→            value={formatUptime(uptimeSec)}
+   728→            mono
+   729→          />
+   730→          <DetailRow
+   731→            icon={<Wifi className="h-4 w-4" />}
+   732→            label="Connection"
+   733→            value="Stable · End-to-end encrypted"
+   734→          />
+   735→        </div>
+   736→
+   737→        <Separator />
+   738→
+   739→        {/* Actions */}
+   740→        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+   741→          <Button
+   742→            variant="outline"
+   743→            onClick={onReconnect}
+   744→            disabled={busy}
+   745→            className="gap-2"
+   746→          >
+   747→            {busy ? (
+   748→              <Loader2 className="h-4 w-4 animate-spin" />
+   749→            ) : (
+   750→              <RefreshCw className="h-4 w-4" />
+   751→            )}
+   752→            Reconnect
+   753→          </Button>
+   754→          <Button
+   755→            variant="destructive"
+   756→            onClick={onLogout}
+   757→            disabled={busy}
+   758→            className="gap-2"
+   759→          >
+   760→            {busy ? (
+   761→              <Loader2 className="h-4 w-4 animate-spin" />
+   762→            ) : (
+   763→              <LogOut className="h-4 w-4" />
+   764→            )}
+   765→            Logout
+   766→          </Button>
+   767→        </div>
+   768→      </CardContent>
+   769→    </Card>
+   770→  )
+   771→}
+   772→
+   773→function DetailRow({
+   774→  icon,
+   775→  label,
+   776→  value,
+   777→  mono,
+   778→}: {
+   779→  icon: React.ReactNode
+   780→  label: string
+   781→  value: string
+   782→  mono?: boolean
+   783→}) {
+   784→  return (
+   785→    <div className="flex items-start gap-3 rounded-lg border bg-muted/20 px-3 py-2.5">
+   786→      <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+   787→        {icon}
+   788→      </span>
+   789→      <div className="min-w-0 flex-1">
+   790→        <div className="text-[11px] uppercase tracking-wider text-muted-foreground/80">
+   791→          {label}
+   792→        </div>
+   793→        <div
+   794→          className={cn(
+   795→            'truncate text-sm font-medium',
+   796→            mono && 'font-mono tabular-nums',
+   797→          )}
+   798→        >
+   799→          {value}
+   800→        </div>
+   801→      </div>
+   802→    </div>
+   803→  )
+   804→}
+   805→
+   806→// ============================================================
+   807→// Connecting card
+   808→// ============================================================
+   809→function ConnectingCard({ label }: { label: string }) {
+   810→  return (
+   811→    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   812→      <CardContent className="flex flex-col items-center gap-4 px-6 py-16 text-center">
+   813→        <div className="relative grid h-16 w-16 place-items-center">
+   814→          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/20" />
+   815→          <div className="relative grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+   816→            <Loader2 className="h-6 w-6 animate-spin" />
+   817→          </div>
+   818→        </div>
+   819→        <div>
+   820→          <div className="text-base font-semibold">{label}</div>
+   821→          <div className="mt-1 text-xs text-muted-foreground">
+   822→            Establishing secure WebSocket to WhatsApp servers…
+   823→          </div>
+   824→        </div>
+   825→      </CardContent>
+   826→    </Card>
+   827→  )
+   828→}
+   829→
+   830→// ============================================================
+   831→// Session Health card (side panel)
+   832→// ============================================================
+   833→function SessionHealthCard({
+   834→  session,
+   835→  now,
+   836→}: {
+   837→  session: WaSession | null
+   838→  now: Date
+   839→}) {
+   840→  const state = session?.state ?? 'disconnected'
+   841→  const lastSeenSec = session?.lastSeen
+   842→    ? Math.max(0, Math.floor((now.getTime() - new Date(session.lastSeen).getTime()) / 1000))
+   843→    : null
+   844→  const uptimeSec =
+   845→    session?.connectedAt && state === 'connected'
+   846→      ? Math.max(0, Math.floor((now.getTime() - new Date(session.connectedAt).getTime()) / 1000))
+   847→      : 0
+   848→
+   849→  const rows: { label: string; value: React.ReactNode; tone?: string }[] = [
+   850→    {
+   851→      label: 'Session state',
+   852→      value: <StatePill state={state} />,
+   853→    },
+   854→    {
+   855→      label: 'QR status',
+   856→      value: (
+   857→        <span
+   858→          className={cn(
+   859→            'text-xs font-medium',
+   860→            state === 'qr_ready' ? 'text-amber-300' : 'text-muted-foreground',
+   861→          )}
+   862→        >
+   863→          {state === 'qr_ready' ? 'Active · awaiting scan' : 'Idle'}
+   864→        </span>
+   865→      ),
+   866→    },
+   867→    {
+   868→      label: 'Last seen',
+   869→      value: (
+   870→        <span className="text-xs font-mono text-muted-foreground tabular-nums">
+   871→          {lastSeenSec === null
+   872→            ? '—'
+   873→            : lastSeenSec < 60
+   874→              ? `${lastSeenSec}s ago`
+   875→              : timeAgo(session?.lastSeen ?? null)}
+   876→        </span>
+   877→      ),
+   878→    },
+   879→    {
+   880→      label: 'Session uptime',
+   881→      value: (
+   882→        <span className="text-xs font-mono text-muted-foreground tabular-nums">
+   883→          {state === 'connected' ? formatUptime(uptimeSec) : '—'}
+   884→        </span>
+   885→      ),
+   886→    },
+   887→  ]
+   888→
+   889→  return (
+   890→    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   891→      <CardHeader className="pb-3">
+   892→        <CardTitle className="flex items-center gap-2 text-sm">
+   893→          <Activity className="h-4 w-4 text-emerald-400" />
+   894→          Session Health
+   895→        </CardTitle>
+   896→      </CardHeader>
+   897→      <CardContent className="space-y-3">
+   898→        {rows.map((r, i) => (
+   899→          <div key={i} className="flex items-center justify-between gap-3">
+   900→            <span className="text-xs text-muted-foreground">{r.label}</span>
+   901→            {r.value}
+   902→          </div>
+   903→        ))}
+   904→        <Separator />
+   905→        <div className="flex items-center gap-2 rounded-lg bg-emerald-500/[0.06] px-3 py-2 text-[11px] text-emerald-300/90">
+   906→          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+   907→          <span>
+   908→            Multi-device session · keys stored locally · auto-reconnect enabled
+   909→          </span>
+   910→        </div>
+   911→      </CardContent>
+   912→    </Card>
+   913→  )
+   914→}
+   915→
+   916→// ============================================================
+   917→// Log preview card (side panel)
+   918→// ============================================================
+   919→const LOG_LEVEL_TONE: Record<string, string> = {
+   920→  info: 'text-emerald-300',
+   921→  warn: 'text-amber-300',
+   922→  error: 'text-rose-300',
+   923→  debug: 'text-sky-300',
+   924→}
+   925→
+   926→function LogPreviewCard({ logs }: { logs: LogRow[] }) {
+   927→  return (
+   928→    <Card className="rounded-xl border bg-card/60 backdrop-blur">
+   929→      <CardHeader className="pb-3">
+   930→        <CardTitle className="flex items-center gap-2 text-sm">
+   931→          <ScrollText className="h-4 w-4 text-emerald-400" />
+   932→          Recent WhatsApp Logs
+   933→        </CardTitle>
+   934→        <CardDescription className="text-[11px]">
+   935→          Last 5 events from the WhatsApp engine.
+   936→        </CardDescription>
+   937→      </CardHeader>
+   938→      <CardContent className="p-0">
+   939→        <ScrollArea className="max-h-72">
+   940→          <div className="px-4 pb-4">
+   941→            {logs.length === 0 ? (
+   942→              <div className="flex flex-col items-center gap-2 py-8 text-center text-xs text-muted-foreground">
+   943→                <Power className="h-5 w-5 opacity-50" />
+   944→                <div>No WhatsApp events yet.</div>
+   945→                <div className="text-[11px] text-muted-foreground/70">
+   946→                  Generate a QR to start logging.
+   947→                </div>
+   948→              </div>
+   949→            ) : (
+   950→              <ul className="space-y-1.5">
+   951→                {logs.map((log) => (
+   952→                  <li
+   953→                    key={log.id}
+   954→                    className="rounded-md border bg-muted/20 px-2.5 py-2"
+   955→                  >
+   956→                    <div className="flex items-center justify-between gap-2">
+   957→                      <span
+   958→                        className={cn(
+   959→                          'text-[10px] font-semibold uppercase tracking-wider',
+   960→                          LOG_LEVEL_TONE[log.level] ?? 'text-muted-foreground',
+   961→                        )}
+   962→                      >
+   963→                        {log.level}
+   964→                      </span>
+   965→                      <span className="font-mono text-[10px] text-muted-foreground/70 tabular-nums">
+   966→                        {new Date(log.createdAt).toLocaleTimeString([], {
+   967→                          hour: '2-digit',
+   968→                          minute: '2-digit',
+   969→                          second: '2-digit',
+   970→                        })}
+   971→                      </span>
+   972→                    </div>
+   973→                    <div className="mt-0.5 line-clamp-2 text-xs">
+   974→                      {log.message}
+   975→                    </div>
+   976→                  </li>
+   977→                ))}
+   978→              </ul>
+   979→            )}
+   980→          </div>
+   981→        </ScrollArea>
+   982→      </CardContent>
+   983→    </Card>
+   984→  )
+   985→}
+   986→

@@ -1,0 +1,1036 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// ScheduledView — owner-authored scheduled messages.
+     5→//
+     6→// Layout:
+     7→//   · Header + "New Scheduled Message" button
+     8→//   · Stats row (Pending / Sent today / Cancelled)
+     9→//   · Tabs: Pending | Sent | All
+    10→//   · New/Edit dialog: contact picker, message textarea, datetime
+    11→//     picker with quick-pick chips, schedule button.
+    12→//
+    13→// Auto-processing:
+    14→//   The view polls POST /api/scheduled/process every 30s to send any
+    15→//   due messages. A subtle "Auto-processing ON" pill shows this.
+    16→//   Polling is paused while the document is hidden (no tab focus) to
+    17→//   avoid burning CPU in background tabs; it resumes on visibility.
+    18→// ============================================================
+    19→import * as React from 'react'
+    20→import { motion } from 'framer-motion'
+    21→import { toast } from 'sonner'
+    22→import {
+    23→  Clock,
+    24→  Calendar,
+    25→  Send,
+    26→  Plus,
+    27→  Pencil,
+    28→  Trash2,
+    29→  X,
+    30→  Check,
+    31→  AlertTriangle,
+    32→  Bell,
+    33→  Search,
+    34→  Loader2,
+    35→  RefreshCw,
+    36→  Inbox,
+    37→} from 'lucide-react'
+    38→
+    39→import { cn } from '@/lib/utils'
+    40→import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
+    41→import { formatDateTime, timeAgo, colorFromString, initials } from '@/lib/format'
+    42→import type { ViewKey, ScheduledMessageRow, ChatListItem } from '@/lib/types'
+    43→
+    44→import { Button } from '@/components/ui/button'
+    45→import { Input } from '@/components/ui/input'
+    46→import { Textarea } from '@/components/ui/textarea'
+    47→import { Label } from '@/components/ui/label'
+    48→import { Badge } from '@/components/ui/badge'
+    49→import { Card, CardContent } from '@/components/ui/card'
+    50→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    51→import {
+    52→  Dialog,
+    53→  DialogContent,
+    54→  DialogDescription,
+    55→  DialogFooter,
+    56→  DialogHeader,
+    57→  DialogTitle,
+    58→} from '@/components/ui/dialog'
+    59→import {
+    60→  Popover,
+    61→  PopoverContent,
+    62→  PopoverTrigger,
+    63→} from '@/components/ui/popover'
+    64→import { ScrollArea } from '@/components/ui/scroll-area'
+    65→import { AnimatedCounter } from '@/components/ui/animated-counter'
+    66→
+    67→// ------------------------------------------------------------
+    68→// Constants & helpers
+    69→// ------------------------------------------------------------
+    70→const MAX_MESSAGE = 1000
+    71→const POLL_PROCESS_MS = 30_000
+    72→
+    73→type ScheduledStatus = 'pending' | 'sent' | 'cancelled' | 'failed'
+    74→
+    75→interface ProcessResponse {
+    76→  ok: boolean
+    77→  processed: number
+    78→  failed?: number
+    79→}
+    80→
+    81→function statusBadge(s: ScheduledStatus): { label: string; cls: string } {
+    82→  switch (s) {
+    83→    case 'pending':
+    84→      return {
+    85→        label: 'Pending',
+    86→        cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    87→      }
+    88→    case 'sent':
+    89→      return {
+    90→        label: 'Sent',
+    91→        cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    92→      }
+    93→    case 'cancelled':
+    94→      return {
+    95→        label: 'Cancelled',
+    96→        cls: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+    97→      }
+    98→    case 'failed':
+    99→      return {
+   100→        label: 'Failed',
+   101→        cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   102→      }
+   103→    default:
+   104→      return {
+   105→        label: s,
+   106→        cls: 'bg-muted text-muted-foreground border-border',
+   107→      }
+   108→  }
+   109→}
+   110→
+   111→// Time-until badge for pending rows.
+   112→function timeUntilBadge(dateStr: string): { label: string; cls: string } {
+   113→  const target = new Date(dateStr).getTime()
+   114→  const now = Date.now()
+   115→  const diffMs = target - now
+   116→  if (diffMs <= 0) {
+   117→    return { label: 'Overdue', cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30' }
+   118→  }
+   119→  if (diffMs < 60 * 60 * 1000) {
+   120→    const mins = Math.max(1, Math.round(diffMs / 60_000))
+   121→    return { label: `in ${mins}m`, cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30' }
+   122→  }
+   123→  if (diffMs < 24 * 60 * 60 * 1000) {
+   124→    const hours = Math.round(diffMs / (60 * 60 * 1000))
+   125→    return { label: `in ${hours}h`, cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' }
+   126→  }
+   127→  const days = Math.round(diffMs / (24 * 60 * 60 * 1000))
+   128→  return { label: `in ${days}d`, cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' }
+   129→}
+   130→
+   131→// Convert a Date to a string suitable for <input type="datetime-local">.
+   132→// datetime-local expects 'YYYY-MM-DDTHH:MM' in the *local* timezone
+   133→// (no Z), so we build it from local components.
+   134→function toDatetimeLocalValue(d: Date): string {
+   135→  const pad = (n: number) => String(n).padStart(2, '0')
+   136→  return (
+   137→    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+   138→    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+   139→  )
+   140→}
+   141→
+   142→function startOfToday(): Date {
+   143→  const d = new Date()
+   144→  d.setHours(0, 0, 0, 0)
+   145→  return d
+   146→}
+   147→
+   148→function isSentToday(sentAt: string | null): boolean {
+   149→  if (!sentAt) return false
+   150→  return new Date(sentAt).getTime() >= startOfToday().getTime()
+   151→}
+   152→
+   153→// Quick-pick presets used in the dialog.
+   154→function quickPicks(): { label: string; date: Date }[] {
+   155→  const now = new Date()
+   156→  const in1h = new Date(now.getTime() + 60 * 60 * 1000)
+   157→  const in3h = new Date(now.getTime() + 3 * 60 * 60 * 1000)
+   158→
+   159→  const tomorrow9 = new Date(now)
+   160→  tomorrow9.setDate(now.getDate() + 1)
+   161→  tomorrow9.setHours(9, 0, 0, 0)
+   162→
+   163→  const nextMonday9 = new Date(now)
+   164→  const dayOfWeek = now.getDay() // 0 = Sun ... 6 = Sat
+   165→  const daysUntilMonday = ((1 + 7 - dayOfWeek) % 7) || 7 // next Monday
+   166→  nextMonday9.setDate(now.getDate() + daysUntilMonday)
+   167→  nextMonday9.setHours(9, 0, 0, 0)
+   168→
+   169→  return [
+   170→    { label: 'In 1 hour', date: in1h },
+   171→    { label: 'In 3 hours', date: in3h },
+   172→    { label: 'Tomorrow 9 AM', date: tomorrow9 },
+   173→    { label: 'Next Monday 9 AM', date: nextMonday9 },
+   174→  ]
+   175→}
+   176→
+   177→// ------------------------------------------------------------
+   178→// Avatar (small, self-contained — same colour system as chats-view)
+   179→// ------------------------------------------------------------
+   180→function Avatar({ name, phone }: { name: string; phone: string }) {
+   181→  const cls = colorFromString(name || phone)
+   182→  return (
+   183→    <div
+   184→      className={cn(
+   185→        'grid h-9 w-9 shrink-0 place-items-center rounded-full text-[10px] font-bold',
+   186→        cls,
+   187→      )}
+   188→      aria-hidden
+   189→    >
+   190→      {initials(name || phone)}
+   191→    </div>
+   192→  )
+   193→}
+   194→
+   195→// ------------------------------------------------------------
+   196→// Main view
+   197→// ------------------------------------------------------------
+   198→export function ScheduledView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
+   199→  const [items, setItems] = React.useState<ScheduledMessageRow[]>([])
+   200→  const [loading, setLoading] = React.useState(true)
+   201→  const [refreshing, setRefreshing] = React.useState(false)
+   202→  const [dialogOpen, setDialogOpen] = React.useState(false)
+   203→  const [editing, setEditing] = React.useState<ScheduledMessageRow | null>(null)
+   204→  const [autoProcessingOn, setAutoProcessingOn] = React.useState(true)
+   205→
+   206→  // --- Fetch the scheduled-message list ---
+   207→  const fetchItems = React.useCallback(
+   208→    async (opts?: { silent?: boolean }) => {
+   209→      if (opts?.silent) setRefreshing(true)
+   210→      else setLoading(true)
+   211→      try {
+   212→        const d = await apiGet<{ items: ScheduledMessageRow[] }>('/api/scheduled')
+   213→        setItems(d.items ?? [])
+   214→      } catch (err) {
+   215→        toast.error('Failed to load scheduled messages', {
+   216→          description: err instanceof Error ? err.message : undefined,
+   217→        })
+   218→      } finally {
+   219→        setLoading(false)
+   220→        setRefreshing(false)
+   221→      }
+   222→    },
+   223→    [],
+   224→  )
+   225→
+   226→  React.useEffect(() => {
+   227→    void fetchItems()
+   228→  }, [fetchItems])
+   229→
+   230→  // --- Auto-processing poll (POST /api/scheduled/process every 30s) ---
+   231→  // Pause when the tab is hidden — saves CPU/network in background tabs.
+   232→  const processDue = React.useCallback(async () => {
+   233→    if (typeof document !== 'undefined' && document.hidden) return
+   234→    try {
+   235→      const res = await apiPost<ProcessResponse>('/api/scheduled/process')
+   236→      if (res.processed > 0) {
+   237→        toast.success(`Processed ${res.processed} scheduled message${res.processed === 1 ? '' : 's'}`, {
+   238→          description: res.failed ? `${res.failed} failed` : undefined,
+   239→        })
+   240→        await fetchItems({ silent: true })
+   241→      }
+   242→    } catch {
+   243→      // Non-fatal — poll again next tick.
+   244→    }
+   245→  }, [fetchItems])
+   246→
+   247→  React.useEffect(() => {
+   248→    if (!autoProcessingOn) return
+   249→    void processDue()
+   250→    const id = setInterval(() => void processDue(), POLL_PROCESS_MS)
+   251→    return () => clearInterval(id)
+   252→  }, [autoProcessingOn, processDue])
+   253→
+   254→  // --- Handlers ---
+   255→  const handleOpenNew = () => {
+   256→    setEditing(null)
+   257→    setDialogOpen(true)
+   258→  }
+   259→
+   260→  const handleOpenEdit = (row: ScheduledMessageRow) => {
+   261→    setEditing(row)
+   262→    setDialogOpen(true)
+   263→  }
+   264→
+   265→  const handleCancel = async (row: ScheduledMessageRow) => {
+   266→    try {
+   267→      await apiDelete(`/api/scheduled/${encodeURIComponent(row.id)}`)
+   268→      setItems((prev) =>
+   269→        prev.map((r) => (r.id === row.id ? { ...r, status: 'cancelled' } : r)),
+   270→      )
+   271→      toast.success('Scheduled message cancelled')
+   272→    } catch (err) {
+   273→      toast.error('Failed to cancel', {
+   274→        description: err instanceof Error ? err.message : undefined,
+   275→      })
+   276→    }
+   277→  }
+   278→
+   279→  const handleSaved = (row: ScheduledMessageRow, isNew: boolean) => {
+   280→    setItems((prev) => {
+   281→      const idx = prev.findIndex((r) => r.id === row.id)
+   282→      if (idx === -1) return [row, ...prev]
+   283→      const next = [...prev]
+   284→      next[idx] = row
+   285→      return next
+   286→    })
+   287→    setDialogOpen(false)
+   288→    setEditing(null)
+   289→    toast.success(isNew ? 'Message scheduled' : 'Scheduled message updated')
+   290→  }
+   291→
+   292→  // --- Derived stats ---
+   293→  const pendingCount = items.filter((i) => i.status === 'pending').length
+   294→  const sentTodayCount = items.filter(
+   295→    (i) => i.status === 'sent' && isSentToday(i.sentAt),
+   296→  ).length
+   297→  const cancelledCount = items.filter((i) => i.status === 'cancelled').length
+   298→
+   299→  return (
+   300→    <div className="flex flex-col gap-6">
+   301→      {/* Header */}
+   302→      <motion.div
+   303→        initial={{ opacity: 0, y: -8 }}
+   304→        animate={{ opacity: 1, y: 0 }}
+   305→        transition={{ duration: 0.25 }}
+   306→        className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+   307→      >
+   308→        <div>
+   309→          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight sm:text-2xl">
+   310→            <Clock className="h-5 w-5 text-emerald-400" />
+   311→            Scheduled Messages
+   312→          </h1>
+   313→          <p className="mt-1 text-sm text-muted-foreground">
+   314→            Compose a message now, send it automatically at a future time. Due
+   315→            messages are sent by a background processor.
+   316→          </p>
+   317→        </div>
+   318→        <div className="flex items-center gap-2">
+   319→          <Button
+   320→            variant="outline"
+   321→            size="sm"
+   322→            onClick={() => void fetchItems()}
+   323→            disabled={refreshing}
+   324→          >
+   325→            {refreshing ? (
+   326→              <Loader2 className="h-4 w-4 animate-spin" />
+   327→            ) : (
+   328→              <RefreshCw className="h-4 w-4" />
+   329→            )}
+   330→            <span className="hidden sm:inline">Refresh</span>
+   331→          </Button>
+   332→          <Button
+   333→            size="sm"
+   334→            onClick={handleOpenNew}
+   335→            className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+   336→          >
+   337→            <Plus className="h-4 w-4" />
+   338→            <span className="hidden sm:inline">New Scheduled Message</span>
+   339→            <span className="sm:hidden">New</span>
+   340→          </Button>
+   341→        </div>
+   342→      </motion.div>
+   343→
+   344→      {/* Stats row */}
+   345→      <motion.div
+   346→        initial={{ opacity: 0, y: 8 }}
+   347→        animate={{ opacity: 1, y: 0 }}
+   348→        transition={{ duration: 0.3, delay: 0.05 }}
+   349→        className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+   350→      >
+   351→        <StatCard
+   352→          label="Pending"
+   353→          value={pendingCount}
+   354→          icon={<Clock className="h-4 w-4 text-amber-400" />}
+   355→          accent="border-amber-500/20"
+   356→        />
+   357→        <StatCard
+   358→          label="Sent today"
+   359→          value={sentTodayCount}
+   360→          icon={<Check className="h-4 w-4 text-emerald-400" />}
+   361→          accent="border-emerald-500/20"
+   362→        />
+   363→        <StatCard
+   364→          label="Cancelled"
+   365→          value={cancelledCount}
+   366→          icon={<X className="h-4 w-4 text-zinc-400" />}
+   367→          accent="border-zinc-500/20"
+   368→        />
+   369→      </motion.div>
+   370→
+   371→      {/* Auto-processing indicator */}
+   372→      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+   373→        <span
+   374→          className={cn(
+   375→            'inline-flex h-2 w-2 rounded-full',
+   376→            autoProcessingOn ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500',
+   377→          )}
+   378→        />
+   379→        <span>Auto-processing {autoProcessingOn ? 'ON' : 'PAUSED'}</span>
+   380→        <span className="text-zinc-600">·</span>
+   381→        <span>Checks every 30s for due messages</span>
+   382→        <Button
+   383→          variant="ghost"
+   384→          size="sm"
+   385→          className="ml-auto h-6 px-2 text-[10px]"
+   386→          onClick={() => setAutoProcessingOn((v) => !v)}
+   387→        >
+   388→          {autoProcessingOn ? 'Pause' : 'Resume'}
+   389→        </Button>
+   390→      </div>
+   391→
+   392→      {/* Tabs */}
+   393→      <Tabs defaultValue="pending" className="w-full">
+   394→        <TabsList className="w-full sm:w-auto">
+   395→          <TabsTrigger value="pending" className="flex-1 sm:flex-none">
+   396→            <Clock className="mr-1.5 h-4 w-4" /> Pending
+   397→            {pendingCount > 0 && (
+   398→              <Badge className="ml-1.5 bg-amber-500/15 text-amber-300 border-amber-500/30 px-1.5 py-0 text-[10px]">
+   399→                {pendingCount}
+   400→              </Badge>
+   401→            )}
+   402→          </TabsTrigger>
+   403→          <TabsTrigger value="sent" className="flex-1 sm:flex-none">
+   404→            <Check className="mr-1.5 h-4 w-4" /> Sent
+   405→          </TabsTrigger>
+   406→          <TabsTrigger value="all" className="flex-1 sm:flex-none">
+   407→            <Bell className="mr-1.5 h-4 w-4" /> All
+   408→          </TabsTrigger>
+   409→        </TabsList>
+   410→
+   411→        <TabsContent value="pending" className="mt-4">
+   412→          <PendingTab
+   413→            items={items.filter((i) => i.status === 'pending')}
+   414→            loading={loading}
+   415→            onEdit={handleOpenEdit}
+   416→            onCancel={handleCancel}
+   417→            onNavigate={onNavigate}
+   418→          />
+   419→        </TabsContent>
+   420→        <TabsContent value="sent" className="mt-4">
+   421→          <SentTab
+   422→            items={items.filter((i) => i.status === 'sent' || i.status === 'failed')}
+   423→            loading={loading}
+   424→            onNavigate={onNavigate}
+   425→          />
+   426→        </TabsContent>
+   427→        <TabsContent value="all" className="mt-4">
+   428→          <AllTab
+   429→            items={items}
+   430→            loading={loading}
+   431→            onEdit={handleOpenEdit}
+   432→            onCancel={handleCancel}
+   433→            onNavigate={onNavigate}
+   434→          />
+   435→        </TabsContent>
+   436→      </Tabs>
+   437→
+   438→      {/* New / edit dialog */}
+   439→      <ScheduleDialog
+   440→        open={dialogOpen}
+   441→        onOpenChange={(o) => {
+   442→          setDialogOpen(o)
+   443→          if (!o) setEditing(null)
+   444→        }}
+   445→        editing={editing}
+   446→        onSaved={handleSaved}
+   447→      />
+   448→    </div>
+   449→  )
+   450→}
+   451→
+   452→// ------------------------------------------------------------
+   453→// StatCard
+   454→// ------------------------------------------------------------
+   455→function StatCard({
+   456→  label,
+   457→  value,
+   458→  icon,
+   459→  accent,
+   460→}: {
+   461→  label: string
+   462→  value: number
+   463→  icon: React.ReactNode
+   464→  accent: string
+   465→}) {
+   466→  return (
+   467→    <Card className={cn('rounded-xl border bg-card/60 p-5 backdrop-blur', accent)}>
+   468→      <CardContent className="flex items-center justify-between p-0">
+   469→        <div>
+   470→          <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+   471→            {label}
+   472→          </div>
+   473→          <div className="mt-1 text-3xl font-bold tabular-nums">
+   474→            <AnimatedCounter value={value} />
+   475→          </div>
+   476→        </div>
+   477→        <div className="grid h-10 w-10 place-items-center rounded-lg bg-muted/60">
+   478→          {icon}
+   479→        </div>
+   480→      </CardContent>
+   481→    </Card>
+   482→  )
+   483→}
+   484→
+   485→// ------------------------------------------------------------
+   486→// Empty state
+   487→// ------------------------------------------------------------
+   488→function EmptyState({ message }: { message: string }) {
+   489→  return (
+   490→    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-card/30 p-10 text-center">
+   491→      <div className="grid h-12 w-12 place-items-center rounded-2xl bg-muted/60 text-muted-foreground">
+   492→        <Inbox className="h-6 w-6" />
+   493→      </div>
+   494→      <div className="text-sm text-muted-foreground">{message}</div>
+   495→    </div>
+   496→  )
+   497→}
+   498→
+   499→// ------------------------------------------------------------
+   500→// Row
+   501→// ------------------------------------------------------------
+   502→function Row({
+   503→  row,
+   504→  onEdit,
+   505→  onCancel,
+   506→  onNavigate,
+   507→}: {
+   508→  row: ScheduledMessageRow
+   509→  onEdit?: (row: ScheduledMessageRow) => void
+   510→  onCancel?: (row: ScheduledMessageRow) => void
+   511→  onNavigate?: (v: ViewKey) => void
+   512→}) {
+   513→  const badge = statusBadge(row.status)
+   514→  const timeBadge =
+   515→    row.status === 'pending' ? timeUntilBadge(row.scheduledAt) : null
+   516→
+   517→  return (
+   518→    <motion.div
+   519→      layout
+   520→      initial={{ opacity: 0, y: 4 }}
+   521→      animate={{ opacity: 1, y: 0 }}
+   522→      exit={{ opacity: 0, y: -4 }}
+   523→      transition={{ duration: 0.2 }}
+   524→      className="rounded-xl border bg-card/60 p-4 backdrop-blur hover:border-emerald-500/40 hover:bg-card/80"
+   525→    >
+   526→      <div className="flex items-start gap-3">
+   527→        <button
+   528→          type="button"
+   529→          className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+   530→          onClick={() => onNavigate?.('chats')}
+   531→          title="Open chats"
+   532→          aria-label={`Open chats with ${row.contactName}`}
+   533→        >
+   534→          <Avatar name={row.contactName} phone={row.contactPhone} />
+   535→        </button>
+   536→
+   537→        <div className="min-w-0 flex-1">
+   538→          <div className="flex flex-wrap items-center gap-2">
+   539→            <span className="truncate text-sm font-semibold">
+   540→              {row.contactName}
+   541→            </span>
+   542→            <span className="text-xs text-muted-foreground">
+   543→              {row.contactPhone}
+   544→            </span>
+   545→            <Badge className={cn('px-1.5 py-0 text-[10px] font-semibold', badge.cls)}>
+   546→              {badge.label}
+   547→            </Badge>
+   548→            {timeBadge && (
+   549→              <Badge className={cn('px-1.5 py-0 text-[10px] font-semibold', timeBadge.cls)}>
+   550→                {timeBadge.label}
+   551→              </Badge>
+   552→            )}
+   553→          </div>
+   554→
+   555→          <p className="mt-1.5 line-clamp-2 text-sm text-foreground/80">
+   556→            {row.text}
+   557→          </p>
+   558→
+   559→          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+   560→            <span className="inline-flex items-center gap-1">
+   561→              <Calendar className="h-3 w-3" />
+   562→              {formatDateTime(row.scheduledAt)}
+   563→            </span>
+   564→            {row.sentAt && (
+   565→              <span className="inline-flex items-center gap-1">
+   566→                <Send className="h-3 w-3" />
+   567→                Sent {timeAgo(row.sentAt)}
+   568→              </span>
+   569→            )}
+   570→            <span>Created {timeAgo(row.createdAt)}</span>
+   571→          </div>
+   572→        </div>
+   573→
+   574→        <div className="flex shrink-0 items-center gap-1">
+   575→          {row.status === 'pending' && onEdit && (
+   576→            <Button
+   577→              variant="ghost"
+   578→              size="icon"
+   579→              className="h-8 w-8"
+   580→              onClick={() => onEdit(row)}
+   581→              aria-label="Edit scheduled message"
+   582→            >
+   583→              <Pencil className="h-4 w-4" />
+   584→            </Button>
+   585→          )}
+   586→          {row.status === 'pending' && onCancel && (
+   587→            <Button
+   588→              variant="ghost"
+   589→              size="icon"
+   590→              className="h-8 w-8 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+   591→              onClick={() => void onCancel(row)}
+   592→              aria-label="Cancel scheduled message"
+   593→            >
+   594→              <Trash2 className="h-4 w-4" />
+   595→            </Button>
+   596→          )}
+   597→        </div>
+   598→      </div>
+   599→    </motion.div>
+   600→  )
+   601→}
+   602→
+   603→// ------------------------------------------------------------
+   604→// Pending tab
+   605→// ------------------------------------------------------------
+   606→function PendingTab({
+   607→  items,
+   608→  loading,
+   609→  onEdit,
+   610→  onCancel,
+   611→  onNavigate,
+   612→}: {
+   613→  items: ScheduledMessageRow[]
+   614→  loading: boolean
+   615→  onEdit: (row: ScheduledMessageRow) => void
+   616→  onCancel: (row: ScheduledMessageRow) => void
+   617→  onNavigate?: (v: ViewKey) => void
+   618→}) {
+   619→  if (loading) {
+   620→    return (
+   621→      <div className="flex items-center justify-center p-10 text-muted-foreground">
+   622→        <Loader2 className="h-5 w-5 animate-spin" />
+   623→      </div>
+   624→    )
+   625→  }
+   626→  if (items.length === 0) {
+   627→    return (
+   628→      <EmptyState message="No pending scheduled messages. Create one to see it here." />
+   629→    )
+   630→  }
+   631→  return (
+   632→    <ScrollArea className="max-h-[60vh] pr-3">
+   633→      <div className="flex flex-col gap-3">
+   634→        {items.map((row) => (
+   635→          <Row
+   636→            key={row.id}
+   637→            row={row}
+   638→            onEdit={onEdit}
+   639→            onCancel={onCancel}
+   640→            onNavigate={onNavigate}
+   641→          />
+   642→        ))}
+   643→      </div>
+   644→    </ScrollArea>
+   645→  )
+   646→}
+   647→
+   648→// ------------------------------------------------------------
+   649→// Sent tab
+   650→// ------------------------------------------------------------
+   651→function SentTab({
+   652→  items,
+   653→  loading,
+   654→  onNavigate,
+   655→}: {
+   656→  items: ScheduledMessageRow[]
+   657→  loading: boolean
+   658→  onNavigate?: (v: ViewKey) => void
+   659→}) {
+   660→  if (loading) {
+   661→    return (
+   662→      <div className="flex items-center justify-center p-10 text-muted-foreground">
+   663→        <Loader2 className="h-5 w-5 animate-spin" />
+   664→      </div>
+   665→    )
+   666→  }
+   667→  if (items.length === 0) {
+   668→    return <EmptyState message="No sent or failed scheduled messages yet." />
+   669→  }
+   670→  return (
+   671→    <ScrollArea className="max-h-[60vh] pr-3">
+   672→      <div className="flex flex-col gap-3">
+   673→        {items.map((row) => (
+   674→          <Row key={row.id} row={row} onNavigate={onNavigate} />
+   675→        ))}
+   676→      </div>
+   677→    </ScrollArea>
+   678→  )
+   679→}
+   680→
+   681→// ------------------------------------------------------------
+   682→// All tab
+   683→// ------------------------------------------------------------
+   684→function AllTab({
+   685→  items,
+   686→  loading,
+   687→  onEdit,
+   688→  onCancel,
+   689→  onNavigate,
+   690→}: {
+   691→  items: ScheduledMessageRow[]
+   692→  loading: boolean
+   693→  onEdit: (row: ScheduledMessageRow) => void
+   694→  onCancel: (row: ScheduledMessageRow) => void
+   695→  onNavigate?: (v: ViewKey) => void
+   696→}) {
+   697→  if (loading) {
+   698→    return (
+   699→      <div className="flex items-center justify-center p-10 text-muted-foreground">
+   700→        <Loader2 className="h-5 w-5 animate-spin" />
+   701→      </div>
+   702→    )
+   703→  }
+   704→  if (items.length === 0) {
+   705→    return (
+   706→      <EmptyState message="No scheduled messages. Create your first one to get started." />
+   707→    )
+   708→  }
+   709→  return (
+   710→    <ScrollArea className="max-h-[60vh] pr-3">
+   711→      <div className="flex flex-col gap-3">
+   712→        {items.map((row) => (
+   713→          <Row
+   714→            key={row.id}
+   715→            row={row}
+   716→            onEdit={onEdit}
+   717→            onCancel={onCancel}
+   718→            onNavigate={onNavigate}
+   719→          />
+   720→        ))}
+   721→      </div>
+   722→    </ScrollArea>
+   723→  )
+   724→}
+   725→
+   726→// ------------------------------------------------------------
+   727→// Schedule dialog (create + edit share this form)
+   728→// ------------------------------------------------------------
+   729→interface ScheduleDialogProps {
+   730→  open: boolean
+   731→  onOpenChange: (open: boolean) => void
+   732→  editing: ScheduledMessageRow | null
+   733→  onSaved: (row: ScheduledMessageRow, isNew: boolean) => void
+   734→}
+   735→
+   736→function ScheduleDialog({
+   737→  open,
+   738→  onOpenChange,
+   739→  editing,
+   740→  onSaved,
+   741→}: ScheduleDialogProps) {
+   742→  const isEdit = !!editing
+   743→
+   744→  const [contactId, setContactId] = React.useState('')
+   745→  const [contactName, setContactName] = React.useState('')
+   746→  const [text, setText] = React.useState('')
+   747→  const [scheduledAt, setScheduledAt] = React.useState('')
+   748→  const [saving, setSaving] = React.useState(false)
+   749→
+   750→  // Reset form when dialog opens (with editing seed if provided).
+   751→  React.useEffect(() => {
+   752→    if (!open) return
+   753→    if (editing) {
+   754→      setContactId(editing.contactId)
+   755→      setContactName(editing.contactName)
+   756→      setText(editing.text)
+   757→      setScheduledAt(toDatetimeLocalValue(new Date(editing.scheduledAt)))
+   758→    } else {
+   759→      // Default to "in 1 hour"
+   760→      setContactId('')
+   761→      setContactName('')
+   762→      setText('')
+   763→      setScheduledAt(toDatetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)))
+   764→    }
+   765→  }, [open, editing])
+   766→
+   767→  const canSubmit =
+   768→    !saving && !!contactId && !!text.trim() && !!scheduledAt
+   769→
+   770→  const handleSubmit = async () => {
+   771→    if (!canSubmit) return
+   772→    setSaving(true)
+   773→    try {
+   774→      if (isEdit && editing) {
+   775→        const res = await apiPatch<{ item: ScheduledMessageRow }>(
+   776→          `/api/scheduled/${encodeURIComponent(editing.id)}`,
+   777→          { text: text.trim(), scheduledAt: new Date(scheduledAt).toISOString() },
+   778→        )
+   779→        onSaved(res.item, false)
+   780→      } else {
+   781→        const res = await apiPost<{ item: ScheduledMessageRow }>(
+   782→          '/api/scheduled',
+   783→          {
+   784→            contactId,
+   785→            text: text.trim(),
+   786→            scheduledAt: new Date(scheduledAt).toISOString(),
+   787→          },
+   788→        )
+   789→        onSaved(res.item, true)
+   790→      }
+   791→    } catch (err) {
+   792→      toast.error(isEdit ? 'Failed to update' : 'Failed to schedule', {
+   793→        description: err instanceof Error ? err.message : undefined,
+   794→      })
+   795→    } finally {
+   796→      setSaving(false)
+   797→    }
+   798→  }
+   799→
+   800→  return (
+   801→    <Dialog open={open} onOpenChange={onOpenChange}>
+   802→      <DialogContent className="sm:max-w-lg">
+   803→        <DialogHeader>
+   804→          <DialogTitle className="flex items-center gap-2 text-base">
+   805→            <Clock className="h-4 w-4 text-emerald-400" />
+   806→            {isEdit ? 'Edit scheduled message' : 'Schedule a message'}
+   807→          </DialogTitle>
+   808→          <DialogDescription>
+   809→            The message will be sent automatically at the chosen time as long
+   810→            as auto-processing is on.
+   811→          </DialogDescription>
+   812→        </DialogHeader>
+   813→
+   814→        <div className="flex flex-col gap-4">
+   815→          {/* Contact picker */}
+   816→          <div className="flex flex-col gap-1.5">
+   817→            <Label htmlFor="sched-contact">Recipient</Label>
+   818→            <ContactPicker
+   819→              selectedId={contactId}
+   820→              selectedName={contactName}
+   821→              disabled={isEdit}
+   822→              onSelect={(c) => {
+   823→                setContactId(c.contactId)
+   824→                setContactName(c.name)
+   825→              }}
+   826→            />
+   827→          </div>
+   828→
+   829→          {/* Message */}
+   830→          <div className="flex flex-col gap-1.5">
+   831→            <div className="flex items-center justify-between">
+   832→              <Label htmlFor="sched-text">Message</Label>
+   833→              <span className="text-[10px] text-muted-foreground tabular-nums">
+   834→                {text.length}/{MAX_MESSAGE}
+   835→              </span>
+   836→            </div>
+   837→            <Textarea
+   838→              id="sched-text"
+   839→              value={text}
+   840→              onChange={(e) => setText(e.target.value.slice(0, MAX_MESSAGE))}
+   841→              placeholder="Type the message to send later…"
+   842→              className="min-h-24 resize-none text-sm"
+   843→            />
+   844→          </div>
+   845→
+   846→          {/* Schedule date/time */}
+   847→          <div className="flex flex-col gap-1.5">
+   848→            <Label htmlFor="sched-at">Send at</Label>
+   849→            <Input
+   850→              id="sched-at"
+   851→              type="datetime-local"
+   852→              value={scheduledAt}
+   853→              onChange={(e) => setScheduledAt(e.target.value)}
+   854→              className="bg-background text-sm [color-scheme:dark]"
+   855→            />
+   856→            <div className="flex flex-wrap gap-1.5 pt-1">
+   857→              {quickPicks().map((p) => (
+   858→                <button
+   859→                  key={p.label}
+   860→                  type="button"
+   861→                  onClick={() => setScheduledAt(toDatetimeLocalValue(p.date))}
+   862→                  className="rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+   863→                >
+   864→                  {p.label}
+   865→                </button>
+   866→              ))}
+   867→            </div>
+   868→          </div>
+   869→        </div>
+   870→
+   871→        <DialogFooter className="gap-2">
+   872→          <Button
+   873→            variant="outline"
+   874→            onClick={() => onOpenChange(false)}
+   875→            disabled={saving}
+   876→          >
+   877→            Cancel
+   878→          </Button>
+   879→          <Button
+   880→            onClick={handleSubmit}
+   881→            disabled={!canSubmit}
+   882→            className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+   883→          >
+   884→            {saving ? (
+   885→              <Loader2 className="h-4 w-4 animate-spin" />
+   886→            ) : (
+   887→              <Clock className="h-4 w-4" />
+   888→            )}
+   889→            {isEdit ? 'Save changes' : 'Schedule'}
+   890→          </Button>
+   891→        </DialogFooter>
+   892→      </DialogContent>
+   893→    </Dialog>
+   894→  )
+   895→}
+   896→
+   897→// ------------------------------------------------------------
+   898→// ContactPicker — searchable combobox over /api/chats
+   899→// ------------------------------------------------------------
+   900→interface ContactPickerProps {
+   901→  selectedId: string
+   902→  selectedName: string
+   903→  disabled?: boolean
+   904→  onSelect: (c: { contactId: string; name: string; phone: string }) => void
+   905→}
+   906→
+   907→function ContactPicker({
+   908→  selectedId,
+   909→  selectedName,
+   910→  disabled,
+   911→  onSelect,
+   912→}: ContactPickerProps) {
+   913→  const [open, setOpen] = React.useState(false)
+   914→  const [search, setSearch] = React.useState('')
+   915→  const [contacts, setContacts] = React.useState<ChatListItem[]>([])
+   916→  const [loading, setLoading] = React.useState(false)
+   917→
+   918→  // Load contacts lazily when the picker is opened.
+   919→  const loadContacts = React.useCallback(async () => {
+   920→    setLoading(true)
+   921→    try {
+   922→      const d = await apiGet<{ items: ChatListItem[] }>('/api/chats?limit=100')
+   923→      setContacts(d.items ?? [])
+   924→    } catch {
+   925→      /* best-effort */
+   926→    } finally {
+   927→      setLoading(false)
+   928→    }
+   929→  }, [])
+   930→
+   931→  React.useEffect(() => {
+   932→    if (open && contacts.length === 0) {
+   933→      void loadContacts()
+   934→    }
+   935→  }, [open, contacts.length, loadContacts])
+   936→
+   937→  const filtered = React.useMemo(() => {
+   938→    const q = search.trim().toLowerCase()
+   939→    if (!q) return contacts
+   940→    return contacts.filter(
+   941→      (c) =>
+   942→        c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q),
+   943→    )
+   944→  }, [contacts, search])
+   945→
+   946→  return (
+   947→    <Popover open={open} onOpenChange={setOpen}>
+   948→      <PopoverTrigger asChild>
+   949→        <Button
+   950→          type="button"
+   951→          variant="outline"
+   952→          role="combobox"
+   953→          disabled={disabled}
+   954→          className="w-full justify-between font-normal"
+   955→          aria-label="Select recipient"
+   956→        >
+   957→          <span className="flex items-center gap-2 truncate">
+   958→            {selectedId ? (
+   959→              <>
+   960→                <Avatar name={selectedName} phone="" />
+   961→                <span className="truncate">{selectedName}</span>
+   962→              </>
+   963→            ) : (
+   964→              <span className="text-muted-foreground">Select a contact…</span>
+   965→            )}
+   966→          </span>
+   967→          <Search className="h-3.5 w-3.5 shrink-0 opacity-50" />
+   968→        </Button>
+   969→      </PopoverTrigger>
+   970→      <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0" align="start">
+   971→        <div className="flex flex-col">
+   972→          <div className="border-b p-2">
+   973→            <div className="relative">
+   974→              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   975→              <Input
+   976→                value={search}
+   977→                onChange={(e) => setSearch(e.target.value)}
+   978→                placeholder="Search name or phone…"
+   979→                className="h-8 pl-7 text-xs"
+   980→                autoFocus
+   981→              />
+   982→            </div>
+   983→          </div>
+   984→          <ScrollArea className="max-h-64">
+   985→            {loading ? (
+   986→              <div className="flex items-center justify-center p-4 text-xs text-muted-foreground">
+   987→                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Loading…
+   988→              </div>
+   989→            ) : filtered.length === 0 ? (
+   990→              <div className="p-4 text-center text-xs text-muted-foreground">
+   991→                No contacts found.
+   992→              </div>
+   993→            ) : (
+   994→              <ul className="flex flex-col py-1">
+   995→                {filtered.map((c) => (
+   996→                  <li key={c.contactId}>
+   997→                    <button
+   998→                      type="button"
+   999→                      className={cn(
+  1000→                        'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted',
+  1001→                        c.contactId === selectedId && 'bg-muted/60',
+  1002→                      )}
+  1003→                      onClick={() => {
+  1004→                        onSelect({
+  1005→                          contactId: c.contactId,
+  1006→                          name: c.name,
+  1007→                          phone: c.phone,
+  1008→                        })
+  1009→                        setOpen(false)
+  1010→                        setSearch('')
+  1011→                      }}
+  1012→                    >
+  1013→                      <Avatar name={c.name} phone={c.phone} />
+  1014→                      <span className="min-w-0 flex-1">
+  1015→                        <span className="block truncate font-medium">
+  1016→                          {c.name}
+  1017→                        </span>
+  1018→                        <span className="block truncate text-[10px] text-muted-foreground">
+  1019→                          {c.phone}
+  1020→                        </span>
+  1021→                      </span>
+  1022→                      {c.contactId === selectedId && (
+  1023→                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+  1024→                      )}
+  1025→                    </button>
+  1026→                  </li>
+  1027→                ))}
+  1028→              </ul>
+  1029→            )}
+  1030→          </ScrollArea>
+  1031→        </div>
+  1032→      </PopoverContent>
+  1033→    </Popover>
+  1034→  )
+  1035→}
+  1036→

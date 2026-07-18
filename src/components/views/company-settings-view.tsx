@@ -158,7 +158,13 @@ export function CompanySettingsView() {
 
   return (
     <div className="space-y-6">
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-gradient-premium">Company Profile</h1>
+        <p className="text-sm text-muted-foreground">
+          Company information that powers the AI system prompt and customer-facing messages.
+        </p>
+      </div>
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Building2 className="size-5 text-primary" />
@@ -348,7 +354,7 @@ export function CompanySettingsView() {
         </CardFooter>
       </Card>
 
-      <Card className="rounded-xl border bg-card/60 backdrop-blur">
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Eye className="size-4 text-primary" />
