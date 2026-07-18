@@ -1157,3 +1157,225 @@ Platform was stable at start: 16 views, 47 API routes, 19 Prisma models, lint cl
 6. Add a "Help" / onboarding tour for first-time users.
 7. Add conversation statistics per contact (response time, message frequency chart) on the contact profile page.
 8. Add webhook/API endpoint for external integrations (e.g. Zapier, n8n).
+
+---
+Task ID: F1-R5
+Agent: full-stack-developer (Export/Import)
+Task: Build an Export/Import feature for Quick Replies, Tags, and Templates — lets the owner backup their snippets library and tags as JSON and import them back (useful for migration between installations or sharing configs).
+
+Work Log:
+- Read prior worklog (17 views, 49 API routes, QuickReply + Tag + Template models exist) and existing libs (db.ts, auth.ts, api-client.ts, format.ts, types.ts, nav.ts, page.tsx, prisma schema, plus quick-replies / tags / templates API routes) to align with established patterns.
+- Created `src/app/api/export/route.ts` (GET, `dynamic = 'force-dynamic'`):
+  - Auth check via `getCurrentUser()` → 401 JSON when unauthenticated.
+  - Query param `type` validated against `'quick-replies' | 'tags' | 'templates' | 'all'` (defaults to `'all'`).
+  - Runs the requested findMany queries in parallel via `Promise.all` (each selecting only the export-relevant fields — shortcut/title/body/category for QuickReplies, name/color for Tags, name/body/category for Templates).
+  - Returns a v1.0 JSON envelope `{ exportedAt, version: '1.0', quickReplies?, tags?, templates? }` with `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="qorvixnode-export-{type}-{YYYYMMDD-HHMMSS}.json"`, and `Cache-Control: no-store`. Body is pretty-printed JSON so it's both human-readable and machine-parseable.
+- Created `src/app/api/import/route.ts` (POST, `dynamic = 'force-dynamic'`):
+  - Auth check → 401 when unauthenticated.
+  - Body: `{ data: { quickReplies?, tags?, templates? }, mode: 'merge' | 'replace' }`.
+  - Strict per-row validation up-front (silently drops invalid rows, counts them in `skipped`): shortcut must be 1-40 chars + match `/^[a-zA-Z0-9_]+$/`, title/body must be non-empty (≤120/≤4000 chars), tag name ≤40 chars, tag color validated against the 8-key palette (defaults to `'emerald'`), QuickReply category validated against the 5 valid categories (defaults to `'general'`), Template category validated against the 5 valid template categories (defaults to `'general'`).
+  - Rejects with 400 if no valid rows in any section.
+  - Whole import wrapped in `db.$transaction` so a partial failure (e.g. a unique-constraint race) doesn't leave the DB in a half-state.
+  - **Merge mode**: upserts by `shortcut` (QuickReply) / `name` (Tag) / `name` (Template). Existing rows are kept as-is and counted in `skipped`. Template name uniqueness uses an async `uniqueTemplateName()` helper that appends ` (2)`, ` (3)`, … until it finds a free name (checking both the DB and an in-batch `taken` Set).
+  - **Replace mode**: deletes ALL existing QuickReply / Tag / Template rows first (ContactTag rows cascade-delete on Tag delete per schema), then imports every valid row. Template name collisions within the batch are still resolved by the same numeric-suffix helper.
+  - Tag create errors are caught — if the SQLite unique constraint fires on a concurrent insert, it's counted as `skipped` rather than aborting the whole transaction.
+  - Returns `{ ok: true, imported: { quickReplies, tags, templates }, skipped: { quickReplies, tags, templates } }`.
+  - Audit log: writes a `Log` row (`category='security'`, `level='info'`, `message='Imported N quick replies, N tags, N templates (mode: X)'`, `meta`=JSON with mode/imported/skipped/userId/username). Logging is best-effort — never fails the import.
+- Created `src/components/views/data-management-view.tsx` (`'use client'`, named `DataManagementView`, no props):
+  - **Header**: small "DATA MANAGEMENT" eyebrow with Database icon, big `text-gradient-premium` title "Export & Import", and a description paragraph.
+  - **Export section** (SectionHeader with Download icon):
+    - 3 `ExportCard` components in `grid-cols-1 lg:grid-cols-3`: Quick Replies (MessageSquareText, emerald accent), Tags (Tags icon, teal accent), Templates (FileText icon, amber accent). Each card shows the live count (`apiGet<{items}>('/api/quick-replies' | '/api/tags' | '/api/templates')` in parallel on mount), a numeric badge with tabular-nums + skeleton while loading, and an emerald-outlined "Export as JSON" button (disabled when count is 0).
+    - Below the grid: an "Export Everything" card with a gradient emerald→teal icon chip and a full-width `bg-gradient-to-r from-emerald-500 to-teal-600 text-white` button → `/api/export?type=all`.
+    - Export handler: `fetch(`/api/export?type=${type}`)` → reads response text + parses `Content-Disposition` for the filename → `downloadFile(filename, text, 'application/json;charset=utf-8')` → Sonner toast. Per-type exporting flags drive individual spinners.
+  - **Import section** (SectionHeader with Upload icon):
+    - Drag-and-drop + click-to-browse drop zone (`border-2 border-dashed rounded-xl p-8 text-center`), with `border-primary bg-primary/5` when dragging. Hidden `<input type="file" accept="application/json,.json">` opened on click / Enter / Space. Validates `.json` extension and ≤5 MB before reading.
+    - On file selected: reads text via `file.text()`, `JSON.parse` it, validates it has at least one of `quickReplies` / `tags` / `templates` arrays. On error → red error banner with AlertTriangle + dismiss X. On success → shows a parsed-preview card (motion.div fade-in).
+    - Preview card: filename + `exportedAt` timestamp + version badge, 3 PreviewStat tiles (Quick Replies / Tags / Templates counts with emerald/teal/amber accents), a one-line summary sentence, separator, mode selector, replace warning (when applicable), and Cancel / Import buttons.
+    - **Mode selector**: 2 radio-style `ModeCard` components side-by-side (Merge = emerald, Replace = rose with a "Risky" badge). Each card has an icon chip, title, description, and a custom radio dot indicator. Selecting Replace reveals a rose-tinted warning panel ("Danger zone. Replace mode will permanently delete every existing Quick Reply, Tag and Template before importing. Tag associations on contacts will also be lost. This cannot be undone.").
+    - Import button: emerald gradient in Merge mode, rose solid in Replace mode. POSTs to `/api/import` with the parsed envelope + mode → on success shows a toast with imported/skipped counts, clears the parsed preview, resets mode to `'merge'`, and refreshes counts.
+  - Used shadcn/ui `Card`, `Button`, `Separator` and Lucide icons (Database, Download, Upload, FileJson, FileText, Tags, MessageSquareText, Check, AlertTriangle, FileUp, Loader2, X, Trash2, Package). Framer-motion entrance animation on the page wrapper + a separate motion.div on the parsed-preview card. All cards use the standard `rounded-xl border bg-card/60 backdrop-blur p-5 card-hover` styling; no indigo/blue; responsive (1 col mobile, 3 cols lg).
+- Modified `src/lib/types.ts`: appended `| 'data-management'` to the `ViewKey` union.
+- Modified `src/lib/nav.ts`: imported `Database` from `lucide-react`; added `{ key: 'data-management', label: 'Data', icon: Database, description: 'Export & import', group: 'system' }` to `NAV_ITEMS` immediately after `'system'` (so it sits at the bottom of the system group).
+- Modified `src/app/page.tsx`: imported `DataManagementView` from `@/components/views/data-management-view`; added router case `{active === 'data-management' && <DataManagementView />}` right after the `system` case.
+- Verified with `bun run lint` (only my files): **0 errors, 0 warnings**. The single remaining lint error in the repo (`StatisticsTab is not defined` in `contact-profile-view.tsx`) is pre-existing from another agent's task and not in scope.
+- Verified with `bunx tsc --noEmit`: my 6 touched files (export/route.ts, import/route.ts, data-management-view.tsx, types.ts, nav.ts, page.tsx) produce **0 type errors**. The remaining TS errors in the repo are all in other agents' files (webhooks/[id]/route.ts, contact-profile-view.tsx, system-view.tsx, ai-engine.ts, use-realtime.ts, examples/, skills/) — not in scope.
+
+Stage Summary:
+- Created: src/app/api/export/route.ts (GET — auth-gated, type=quick-replies|tags|templates|all, JSON envelope with Content-Disposition attachment, parallel findMany)
+- Created: src/app/api/import/route.ts (POST — auth-gated, merge/replace modes, transactional upsert by shortcut/name, template-name numeric suffixing, strict per-row validation, security audit log)
+- Created: src/components/views/data-management-view.tsx (DataManagementView — Export section with 3 count cards + Export Everything gradient button, Import section with drag-and-drop drop zone + parsed preview + Merge/Replace radio cards + danger-zone warning)
+- Modified: src/lib/types.ts (added 'data-management' to ViewKey)
+- Modified: src/lib/nav.ts (imported Database; added data-management nav entry in 'system' group after 'system')
+- Modified: src/app/page.tsx (imported DataManagementView; added router case)
+
+---
+Task ID: F3-R5
+Agent: full-stack-developer (Webhook integration)
+Task: Webhook / API Integration feature — outgoing webhook endpoints that fire on platform events (new message, hot lead, owner request, AI error, etc.) for integration with Zapier, n8n, Make.com, Slack, or any HTTP endpoint. HMAC-SHA256 signed payloads, per-webhook delivery log, test-fire button, secret regeneration, and an event-typed dispatcher wired into the WA engine.
+
+Work Log:
+- Read prior worklog (17 views, 49 API routes) and existing libs (db, auth, api-client, nav, types, wa-engine, ai-engine). Inspected existing API route patterns (templates, tags/[id]) and view patterns (broadcast, scheduled, system) for consistency.
+- Confirmed `Webhook` icon exists in lucide-react@0.525.0 via `node -e`.
+- Added `Webhook` + `WebhookDelivery` models to `prisma/schema.prisma` (with `onDelete: Cascade` on deliveries, indexes on `webhookId` and `status`). Ran `bun run db:push` successfully — schema in sync.
+- Added `| 'webhooks'` to `ViewKey` in `src/lib/types.ts` and added `WEBHOOK_EVENTS`, `WebhookListItem`, `WebhookDeliveryRow`, `WebhookDeliveryStat`, `WebhookEventDef`, `WebhookEventCategory` shared types (so the view + API + dispatcher all use the same definitions).
+- Added nav entry `{ key: 'webhooks', label: 'Webhooks', icon: Webhook, description: 'API integrations', group: 'system' }` to `src/lib/nav.ts` (placed between `logs` and `system`). Imported `Webhook` from lucide-react.
+- Created `src/lib/webhook-dispatcher.ts` exposing `dispatchWebhooks(event, data)`:
+  - Queries all `isActive` webhooks whose `events` array includes the event (empty events array = subscribe to all).
+  - Builds payload `{ event, timestamp, data }`, signs body with HMAC-SHA256 using `crypto.subtle`, sends signature in `X-QorvixNode-Signature` header (hex).
+  - Uses `AbortController` for a hard 10s timeout per webhook. Records each attempt as a `WebhookDelivery` row (status=delivered/failed, statusCode, response snippet ≤500 chars, deliveredAt).
+  - Wraps everything in try/catch — never throws into the caller (fire-and-forget safe). Writes a best-effort audit log entry per dispatch.
+  - Exports `SUPPORTED_EVENTS`, `WEBHOOK_SIGNATURE_HEADER`, `WEBHOOK_TIMEOUT_MS` for reuse by API routes.
+- Created API routes (all auth-gated via `getCurrentUser()`):
+  - `src/app/api/webhooks/route.ts` — GET lists all webhooks with masked secrets + delivery stats over last 10 deliveries; POST creates a webhook (validates URL is http(s), sanitises events against `SUPPORTED_EVENTS`, auto-generates a `crypto.randomUUID()`-based secret if not provided, returns full secret one-time only).
+  - `src/app/api/webhooks/[id]/route.ts` — PATCH updates name/url/events/isActive (NOT secret); DELETE cascades deliveries.
+  - `src/app/api/webhooks/[id]/test/route.ts` — POST sends a `{ event: 'test', timestamp, data: { message: 'This is a test webhook delivery from QorvixNode WhatsApp Auto Reply' } }` payload, signs with HMAC, records a `WebhookDelivery` row, returns `{ ok, statusCode, response }`.
+  - `src/app/api/webhooks/[id]/deliveries/route.ts` — GET lists the most recent 50 deliveries for a webhook.
+  - `src/app/api/webhooks/[id]/secret/route.ts` — POST regenerates the secret (old one stops working immediately), returns the new secret one-time only, writes a `security`-category audit log.
+- Modified `src/lib/wa-engine.ts` to import `dispatchWebhooks` and fire it (fire-and-forget via `void`) at: `contact.created` (new contact), `message.received` (after saving incoming), `message.sent` (AI + owner sources), `owner.requested`, `lead.created` (first time crossing score ≥25), `lead.hot` (crossing owner threshold), `ai.error` (catch block of `generateReply`), `whatsapp.connected`, `whatsapp.disconnected`.
+- Created `src/components/views/webhooks-view.tsx` (`WebhooksView`, `'use client'`, no props):
+  - Header with title + description + Refresh + New Webhook buttons.
+  - Info banner explaining the integration model (mentions `X-QorvixNode-Signature` header + HMAC verification).
+  - Webhook list cards: name + active Switch (emerald), URL (font-mono, truncated), event badges (color-coded by category: message=emerald, lead=amber, owner=rose, ai=violet, whatsapp=teal, contact=sky), delivery stats with green/red/amber bar + success-rate pill, action buttons (Test / Deliveries / Edit / Regenerate Secret / Delete).
+  - Empty state with Zapier/n8n/Slack mention and CTA.
+  - New/Edit dialog: name, URL, events checklist (with category badges + descriptions + Select all / Clear), secret note. On create, immediately shows a one-time secret reveal dialog with copy button + warning.
+  - Deliveries dialog: table of last 50 deliveries (event / status badge / status code / time / response snippet). Each row is `Collapsible` — expand to see full payload (pretty-printed JSON) + response body + sent/delivered timestamps + attempt count. Auto-refreshes every 10s while open.
+  - Secret reveal dialog (reused for create + regenerate) with copy button and "won't be shown again" warning.
+  - Framer Motion entrance animation per card; responsive layout (stacks on mobile, side-by-side on desktop).
+- Wired into `src/app/page.tsx`: added `import { WebhooksView }` and `{active === 'webhooks' && <WebhooksView />}` router case.
+- Smoke tests run:
+  - Prisma layer: created a webhook + delivery, verified both persisted and deleted cleanly.
+  - Dispatcher end-to-end: created a webhook pointed at `https://httpbin.org/post`, called `dispatchWebhooks('message.received', {…})`, verified a `WebhookDelivery` row was written with `status=delivered, statusCode=200`, and the response body snippet contained the echoed JSON payload.
+  - Test-route handler logic: replicated the route's POST flow against httpbin.org/post — got HTTP 200 with the expected `{ event: 'test', timestamp, data: { message: 'This is a test webhook delivery from QorvixNode WhatsApp Auto Reply' } }` payload echoed back.
+- Lint: `bun run lint` passes clean (no errors, no warnings). TypeScript `tsc --noEmit` shows only pre-existing errors in `examples/websocket/server.ts`, `skills/image-edit`, `skills/stock-analysis-skill`, and `src/lib/ai-engine.ts` — none introduced by this task.
+
+Stage Summary:
+Files modified:
+- `prisma/schema.prisma` — added Webhook + WebhookDelivery models
+- `src/lib/types.ts` — added 'webhooks' to ViewKey + WEBHOOK_EVENTS + Webhook* interfaces
+- `src/lib/nav.ts` — added Webhook import + webhooks nav entry
+- `src/lib/wa-engine.ts` — imported dispatchWebhooks, fired 8 webhook events at the right points (fire-and-forget)
+- `src/app/page.tsx` — imported WebhooksView + added router case
+
+Files created:
+- `src/lib/webhook-dispatcher.ts` — dispatcher (HMAC-SHA256 signing, 10s timeout, never-throws, delivery logging)
+- `src/app/api/webhooks/route.ts` — GET list (masked secrets + stats) + POST create (auto-gen secret, one-time view)
+- `src/app/api/webhooks/[id]/route.ts` — PATCH update + DELETE (cascade deliveries)
+- `src/app/api/webhooks/[id]/test/route.ts` — POST test-fire with HMAC signature + delivery record
+- `src/app/api/webhooks/[id]/deliveries/route.ts` — GET last 50 deliveries
+- `src/app/api/webhooks/[id]/secret/route.ts` — POST regenerate secret (one-time view, audit log)
+- `src/components/views/webhooks-view.tsx` — full view (cards, new/edit dialog, deliveries dialog with auto-refresh, secret reveal dialog, empty state)
+
+Result: 18 views, 54 API routes. The Webhooks view is fully functional end-to-end — a user can create a webhook pointed at https://httpbin.org/post, send a test from the UI, and immediately see a `delivered` status with the response body in the Deliveries dialog. The dispatcher is wired into the WA engine so real platform events (new message, hot lead, etc.) now fan out to configured endpoints automatically.
+
+---
+Task ID: F2-R5
+Agent: full-stack-developer (Per-contact stats)
+Task: Add per-contact conversation statistics to the Contact Profile page — response-time chart, message frequency over time, activity heatmap, and conversation metrics — exposed via a new "Statistics" tab.
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` (prior 18 views, contact-profile-view.tsx already had 4 tabs) and `src/components/views/contact-profile-view.tsx` (1777 lines: header + 4 stat cards + lead-score chart + 4-tab panel).
+- Reviewed `prisma/schema.prisma` to confirm Message (direction/source/text/timestamp/contactId) and Log (category/message/meta/contactId/createdAt) shapes; reviewed existing `/api/contacts/[id]/profile/route.ts` to mirror auth + payload patterns.
+- Created `src/app/api/contacts/[id]/stats/route.ts` (GET, 425 lines, fully typed, no `any`):
+  - Auth check via `getCurrentUser()` → 401 if not authed; 404 if contact missing.
+  - Parallel Prisma fetch of all messages (asc) + AI-category logs (asc).
+  - Overview: totalMessages, incomingCount/outgoingCount, aiCount/ownerCount, customerInitiated (incoming after a >6h gap heuristic), avgResponseTimeMs (incoming → next outgoing within 1h), avgCustomerResponseMs (outgoing → next incoming within 24h), firstMessageAt/lastMessageAt, conversationDuration (days), messagesPerDay (avg, fallback to total when duration=0), longestStreak (consecutive calendar days with ≥1 message, computed from a Set of `YYYY-MM-DD` keys).
+  - messageTimeline: 30 daily buckets (Mon-first `MMM D` labels), counts split by direction; messages older than 30 days skipped.
+  - hourlyHeatmap: 24 buckets keyed by `getHours()`.
+  - dayOfWeekDistribution: 7 Mon-first buckets, JS `getDay()` mapped via `[6,0,1,2,3,4,5]`.
+  - sourceDistribution: ai | owner | customer (3-bucket, customer picks up non-ai/owner incoming too).
+  - responseTimes: last 20 AI-reply ms parsed from log lines (`/in\s+(\d+)\s*ms/i`) or `meta.responseMs` JSON.
+  - conversationFlow: one entry per message with `direction` ('in'|'out'), `gap_minutes` since previous, ISO timestamp.
+  - End-to-end verified against Rahul Sharma (10 messages): totalMessages=10, incomingCount=3, outgoingCount=7, aiCount=3, ownerCount=4, avgResponseTimeMs=60000 (3 samples), avgCustomerResponseMs=90000, longestStreak=2 (Fri+Sat), hourly peak at 15:00 (6 msgs), day-of-week Fri=8/Sat=2.
+- Modified `src/components/views/contact-profile-view.tsx` (now 2875 lines) — added a 5th "Statistics" tab plus all sub-components:
+  - Header comment + import block updated: added `BarChart3, Zap, Calendar, Timer, Gauge` from lucide-react; added `Bar, BarChart, Cell, Line, LineChart, Pie, PieChart` from recharts.
+  - Added 8 typed interfaces mirroring the API payload (StatsOverview, StatsTimelinePoint, StatsHourlyBucket, StatsResponseTimePoint, StatsDayOfWeekBucket, StatsSourceBucket, StatsConversationFlowPoint, StatsPayload).
+  - Added chart-config constants (TIMELINE_CONFIG, HOURLY_CONFIG, DOW_CONFIG, RESPONSE_TREND_CONFIG, SOURCE_PIE_COLORS, HEATMAP_DAYS) plus helpers `formatDurationMs` and `formatHourLabel`.
+  - New `<TabsTrigger value="statistics">` + `<TabsContent value="statistics">` rendering `<StatisticsTab contactId={contactId} />`.
+  - `StatisticsTab`: fetches `/api/contacts/[id]/stats` via `apiGet`, shows 6-card skeleton while loading, retry button on error, friendly "Not enough data yet" empty state when totalMessages < 5, staggered Framer Motion entrance (container + item variants).
+  - (a) 6 overview stat tiles in a responsive 2-col / 3-col grid using `AnimatedCounter`:
+       · Total Messages (with SplitBar showing incoming/outgoing proportional volume + counts).
+       · AI vs Owner ratio (RatioBar with emerald/sky split + percentage labels).
+       · Avg Response Time (formatted "1.2s"/"234ms" via formatResponseTime).
+       · Avg Customer Reply (formatted as "2m 13s"/"1h 5m"/"3d" via formatDurationMs).
+       · Messages / Day (1-decimal AnimatedCounter).
+       · Conversation Duration (days + "from {date}" + 🔥 streak badge).
+  - (b) MessageTimelineChart: stacked AreaChart (30 days, incoming emerald + outgoing teal, gradient fills, ChartTooltip).
+  - (c) ActivityHeatmap: CUSTOM 7×24 CSS-grid component built from divs — emerald cells with opacity 0.08–1.0 based on count/max; "Less ◻◻◻◼◼◼ More" legend in the header; top hour-axis labels every 3h; bottom 12a/6a/12p/6p markers; row labels Mon–Sun; hover updates a footer detail ("Mon 3 PM · 5 messages") and shows the peak count.
+  - (d) HourlyDistributionChart: BarChart of 24 hourly counts, peak bar highlighted amber (#f59e0b), ChartTooltip with `labelFormatter` rendering "3 PM" instead of "3".
+  - (e) DayOfWeekChart: horizontal BarChart (layout="vertical") of 7 weekday counts, peak highlighted amber.
+  - (f) ResponseTimeTrendChart: LineChart of last 20 AI-reply times with emerald line + dots + amber ReferenceLine at the average; falls back to "Not enough AI reply logs yet" when <2 data points.
+  - (g) SourceDistributionChart: PieChart donut (innerRadius 48, outerRadius 72) with per-source Cell colors (ai=emerald, owner=sky, customer=zinc) + a side legend showing counts + percentages + total.
+  - (h) ConversationFlowViz: CUSTOM rhythm component — most-recent 20 messages rendered as horizontal bars, width proportional to log10(gap_minutes) so 1-minute and 3-day gaps both stay visible; alternating emerald (incoming) / teal (outgoing) colors; per-row gap label (e.g. "1m", "2h 13m", "3d"); legend explaining the encoding.
+- Lint: `bun run lint` passes clean (no errors, no warnings). TypeScript `tsc --noEmit` shows only pre-existing errors in `examples/websocket/server.ts`, `skills/image-edit`, `skills/stock-analysis-skill`, and `src/lib/ai-engine.ts` — none introduced by this task (caught and fixed an early typo: `'next.server'` → `'next/server'` in the new route).
+- End-to-end test: briefly ran the dev server, logged in as admin/admin123, hit `/api/contacts/cmrp4kt8i0001qby0vdtg3nfs/stats` — HTTP 200 with valid JSON matching the expected schema (overview + 30-day timeline + 24 hourly buckets + 7 weekday buckets + 3 source buckets + conversation flow of 10 entries).
+
+Stage Summary:
+Files created:
+- `src/app/api/contacts/[id]/stats/route.ts` — GET endpoint returning the full per-contact stats payload (overview + 6 distribution/timeline arrays), all numbers computed from real DB rows.
+
+Files modified:
+- `src/components/views/contact-profile-view.tsx` — added 5th "Statistics" tab plus all 8 sub-components (StatTile, SplitBar, RatioBar, MessageTimelineChart, ActivityHeatmap, HourlyDistributionChart, DayOfWeekChart, ResponseTimeTrendChart, SourceDistributionChart, ConversationFlowViz). Header comment, imports, types, chart configs, and helpers updated. Existing 4 tabs and lead-score section untouched.
+
+Result: Contact profile now has a 5th tab "Statistics" that gives the owner deep insights into each customer's engagement — message volume trends, when they're most active (hour + weekday + 7×24 heatmap), how fast the AI is replying (and whether it's getting faster), who's sending what (AI vs owner vs customer), and a visual rhythm of the most recent 20 messages. All numbers come from real DB queries computed on the server.
+
+---
+Task ID: cron-review-20260718-1159
+Agent: Main (Z.ai Code) — scheduled dev review (round 5)
+Task: QA sweep + Export/Import + Per-contact Statistics + Webhook Integration
+
+## Current Project Status Assessment
+Platform was stable at start: 17 views, 49 API routes, 20 Prisma models, lint clean. QA sweep confirmed zero errors. Continued with 3 high-impact integration & analytics features.
+
+## Work Completed This Round
+
+### 1. Export/Import Data Management (Task F1-R5 — via subagent)
+- 2 new API routes: `/api/export` (GET — exports quick-replies/tags/templates/all as JSON with Content-Disposition), `/api/import` (POST — merge or replace mode, transactional upsert by shortcut/name, template collision suffixing).
+- New `DataManagementView` (18th view) with Export section (3 count cards + Export Everything gradient button) and Import section (drag-and-drop JSON upload, preview, merge/replace mode selector, success toast with imported/skipped counts).
+- Added 'data-management' to ViewKey + nav entry (Database icon).
+- Verified: page renders with Export/Import sections, Quick Replies card shows count.
+
+### 2. Per-Contact Conversation Statistics (Task F2-R5 — via subagent)
+- New `/api/contacts/[id]/stats` route (GET) — computes: overview (totalMessages, avgResponseTimeMs, avgCustomerResponseMs, messagesPerDay, longestStreak), messageTimeline (30 days), hourlyHeatmap (24 buckets), dayOfWeekDistribution (7 buckets), sourceDistribution, responseTimes (last 20 AI replies), conversationFlow.
+- New **Statistics tab** (5th) on contact-profile-view with 8 visualizations:
+  - 6 overview stat tiles (AnimatedCounter)
+  - Message Timeline (stacked AreaChart, 30 days)
+  - **Activity Heatmap** (custom 7×24 CSS grid, emerald opacity-based intensity, hover details)
+  - Hourly Distribution (BarChart with peak highlighted)
+  - Day of Week (horizontal BarChart)
+  - Response Time Trend (LineChart with ReferenceLine average)
+  - Source Distribution (PieChart donut)
+  - Conversation Flow (custom rhythm visualization)
+- Verified: opened Vikram Singh's profile → Statistics tab → 5 charts render, heatmap + timeline + response time + source distribution all present.
+
+### 3. Webhook / API Integration (Task F3-R5 — via subagent)
+- New `Webhook` + `WebhookDelivery` Prisma models.
+- `webhook-dispatcher.ts` lib — `dispatchWebhooks(event, data)` finds active webhooks subscribed to the event, POSTs JSON payload with HMAC-SHA256 signature (X-QorvixNode-Signature header), 10s timeout, records delivery, never throws.
+- 5 API routes: `/api/webhooks` (GET list with delivery stats, POST create), `/api/webhooks/[id]` (PATCH, DELETE), `/api/webhooks/[id]/test` (POST — sends test payload), `/api/webhooks/[id]/deliveries` (GET — last 50), `/api/webhooks/[id]/secret` (POST — regenerate).
+- Wired dispatcher into wa-engine.ts at 8 event points: contact.created, message.received, message.sent (AI+owner), owner.requested, lead.hot, ai.error, whatsapp.connected/disconnected.
+- New `WebhooksView` (19th view) with webhook cards (active toggle, event badges, delivery stats bar), New/Edit dialog (events checklist), Deliveries dialog (auto-refreshing table with expandable JSON), Secret reveal (one-time view with copy).
+- 9 supported events with color-coded categories: message=emerald, lead=amber, owner=rose, ai=violet, whatsapp=teal, contact=sky.
+- Verified: page renders with heading, New Webhook button, empty state. Dialog has URL input + events checklist.
+- E2E tested by subagent: created webhook to https://httpbin.org/post, dispatched event, delivery recorded with status=delivered, statusCode=200.
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200, realtime healthy
+- Browser E2E: Webhooks (page + dialog), Data Management (export/import), Contact Statistics (5 charts + heatmap + all sections)
+- 19 views total (added Webhooks + Data Management), 57 API routes, 22 Prisma models
+
+## Unresolved Issues / Risks
+- WebSocket gateway: still polling fallback.
+- Real WhatsApp Baileys integration still simulation.
+- Single-user auth.
+- Scheduled message processing relies on frontend polling.
+- Webhook dispatcher runs synchronously in the request cycle (fire-and-forget but still in-process). For high volume, a queue would be better.
+
+## Priority Recommendations for Next Phase
+1. Add a server-side background worker for scheduled messages + webhook delivery queue.
+2. Wire WebSocket gateway for true real-time push.
+3. Add multi-user authentication with roles (admin, operator, viewer).
+4. Add SQLite FTS5 for full-text search performance.
+5. Add an onboarding/help tour for first-time users.
+6. Add a public API (with API keys) for external read access to contacts/leads/messages.
+7. Add conversation sentiment analysis (AI-powered) per message.
+8. Add a mobile app / PWA wrapper (installable, push notifications).

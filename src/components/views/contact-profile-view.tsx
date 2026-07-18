@@ -12,6 +12,7 @@
 //        · AI Memory — editable key/value list
 //        · Activity Log — merged notifications + logs timeline
 //        · Details — editable contact fields
+//        · Statistics — per-contact conversation insights (charts + heatmap)
 //   5. Danger Zone — pin/unpin + block/unblock
 //
 // All API access uses apiGet/apiPost/apiPatch/apiDelete.
@@ -48,11 +49,23 @@ import {
   ShieldAlert,
   Info,
   Bell,
+  BarChart3,
+  Zap,
+  Calendar,
+  Timer,
+  Gauge,
 } from 'lucide-react'
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
   ReferenceLine,
   XAxis,
   YAxis,
@@ -217,6 +230,67 @@ interface LogsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Stats payload (mirrors /api/contacts/[id]/stats)
+// ---------------------------------------------------------------------------
+interface StatsOverview {
+  totalMessages: number
+  incomingCount: number
+  outgoingCount: number
+  aiCount: number
+  ownerCount: number
+  customerInitiated: number
+  avgResponseTimeMs: number
+  avgCustomerResponseMs: number
+  firstMessageAt: string | null
+  lastMessageAt: string | null
+  conversationDuration: number
+  messagesPerDay: number
+  longestStreak: number
+}
+
+interface StatsTimelinePoint {
+  date: string
+  incoming: number
+  outgoing: number
+}
+
+interface StatsHourlyBucket {
+  hour: number
+  count: number
+}
+
+interface StatsResponseTimePoint {
+  replyMs: number
+  timestamp: string
+}
+
+interface StatsDayOfWeekBucket {
+  day: string
+  count: number
+}
+
+interface StatsSourceBucket {
+  source: string
+  count: number
+}
+
+interface StatsConversationFlowPoint {
+  direction: 'in' | 'out'
+  gap_minutes: number
+  timestamp: string
+}
+
+interface StatsPayload {
+  overview: StatsOverview
+  messageTimeline: StatsTimelinePoint[]
+  hourlyHeatmap: StatsHourlyBucket[]
+  responseTimes: StatsResponseTimePoint[]
+  dayOfWeekDistribution: StatsDayOfWeekBucket[]
+  sourceDistribution: StatsSourceBucket[]
+  conversationFlow: StatsConversationFlowPoint[]
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 const CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 card-hover'
@@ -264,6 +338,32 @@ const LEAD_SCORE_CONFIG: ChartConfig = {
 
 const HOT_LEAD_THRESHOLD = 70
 
+// Stats-tab chart configs — WhatsApp-green theme (emerald/teal/sky).
+const TIMELINE_CONFIG: ChartConfig = {
+  incoming: { label: 'Incoming', color: '#10b981' }, // emerald-500
+  outgoing: { label: 'Outgoing', color: '#14b8a6' }, // teal-500
+}
+
+const HOURLY_CONFIG: ChartConfig = {
+  count: { label: 'Messages', color: '#10b981' },
+}
+
+const DOW_CONFIG: ChartConfig = {
+  count: { label: 'Messages', color: '#14b8a6' },
+}
+
+const RESPONSE_TREND_CONFIG: ChartConfig = {
+  replyMs: { label: 'AI reply time', color: '#10b981' },
+}
+
+const SOURCE_PIE_COLORS: Record<string, string> = {
+  ai: '#10b981', // emerald-500
+  owner: '#0ea5e9', // sky-500
+  customer: '#a3a3a3', // zinc-400
+}
+
+const HEATMAP_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -271,6 +371,30 @@ function formatResponseTime(ms: number): string {
   if (!ms || ms <= 0) return '—'
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+/** Format a millisecond duration as a compact human string (e.g. "2m 13s", "1h 5m", "3d"). */
+function formatDurationMs(ms: number): string {
+  if (!ms || ms <= 0) return '—'
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const totalMin = Math.round(totalSec / 60)
+  if (totalMin < 60) return `${totalMin}m`
+  const totalHr = Math.round(totalMin / 60)
+  if (totalHr < 24) {
+    const m = totalMin % 60
+    return m === 0 ? `${totalHr}h` : `${totalHr}h ${m}m`
+  }
+  const days = Math.round(totalHr / 24)
+  const h = totalHr % 24
+  return h === 0 ? `${days}d` : `${days}d ${h}h`
+}
+
+/** Format an hour integer (0-23) as a 12-hour clock label like "3 PM". */
+function formatHourLabel(h: number): string {
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const hr = h % 12 === 0 ? 12 : h % 12
+  return `${hr} ${ampm}`
 }
 
 function memoryLabel(key: string): string {
@@ -765,6 +889,9 @@ export function ContactProfileView({
               <TabsTrigger value="details" className="gap-1.5">
                 <Edit className="h-3.5 w-3.5" /> Details
               </TabsTrigger>
+              <TabsTrigger value="statistics" className="gap-1.5">
+                <BarChart3 className="h-3.5 w-3.5" /> Statistics
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="conversation" className="mt-4">
@@ -785,6 +912,10 @@ export function ContactProfileView({
                 contact={contact}
                 onChanged={() => void loadAll()}
               />
+            </TabsContent>
+
+            <TabsContent value="statistics" className="mt-4">
+              <StatisticsTab contactId={contactId} />
             </TabsContent>
           </Tabs>
         </Card>
@@ -1773,5 +1904,971 @@ function MetaRow({ label, value, mono }: { label: string; value: string; mono?: 
       <span className="text-muted-foreground">{label}</span>
       <span className={cn('truncate font-medium', mono && 'font-mono text-[10px]')}>{value}</span>
     </div>
+  )
+}
+
+// ===========================================================================
+// Tab 5 — Statistics
+// ===========================================================================
+
+/** A blank 7×24 matrix (Mon-first rows × 24 hour columns). */
+function buildHeatmapMatrix(flow: StatsConversationFlowPoint[]): number[][] {
+  const m: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0))
+  for (const p of flow) {
+    const d = new Date(p.timestamp)
+    const jsDay = d.getDay() // 0=Sun..6=Sat
+    const monFirst = (jsDay + 6) % 7 // 0=Mon..6=Sun
+    const hour = d.getHours()
+    if (monFirst >= 0 && monFirst < 7 && hour >= 0 && hour < 24) {
+      m[monFirst][hour] += 1
+    }
+  }
+  return m
+}
+
+function StatisticsTab({ contactId }: { contactId: string }) {
+  const [stats, setStats] = React.useState<StatsPayload | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const loadStats = React.useCallback(async () => {
+    try {
+      const data = await apiGet<StatsPayload>(`/api/contacts/${contactId}/stats`)
+      setStats(data)
+      setError(null)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load statistics'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }, [contactId])
+
+  React.useEffect(() => {
+    setLoading(true)
+    void loadStats()
+  }, [loadStats])
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="h-56 w-full rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <Skeleton className="h-56 w-full rounded-xl" />
+          <Skeleton className="h-56 w-full rounded-xl" />
+        </div>
+        <Skeleton className="h-56 w-full rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <Skeleton className="h-56 w-full rounded-xl" />
+          <Skeleton className="h-56 w-full rounded-xl" />
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground">
+        <AlertTriangle className="h-6 w-6 text-amber-400" />
+        <span className="text-xs">{error}</span>
+        <Button variant="outline" size="sm" onClick={() => void loadStats()} className="mt-1 gap-1.5">
+          <Loader2 className="h-3.5 w-3.5" /> Retry
+        </Button>
+      </div>
+    )
+  }
+
+  if (!stats) return null
+
+  // Not enough data — friendly empty state.
+  if (stats.overview.totalMessages < 5) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-background/30 text-center">
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-emerald-500/15 text-emerald-300">
+          <BarChart3 className="h-6 w-6" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">Not enough data yet</h3>
+          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+            Statistics become available once this contact has at least 5 messages.
+            Currently there {stats.overview.totalMessages === 1 ? 'is' : 'are'}{' '}
+            <span className="font-semibold text-foreground">
+              {stats.overview.totalMessages}
+            </span>{' '}
+            {stats.overview.totalMessages === 1 ? 'message' : 'messages'} recorded.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const ov = stats.overview
+
+  // Container animation variants for staggered section entrance.
+  const container = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: { staggerChildren: 0.06, delayChildren: 0.04 },
+    },
+  }
+  const item = {
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+  }
+
+  return (
+    <motion.div
+      variants={container}
+      initial="hidden"
+      animate="show"
+      className="space-y-5"
+    >
+      {/* (a) Enhanced overview stat tiles */}
+      <motion.div
+        variants={item}
+        className="grid grid-cols-2 gap-3 lg:grid-cols-3"
+      >
+        <StatTile
+          icon={<MessageSquare className="h-4 w-4" />}
+          accent="bg-emerald-500/15 text-emerald-300"
+          label="Total Messages"
+        >
+          <div className="text-3xl font-bold tabular-nums leading-none">
+            <AnimatedCounter value={ov.totalMessages} />
+          </div>
+          <SplitBar
+            incoming={ov.incomingCount}
+            outgoing={ov.outgoingCount}
+            className="mt-2.5"
+          />
+          <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+            <span className="text-emerald-400">{ov.incomingCount} in</span>
+            <span className="text-teal-400">{ov.outgoingCount} out</span>
+          </div>
+        </StatTile>
+
+        <StatTile
+          icon={<Bot className="h-4 w-4" />}
+          accent="bg-teal-500/15 text-teal-300"
+          label="AI vs Owner ratio"
+        >
+          <RatioBar
+            aiCount={ov.aiCount}
+            ownerCount={ov.ownerCount}
+          />
+        </StatTile>
+
+        <StatTile
+          icon={<Zap className="h-4 w-4" />}
+          accent="bg-amber-500/15 text-amber-300"
+          label="Avg Response Time"
+        >
+          <div className="text-3xl font-bold tabular-nums leading-none">
+            {formatResponseTime(ov.avgResponseTimeMs)}
+          </div>
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            Customer → our reply
+          </div>
+        </StatTile>
+
+        <StatTile
+          icon={<Timer className="h-4 w-4" />}
+          accent="bg-sky-500/15 text-sky-300"
+          label="Avg Customer Reply"
+        >
+          <div className="text-3xl font-bold tabular-nums leading-none">
+            {formatDurationMs(ov.avgCustomerResponseMs)}
+          </div>
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            Our reply → customer back
+          </div>
+        </StatTile>
+
+        <StatTile
+          icon={<Gauge className="h-4 w-4" />}
+          accent="bg-violet-500/15 text-violet-300"
+          label="Messages / Day"
+        >
+          <div className="text-3xl font-bold tabular-nums leading-none">
+            <AnimatedCounter value={ov.messagesPerDay} decimals={1} />
+          </div>
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            Avg daily volume
+          </div>
+        </StatTile>
+
+        <StatTile
+          icon={<History className="h-4 w-4" />}
+          accent="bg-cyan-500/15 text-cyan-300"
+          label="Conversation Duration"
+        >
+          <div className="text-3xl font-bold tabular-nums leading-none">
+            <AnimatedCounter value={ov.conversationDuration} />
+            <span className="ml-1 text-base font-medium text-muted-foreground">
+              {ov.conversationDuration === 1 ? 'day' : 'days'}
+            </span>
+          </div>
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            {ov.firstMessageAt
+              ? `from ${shortDate(ov.firstMessageAt)}`
+              : 'No messages yet'}
+            {ov.longestStreak > 0 && (
+              <span className="ml-1 text-amber-400">
+                · 🔥 {ov.longestStreak}d streak
+              </span>
+            )}
+          </div>
+        </StatTile>
+      </motion.div>
+
+      {/* (b) Message timeline (stacked area, 30 days) */}
+      <motion.div variants={item}>
+        <MessageTimelineChart data={stats.messageTimeline} />
+      </motion.div>
+
+      {/* (c) Activity heatmap (7×24 custom grid) */}
+      <motion.div variants={item}>
+        <ActivityHeatmap flow={stats.conversationFlow} />
+      </motion.div>
+
+      {/* (d) Hourly distribution + (e) Day of week — side by side */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <motion.div variants={item}>
+          <HourlyDistributionChart data={stats.hourlyHeatmap} />
+        </motion.div>
+        <motion.div variants={item}>
+          <DayOfWeekChart data={stats.dayOfWeekDistribution} />
+        </motion.div>
+      </div>
+
+      {/* (f) Response time trend (line chart, full width) */}
+      <motion.div variants={item}>
+        <ResponseTimeTrendChart data={stats.responseTimes} />
+      </motion.div>
+
+      {/* (g) Source distribution + (h) Conversation flow — side by side */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <motion.div variants={item}>
+          <SourceDistributionChart data={stats.sourceDistribution} />
+        </motion.div>
+        <motion.div variants={item}>
+          <ConversationFlowViz flow={stats.conversationFlow} />
+        </motion.div>
+      </div>
+    </motion.div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Stats tab — sub-components
+// ---------------------------------------------------------------------------
+
+function StatTile({
+  icon,
+  accent,
+  label,
+  children,
+}: {
+  icon: React.ReactNode
+  accent: string
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <Card className={cn(CARD_CLS, 'relative overflow-hidden p-4')}>
+      <div
+        className={cn(
+          'pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-2xl',
+          accent,
+        )}
+      />
+      <div className="flex items-center gap-2">
+        <span className={cn('grid h-7 w-7 place-items-center rounded-md', accent)}>
+          {icon}
+        </span>
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+      </div>
+      <div className="mt-2">{children}</div>
+    </Card>
+  )
+}
+
+/** Tiny split bar showing incoming vs outgoing proportional volume. */
+function SplitBar({
+  incoming,
+  outgoing,
+  className,
+}: {
+  incoming: number
+  outgoing: number
+  className?: string
+}) {
+  const total = incoming + outgoing
+  const inPct = total > 0 ? (incoming / total) * 100 : 0
+  const outPct = total > 0 ? (outgoing / total) * 100 : 0
+  return (
+    <div className={cn('flex h-2 w-full overflow-hidden rounded-full bg-muted', className)}>
+      <div className="bg-emerald-500/70" style={{ width: `${inPct}%` }} />
+      <div className="bg-teal-500/70" style={{ width: `${outPct}%` }} />
+    </div>
+  )
+}
+
+/** AI vs Owner mini donut-ish ratio bar. */
+function RatioBar({ aiCount, ownerCount }: { aiCount: number; ownerCount: number }) {
+  const total = aiCount + ownerCount
+  const aiPct = total > 0 ? (aiCount / total) * 100 : 0
+  const ownerPct = total > 0 ? (ownerCount / total) * 100 : 0
+  return (
+    <div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-bold tabular-nums leading-none text-emerald-300">
+          {aiCount}
+        </span>
+        <span className="text-base text-muted-foreground">/</span>
+        <span className="text-2xl font-semibold tabular-nums leading-none text-sky-300">
+          {ownerCount}
+        </span>
+      </div>
+      <div className="mt-2.5 flex h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div className="bg-emerald-500" style={{ width: `${aiPct}%` }} />
+        <div className="bg-sky-500" style={{ width: `${ownerPct}%` }} />
+      </div>
+      <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+        <span className="text-emerald-400">
+          {total > 0 ? `${Math.round(aiPct)}% AI` : 'No replies yet'}
+        </span>
+        <span className="text-sky-400">
+          {total > 0 ? `${Math.round(ownerPct)}% You` : '—'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+// (b) Message timeline — stacked AreaChart (30 days)
+function MessageTimelineChart({ data }: { data: StatsTimelinePoint[] }) {
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<TrendingUp className="h-4 w-4" />}
+        title="Message Timeline"
+        description="Daily incoming vs outgoing volume · last 30 days"
+      />
+      <div className="mt-4">
+        <ChartContainer config={TIMELINE_CONFIG} className="h-[220px] w-full">
+          <AreaChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+            <defs>
+              <linearGradient id="incomingFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--color-incoming)" stopOpacity={0.55} />
+                <stop offset="100%" stopColor="var(--color-incoming)" stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="outgoingFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--color-outgoing)" stopOpacity={0.55} />
+                <stop offset="100%" stopColor="var(--color-outgoing)" stopOpacity={0.05} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis
+              dataKey="date"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              minTickGap={24}
+              fontSize={10}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={28}
+              allowDecimals={false}
+              fontSize={10}
+            />
+            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <Area
+              dataKey="incoming"
+              type="monotone"
+              stroke="var(--color-incoming)"
+              strokeWidth={2}
+              fill="url(#incomingFill)"
+              stackId="a"
+            />
+            <Area
+              dataKey="outgoing"
+              type="monotone"
+              stroke="var(--color-outgoing)"
+              strokeWidth={2}
+              fill="url(#outgoingFill)"
+              stackId="a"
+            />
+          </AreaChart>
+        </ChartContainer>
+      </div>
+    </Card>
+  )
+}
+
+// (c) Activity Heatmap — custom 7×24 CSS grid
+function ActivityHeatmap({ flow }: { flow: StatsConversationFlowPoint[] }) {
+  const matrix = React.useMemo(() => buildHeatmapMatrix(flow), [flow])
+  const max = React.useMemo(() => {
+    let m = 0
+    for (const row of matrix) for (const v of row) if (v > m) m = v
+    return m
+  }, [matrix])
+
+  const total = flow.length
+  const [hover, setHover] = React.useState<{ day: number; hour: number; count: number } | null>(null)
+
+  // Opacity scale: 0 → 0.08 (almost empty), max → 1.0
+  const opacityFor = (count: number) => {
+    if (count === 0 || max === 0) return 0.08
+    return 0.2 + 0.8 * (count / max)
+  }
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Flame className="h-4 w-4" />}
+        title="Activity Heatmap"
+        description={`Message density by day-of-week × hour · ${total} total`}
+        action={
+          <div className="hidden items-center gap-1.5 text-[10px] text-muted-foreground sm:flex">
+            <span>Less</span>
+            <div className="flex items-center gap-0.5">
+              {[0.08, 0.3, 0.55, 0.8, 1].map((o) => (
+                <span
+                  key={o}
+                  className="h-3 w-3 rounded-sm bg-emerald-500"
+                  style={{ opacity: o }}
+                />
+              ))}
+            </div>
+            <span>More</span>
+          </div>
+        }
+      />
+
+      <div className="mt-4 overflow-x-auto">
+        <div className="min-w-[640px]">
+          {/* Hour labels across the top */}
+          <div className="mb-1 flex pl-8 text-[9px] text-muted-foreground">
+            {Array.from({ length: 24 }, (_, h) => (
+              <div
+                key={h}
+                className="flex-1 text-center tabular-nums"
+                style={{ minWidth: 0 }}
+              >
+                {h % 3 === 0 ? `${h}` : ''}
+              </div>
+            ))}
+          </div>
+
+          {/* Rows: Mon..Sun */}
+          <div className="space-y-0.5">
+            {matrix.map((row, dayIdx) => (
+              <div key={dayIdx} className="flex items-center gap-0.5">
+                <div className="w-8 shrink-0 text-[10px] font-medium text-muted-foreground">
+                  {HEATMAP_DAYS[dayIdx]}
+                </div>
+                {row.map((count, hour) => (
+                  <div
+                    key={hour}
+                    className="relative flex-1"
+                    style={{ minWidth: 0 }}
+                    onMouseEnter={() => setHover({ day: dayIdx, hour, count })}
+                    onMouseLeave={() => setHover(null)}
+                  >
+                    <div
+                      className="h-4 w-full rounded-sm bg-emerald-500 transition-colors"
+                      style={{ opacity: opacityFor(count) }}
+                      title={`${HEATMAP_DAYS[dayIdx]} ${formatHourLabel(hour)}: ${count} message${count === 1 ? '' : 's'}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          {/* Bottom hour axis (12 AM, 6 AM, 12 PM, 6 PM) */}
+          <div className="mt-1 flex pl-8 text-[9px] text-muted-foreground">
+            {Array.from({ length: 24 }, (_, h) => (
+              <div key={h} className="flex-1 text-center">
+                {h === 0 ? '12a' : h === 6 ? '6a' : h === 12 ? '12p' : h === 18 ? '6p' : ''}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Hover detail footer */}
+      <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>
+          {hover ? (
+            <span className="text-foreground">
+              <span className="font-medium">{HEATMAP_DAYS[hover.day]}</span>{' '}
+              {formatHourLabel(hover.hour)} ·{' '}
+              <span className="font-semibold text-emerald-300">{hover.count}</span>{' '}
+              message{hover.count === 1 ? '' : 's'}
+            </span>
+          ) : (
+            'Hover any cell to see the exact count.'
+          )}
+        </span>
+        {max > 0 && (
+          <span>
+            Peak: <span className="font-semibold text-emerald-300">{max}</span> in a single hour
+          </span>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// (d) Hourly distribution — BarChart with peak highlight
+function HourlyDistributionChart({ data }: { data: StatsHourlyBucket[] }) {
+  const peak = React.useMemo(() => {
+    let p = { hour: 0, count: 0 }
+    for (const b of data) if (b.count > p.count) p = b
+    return p
+  }, [data])
+
+  const chartData = React.useMemo(
+    () =>
+      data.map((b) => ({
+        ...b,
+        label: `${b.hour}`,
+        isPeak: b.hour === peak.hour && peak.count > 0,
+      })),
+    [data, peak],
+  )
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Clock className="h-4 w-4" />}
+        title="Hourly Distribution"
+        description={
+          peak.count > 0
+            ? `Peak at ${formatHourLabel(peak.hour)} · ${peak.count} messages`
+            : 'When this contact is most active'
+        }
+      />
+      <div className="mt-4">
+        <ChartContainer config={HOURLY_CONFIG} className="h-[220px] w-full">
+          <BarChart data={chartData} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis
+              dataKey="label"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={6}
+              fontSize={9}
+              interval={1}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={28}
+              allowDecimals={false}
+              fontSize={10}
+            />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  indicator="dot"
+                  labelFormatter={(_, payload) => {
+                    const hour = payload?.[0]?.payload?.hour
+                    return typeof hour === 'number' ? formatHourLabel(hour) : ''
+                  }}
+                />
+              }
+            />
+            <Bar dataKey="count" radius={[3, 3, 0, 0]} maxBarSize={18}>
+              {chartData.map((d) => (
+                <Cell
+                  key={d.hour}
+                  fill={d.isPeak ? '#f59e0b' : 'var(--color-count)'}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ChartContainer>
+      </div>
+    </Card>
+  )
+}
+
+// (e) Day of Week — horizontal BarChart
+function DayOfWeekChart({ data }: { data: StatsDayOfWeekBucket[] }) {
+  const peak = React.useMemo(() => {
+    let p = { day: '', count: 0 }
+    for (const b of data) if (b.count > p.count) p = b
+    return p
+  }, [data])
+
+  const chartData = React.useMemo(
+    () =>
+      data.map((b) => ({
+        ...b,
+        isPeak: b.day === peak.day && peak.count > 0,
+      })),
+    [data, peak],
+  )
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Calendar className="h-4 w-4" />}
+        title="Day of Week"
+        description={
+          peak.count > 0
+            ? `Most active on ${peak.day} · ${peak.count} messages`
+            : 'Activity by weekday'
+        }
+      />
+      <div className="mt-4">
+        <ChartContainer config={DOW_CONFIG} className="h-[220px] w-full">
+          <BarChart
+            data={chartData}
+            layout="vertical"
+            margin={{ left: 8, right: 16, top: 8, bottom: 0 }}
+          >
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis
+              type="number"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={6}
+              allowDecimals={false}
+              fontSize={10}
+            />
+            <YAxis
+              type="category"
+              dataKey="day"
+              tickLine={false}
+              axisLine={false}
+              width={36}
+              fontSize={11}
+            />
+            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={18}>
+              {chartData.map((d) => (
+                <Cell
+                  key={d.day}
+                  fill={d.isPeak ? '#f59e0b' : 'var(--color-count)'}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ChartContainer>
+      </div>
+    </Card>
+  )
+}
+
+// (f) Response time trend — LineChart with avg ReferenceLine
+function ResponseTimeTrendChart({ data }: { data: StatsResponseTimePoint[] }) {
+  const chartData = React.useMemo(
+    () =>
+      data.map((p, i) => ({
+        idx: i + 1,
+        replyMs: p.replyMs,
+        timestamp: p.timestamp,
+      })),
+    [data],
+  )
+
+  const avg = React.useMemo(() => {
+    if (data.length === 0) return 0
+    return Math.round(data.reduce((s, p) => s + p.replyMs, 0) / data.length)
+  }, [data])
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Activity className="h-4 w-4" />}
+        title="Response Time Trend"
+        description={`AI reply speed over the last ${data.length} replies · avg ${formatResponseTime(avg)}`}
+      />
+      <div className="mt-4">
+        {chartData.length < 2 ? (
+          <div className="flex h-[220px] w-full items-center justify-center text-xs text-muted-foreground">
+            Not enough AI reply logs yet — need at least 2 data points.
+          </div>
+        ) : (
+          <ChartContainer config={RESPONSE_TREND_CONFIG} className="h-[220px] w-full">
+            <LineChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+              <XAxis
+                dataKey="idx"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                fontSize={10}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={44}
+                fontSize={10}
+                tickFormatter={(v: number) => formatResponseTime(v)}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    indicator="dot"
+                    formatter={(value) => (
+                      <span className="font-mono tabular-nums text-foreground">
+                        {formatResponseTime(Number(value))}
+                      </span>
+                    )}
+                  />
+                }
+              />
+              <ReferenceLine
+                y={avg}
+                stroke="#f59e0b"
+                strokeDasharray="4 4"
+                strokeOpacity={0.7}
+                label={{
+                  value: `avg ${formatResponseTime(avg)}`,
+                  position: 'insideTopRight',
+                  fill: '#f59e0b',
+                  fontSize: 10,
+                }}
+              />
+              <Line
+                dataKey="replyMs"
+                type="monotone"
+                stroke="var(--color-replyMs)"
+                strokeWidth={2.5}
+                dot={{ r: 3, fill: 'var(--color-replyMs)', strokeWidth: 0 }}
+                activeDot={{ r: 5 }}
+              />
+            </LineChart>
+          </ChartContainer>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// (g) Source distribution — Donut/PieChart
+function SourceDistributionChart({ data }: { data: StatsSourceBucket[] }) {
+  const total = data.reduce((s, d) => s + d.count, 0)
+
+  const chartData = React.useMemo(
+    () =>
+      data
+        .filter((d) => d.count > 0)
+        .map((d) => ({
+          name: d.source,
+          value: d.count,
+          fill: SOURCE_PIE_COLORS[d.source] ?? '#a3a3a3',
+        })),
+    [data],
+  )
+
+  const SOURCE_LABELS: Record<string, string> = {
+    ai: 'AI replies',
+    owner: 'You (owner)',
+    customer: 'Customer',
+  }
+
+  const config: ChartConfig = React.useMemo(
+    () =>
+      Object.fromEntries(
+        data.map((d) => [
+          d.source,
+          {
+            label: SOURCE_LABELS[d.source] ?? d.source,
+            color: SOURCE_PIE_COLORS[d.source] ?? '#a3a3a3',
+          },
+        ]),
+      ),
+    [data],
+  )
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<BarChart3 className="h-4 w-4" />}
+        title="Source Distribution"
+        description="Who sent what · AI vs You vs Customer"
+      />
+      <div className="mt-4">
+        {chartData.length === 0 || total === 0 ? (
+          <div className="flex h-[220px] w-full items-center justify-center text-xs text-muted-foreground">
+            No messages yet.
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 sm:flex-row">
+            <ChartContainer config={config} className="h-[200px] w-[200px]">
+              <PieChart>
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      indicator="dot"
+                      formatter={(value, name) => {
+                        const v = Number(value)
+                        const pct = total > 0 ? Math.round((v / total) * 100) : 0
+                        return (
+                          <span className="font-mono tabular-nums text-foreground">
+                            {SOURCE_LABELS[String(name)] ?? name}: {v} ({pct}%)
+                          </span>
+                        )
+                      }}
+                    />
+                  }
+                />
+                <Pie
+                  data={chartData}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={48}
+                  outerRadius={72}
+                  paddingAngle={2}
+                  strokeWidth={0}
+                >
+                  {chartData.map((d) => (
+                    <Cell key={d.name} fill={d.fill} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ChartContainer>
+
+            {/* Legend with counts */}
+            <div className="flex w-full flex-col gap-1.5 sm:w-auto">
+              {data.map((d) => {
+                const pct = total > 0 ? Math.round((d.count / total) * 100) : 0
+                const color = SOURCE_PIE_COLORS[d.source] ?? '#a3a3a3'
+                return (
+                  <div
+                    key={d.source}
+                    className="flex items-center justify-between gap-3 rounded-md border bg-background/40 px-2.5 py-1.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="text-xs font-medium">
+                        {SOURCE_LABELS[d.source] ?? d.source}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-xs font-semibold tabular-nums">{d.count}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums">
+                        {pct}%
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+              <div className="mt-0.5 flex items-center justify-between gap-3 px-2.5 text-[10px] text-muted-foreground">
+                <span>Total</span>
+                <span className="font-semibold tabular-nums text-foreground">{total}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// (h) Conversation Flow — custom rhythm visualization
+function ConversationFlowViz({ flow }: { flow: StatsConversationFlowPoint[] }) {
+  // Take the most recent 20 messages so the rhythm chart stays readable.
+  const recent = React.useMemo(() => flow.slice(-20), [flow])
+
+  const maxGap = React.useMemo(() => {
+    let m = 0
+    for (const p of recent) if (p.gap_minutes > m) m = p.gap_minutes
+    return m
+  }, [recent])
+
+  // Bar width is proportional to the gap (logarithmic scale so a 1-minute gap
+  // and a 3-day gap both remain visible). Min 8% so even tiny gaps render.
+  const widthFor = (gap: number) => {
+    if (gap <= 0) return 6
+    if (maxGap <= 0) return 6
+    const log = Math.log10(gap + 1)
+    const logMax = Math.log10(maxGap + 1)
+    return 6 + 94 * (log / (logMax || 1))
+  }
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Activity className="h-4 w-4" />}
+        title="Conversation Flow"
+        description="Recent 20 messages · bar width = time gap since previous"
+      />
+      <div className="mt-4 space-y-1">
+        {recent.length === 0 ? (
+          <div className="flex h-[220px] w-full items-center justify-center text-xs text-muted-foreground">
+            No messages yet.
+          </div>
+        ) : (
+          recent.map((p, i) => {
+            const isIn = p.direction === 'in'
+            const widthPct = widthFor(p.gap_minutes)
+            const gapLabel =
+              p.gap_minutes <= 0
+                ? 'first'
+                : p.gap_minutes < 60
+                  ? `${p.gap_minutes}m`
+                  : p.gap_minutes < 60 * 24
+                    ? `${Math.round(p.gap_minutes / 60)}h ${p.gap_minutes % 60}m`
+                    : `${Math.round(p.gap_minutes / (60 * 24))}d`
+            return (
+              <div key={i} className="flex items-center gap-2 text-[10px]">
+                <span
+                  className={cn(
+                    'w-7 shrink-0 text-right tabular-nums',
+                    isIn ? 'text-emerald-400' : 'text-teal-400',
+                  )}
+                >
+                  {isIn ? 'IN' : 'OUT'}
+                </span>
+                <div className="flex h-4 flex-1 items-center">
+                  <div
+                    className={cn(
+                      'h-3 rounded-sm transition-all',
+                      isIn ? 'bg-emerald-500/80' : 'bg-teal-500/80',
+                    )}
+                    style={{ width: `${widthPct}%` }}
+                    title={`${formatDateTime(p.timestamp)} · gap ${gapLabel}`}
+                  />
+                </div>
+                <span className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">
+                  {gapLabel}
+                </span>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500/80" /> Incoming (customer)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-teal-500/80" /> Outgoing (AI / you)
+        </span>
+        <span className="ml-auto">Bar width = time since previous message</span>
+      </div>
+    </Card>
   )
 }

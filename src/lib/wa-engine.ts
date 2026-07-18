@@ -6,6 +6,7 @@
 // ============================================================
 import { db } from '@/lib/db'
 import { generateReply } from '@/lib/ai-engine'
+import { dispatchWebhooks } from '@/lib/webhook-dispatcher'
 
 export interface ProcessIncomingResult {
   ok: boolean
@@ -103,6 +104,8 @@ export async function confirmWhatsAppLogin(number: string, name: string) {
       message: `WhatsApp connected as ${name} (${number})`,
     },
   })
+  // Fire webhook: whatsapp.connected
+  void dispatchWebhooks('whatsapp.connected', { number, name, connectedAt: new Date().toISOString() })
 }
 
 export async function disconnectWhatsApp() {
@@ -123,6 +126,8 @@ export async function disconnectWhatsApp() {
   await db.log.create({
     data: { category: 'whatsapp', level: 'warn', message: 'WhatsApp disconnected' },
   })
+  // Fire webhook: whatsapp.disconnected
+  void dispatchWebhooks('whatsapp.disconnected', { reason: 'manual' })
 }
 
 export async function logoutWhatsApp() {
@@ -177,6 +182,8 @@ export async function processIncomingMessage(opts: {
         contactId: contact.id,
       },
     })
+    // Fire webhook: contact.created
+    void dispatchWebhooks('contact.created', { contact: { id: contact.id, name: contact.name, phone: contact.phone } })
   }
 
   // 2. Save incoming message
@@ -200,6 +207,9 @@ export async function processIncomingMessage(opts: {
       status: contact.status === 'new' ? 'active' : contact.status,
     },
   })
+
+  // Fire webhook: message.received
+  void dispatchWebhooks('message.received', { contactId: contact.id, text })
 
   // 4. Lead scoring + intent detection (heuristic + AI in generateReply)
   // 5. Check human-takeover: if active, skip AI reply
@@ -252,6 +262,8 @@ export async function processIncomingMessage(opts: {
         contactId: contact.id,
       },
     })
+    // Fire webhook: ai.error
+    void dispatchWebhooks('ai.error', { contactId: contact.id, error: (err as Error).message })
     return {
       ok: false,
       contactId: contact.id,
@@ -276,6 +288,9 @@ export async function processIncomingMessage(opts: {
       leadDelta: Math.max(0, result.leadScore - contact.leadScore),
     },
   })
+
+  // Fire webhook: message.sent (AI)
+  void dispatchWebhooks('message.sent', { contactId: contact.id, text: result.reply, source: 'ai', messageId: outgoing.id })
 
   // 9. Update memory
   for (const m of result.memoryUpdates) {
@@ -311,6 +326,11 @@ export async function processIncomingMessage(opts: {
     })
   }
 
+  // Fire webhook: lead.created (first time crossing into 'lead' status)
+  if (previousScore < 25 && newScore >= 25 && contact.status !== 'lead') {
+    void dispatchWebhooks('lead.created', { contactId: contact.id, leadScore: newScore, category: result.category })
+  }
+
   // 12. Owner request -> notify owner
   let ownerNotified = false
   const owner = await db.owner.findUnique({ where: { id: 'owner' } })
@@ -338,6 +358,8 @@ export async function processIncomingMessage(opts: {
         contactId: contact.id,
       },
     })
+    // Fire webhook: owner.requested
+    void dispatchWebhooks('owner.requested', { contactId: contact.id, phone, lastMessage: text })
   }
 
   // 13. Hot-lead owner notification
@@ -360,6 +382,8 @@ export async function processIncomingMessage(opts: {
         contactId: contact.id,
       },
     })
+    // Fire webhook: lead.hot
+    void dispatchWebhooks('lead.hot', { contactId: contact.id, leadScore: newScore, category: result.category, threshold: owner.leadThreshold ?? 70 })
   }
 
   // 14. AI log
@@ -408,6 +432,8 @@ export async function sendOwnerMessage(contactId: string, text: string) {
       contactId,
     },
   })
+  // Fire webhook: message.sent (owner)
+  void dispatchWebhooks('message.sent', { contactId, text, source: 'owner', messageId: msg.id })
   return msg
 }
 

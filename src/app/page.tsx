@@ -22,6 +22,8 @@ import { ScheduledView } from '@/components/views/scheduled-view'
 import { AnalyticsView } from '@/components/views/analytics-view'
 import { ContactProfileView } from '@/components/views/contact-profile-view'
 import { SearchView } from '@/components/views/search-view'
+import { WebhooksView } from '@/components/views/webhooks-view'
+import { DataManagementView } from '@/components/views/data-management-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
@@ -163,6 +165,8 @@ export default function Home() {
           {active === 'autoreply-settings' && <AutoReplySettingsView />}
           {active === 'logs' && <LogsView />}
           {active === 'system' && <SystemView />}
+          {active === 'webhooks' && <WebhooksView />}
+          {active === 'data-management' && <DataManagementView />}
         </PageTransition>
       </AnimatePresence>
 

@@ -309,3 +309,36 @@ model ScheduledMessage {
   @@index([status, scheduledAt])
   @@index([contactId])
 }
+
+// ---------------- Webhooks (outgoing event integrations) ----------------
+model Webhook {
+  id        String   @id @default(cuid())
+  name      String
+  url       String
+  secret    String   @default("")  // HMAC signature secret
+  events    String   @default("[]") // JSON array of event types
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+}
+
+// ---------------- Webhook delivery log (per-attempt record) ----------------
+model WebhookDelivery {
+  id           String    @id @default(cuid())
+  webhookId    String
+  event        String
+  payload      String   @default("")  // JSON sent
+  status       String   @default("pending") // pending | delivered | failed
+  statusCode   Int      @default(0)  // HTTP status code from the target
+  response     String   @default("")  // first 500 chars of response body
+  attempts     Int      @default(0)
+  createdAt    DateTime  @default(now())
+  deliveredAt  DateTime?
+
+  webhook      Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([status])
+}

@@ -71,6 +71,8 @@ export type ViewKey =
   | 'analytics'
   | 'contact-profile'
   | 'search'
+  | 'data-management'
+  | 'webhooks'
 
 export interface AuthUser {
   id: string
@@ -292,4 +294,63 @@ export interface SearchResponse {
   limit: number
   q: string
   contactsFacet: ContactFacetItem[]
+}
+
+// ---------------- Webhooks ----------------
+export type WebhookEventCategory =
+  | 'message'
+  | 'lead'
+  | 'owner'
+  | 'ai'
+  | 'whatsapp'
+  | 'contact'
+
+export interface WebhookEventDef {
+  value: string
+  label: string
+  description: string
+  category: WebhookEventCategory
+}
+
+export const WEBHOOK_EVENTS: WebhookEventDef[] = [
+  { value: 'message.received', label: 'Message Received', description: 'A new incoming WhatsApp message from a contact', category: 'message' },
+  { value: 'message.sent', label: 'Message Sent', description: 'A reply was sent (AI or owner) to a contact', category: 'message' },
+  { value: 'lead.created', label: 'Lead Created', description: 'A contact was first tagged as a lead', category: 'lead' },
+  { value: 'lead.hot', label: 'Hot Lead Detected', description: 'A contact crossed the lead score threshold', category: 'lead' },
+  { value: 'owner.requested', label: 'Owner Requested', description: 'A contact asked to speak to a human', category: 'owner' },
+  { value: 'ai.error', label: 'AI Error', description: 'The AI engine failed to produce a reply', category: 'ai' },
+  { value: 'contact.created', label: 'Contact Created', description: 'A new contact was added to the database', category: 'contact' },
+  { value: 'whatsapp.connected', label: 'WhatsApp Connected', description: 'The WhatsApp session was connected', category: 'whatsapp' },
+  { value: 'whatsapp.disconnected', label: 'WhatsApp Disconnected', description: 'The WhatsApp session was disconnected', category: 'whatsapp' },
+]
+
+export interface WebhookDeliveryStat {
+  total: number
+  delivered: number
+  failed: number
+  lastDeliveryAt: string | null
+}
+
+export interface WebhookListItem {
+  id: string
+  name: string
+  url: string
+  secret: string // masked
+  events: string[]
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+  deliveries: WebhookDeliveryStat
+}
+
+export interface WebhookDeliveryRow {
+  id: string
+  event: string
+  payload: string
+  status: string
+  statusCode: number
+  response: string
+  attempts: number
+  createdAt: string
+  deliveredAt: string | null
 }
