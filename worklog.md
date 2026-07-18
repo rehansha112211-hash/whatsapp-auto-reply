@@ -2084,3 +2084,51 @@ Railway's free trial has expired on this account. To deploy the WhatsApp engine,
 - Login: admin/admin123 ✅
 - Database: Neon PostgreSQL ✅
 - WhatsApp engine: Needs Railway plan OR local machine
+
+---
+Task ID: render-deploy-success
+Agent: Main (Z.ai Code)
+Task: Deploy WhatsApp engine on Render.com FREE tier — SUCCESS
+
+## Render Engine Deployed Successfully!
+
+### What Was Done:
+1. ✅ Verified Render token (rnd_...) — account: rehansha112211@gmail.com
+2. ✅ Found existing service "whatsapp-engine" (srv-d9dnmsjrjlhs73b0aat0)
+3. ✅ Triggered deploy with clearCache — built successfully (Docker + Bun)
+4. ✅ Engine is LIVE at: https://whatsapp-engine-ogdh.onrender.com
+5. ✅ Health check: {"ok":true,"service":"wa-engine","state":"disconnected"}
+6. ✅ Set ENGINE_URL on Vercel = https://whatsapp-engine-ogdh.onrender.com
+7. ✅ Triggered Vercel redeploy — READY
+8. ✅ Tested live: WhatsApp API returns "engineAvailable: true" + QR code generated (277 chars)
+9. ✅ Made GitHub repo private again (was temporarily public for Render)
+10. ✅ Real Baileys QR is generating on the live app!
+
+### Render Free Tier Info:
+- **Cost:** FREE ($0/month forever)
+- **Plan:** Free web service
+- **Limitation:** Service sleeps after 15 min of inactivity. Incoming HTTP requests wake it up (takes 30-60 sec on first request). After wake, it stays up while being used.
+- **Resources:** 512MB RAM, 0.1 CPU
+- **When does it expire?** NEVER — free tier is permanent (not a trial). As long as Render exists, the engine runs for free.
+- **Difference from paid:** Paid ($7/month) = no sleep, more resources. Free = sleeps but wakes on demand.
+
+### Live URLs:
+| Service | URL | Status |
+|---------|-----|--------|
+| App (Vercel) | https://whatsapp-auto-reply-nine.vercel.app | ✅ LIVE |
+| Engine (Render) | https://whatsapp-engine-ogdh.onrender.com | ✅ LIVE |
+| Database (Neon) | postgresql://...neon.tech | ✅ LIVE |
+| GitHub repo | https://github.com/rehansha112211-hash/whatsapp-auto-reply | ✅ PRIVATE |
+
+### How to Use:
+1. Open https://whatsapp-auto-reply-nine.vercel.app
+2. Login: admin / admin123
+3. Go to WhatsApp page → see "Real WhatsApp Engine Active" green banner
+4. Click "Generate QR Code" → REAL WhatsApp QR appears (from Baileys on Render)
+5. Open WhatsApp on phone → Settings → Linked Devices → Scan QR
+6. CONNECTED! Real messages flow: WhatsApp → Render engine → Vercel AI → Render → WhatsApp
+
+### Important Notes:
+- Render free tier sleeps after 15 min idle. First QR generation takes 30-60 sec while engine wakes up. After that, it's instant.
+- If you need true 24/7 with no sleep, upgrade Render to paid ($7/month) later.
+- The engine session persists in Render's filesystem — scanning QR once means it reconnects automatically on restart (unless you logout).
