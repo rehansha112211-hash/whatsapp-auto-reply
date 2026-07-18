@@ -22,7 +22,7 @@ interface ChatMessage {
   content: string
 }
 
-async function callOpenRouter(
+export async function callOpenRouter(
   messages: ChatMessage[],
   opts: { temperature?: number; topP?: number; maxTokens?: number } = {},
 ): Promise<{ content: string; model: string }> {
