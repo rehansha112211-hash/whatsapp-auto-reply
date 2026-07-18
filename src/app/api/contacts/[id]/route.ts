@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import type { ContactDetail, ContactStatus } from '@/lib/types'
+import type { ContactDetail, ContactStatus, TagItem } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -108,6 +108,10 @@ export async function GET(
         take: 5,
         select: { source: true, text: true },
       },
+      tags: {
+        orderBy: [{ tag: { name: 'asc' } }],
+        select: { tag: { select: { id: true, name: true, color: true } } },
+      },
     },
   })
 
@@ -127,6 +131,12 @@ export async function GET(
     recentMessages: contact.messages,
   })
 
+  const tags: TagItem[] = contact.tags.map((ct) => ({
+    id: ct.tag.id,
+    name: ct.tag.name,
+    color: ct.tag.color,
+  }))
+
   const detail: ContactDetail = {
     id: contact.id,
     name: contact.name,
@@ -143,6 +153,7 @@ export async function GET(
     lastMessageAt: contact.lastMessageAt?.toISOString() ?? null,
     memories: contact.memories.map((m) => ({ key: m.key, value: m.value })),
     summary,
+    tags,
   }
 
   return NextResponse.json(detail)
@@ -227,6 +238,10 @@ export async function PATCH(
           take: 5,
           select: { source: true, text: true },
         },
+        tags: {
+          orderBy: [{ tag: { name: 'asc' } }],
+          select: { tag: { select: { id: true, name: true, color: true } } },
+        },
       },
     })
 
@@ -241,6 +256,12 @@ export async function PATCH(
       memories: updated.memories,
       recentMessages: updated.messages,
     })
+
+    const tags: TagItem[] = updated.tags.map((ct) => ({
+      id: ct.tag.id,
+      name: ct.tag.name,
+      color: ct.tag.color,
+    }))
 
     const detail: ContactDetail = {
       id: updated.id,
@@ -258,6 +279,7 @@ export async function PATCH(
       lastMessageAt: updated.lastMessageAt?.toISOString() ?? null,
       memories: updated.memories.map((m) => ({ key: m.key, value: m.value })),
       summary,
+      tags,
     }
 
     return NextResponse.json(detail)

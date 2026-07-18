@@ -47,10 +47,13 @@ import {
   CornerUpLeft,
   ArrowDown,
   ExternalLink,
+  Tag as TagIcon,
+  Plus,
+  Tags,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
+import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
 import {
   colorFromString,
   initials,
@@ -58,6 +61,7 @@ import {
   formatTime,
   formatDateTime,
   downloadFile,
+  tagColor,
 } from '@/lib/format'
 import { useRealtime } from '@/hooks/use-realtime'
 import { LeadBadge } from '@/components/status'
@@ -67,6 +71,8 @@ import type {
   ContactDetail,
   ContactStatus,
   MessageStatus,
+  TagItem,
+  TagWithCount,
   WhatsAppState,
 } from '@/lib/types'
 
@@ -77,6 +83,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Progress } from '@/components/ui/progress'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -102,6 +113,26 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  QuickReplyPicker,
+  QuickReplySlashDropdown,
+  showQuickReplyToast,
+} from '@/components/quick-replies/quick-reply-picker'
+import { QuickReplyManagerDialog } from '@/components/quick-replies/quick-reply-manager-dialog'
+import {
+  useQuickReplies,
+  useSlashCommand,
+} from '@/components/quick-replies/quick-reply-hooks'
+import type { QuickReplyRow } from '@/lib/types'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 
 // ------------------------------------------------------------
 // Types
@@ -300,6 +331,245 @@ function SourceBadge({ source }: { source: ChatMessage['source'] }) {
   )
 }
 
+// ------------------------------------------------------------
+// Tag badges & picker
+// ------------------------------------------------------------
+const MAX_TAG_BADGES = 2
+
+/** A single small colored pill for a tag. */
+function TagPill({
+  tag,
+  onRemove,
+  size = 'sm',
+}: {
+  tag: TagItem
+  onRemove?: () => void
+  size?: 'sm' | 'md'
+}) {
+  const c = tagColor(tag.color)
+  return (
+    <span
+      className={cn(
+        'group/tag inline-flex items-center gap-1 rounded-md font-medium',
+        size === 'sm' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]',
+        c.bg,
+        c.text,
+      )}
+    >
+      <span className={cn('h-1.5 w-1.5 rounded-full', c.dot)} aria-hidden />
+      <span className="truncate max-w-[120px]">{tag.name}</span>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onRemove()
+          }}
+          className="ml-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:bg-foreground/15 group-hover/tag:opacity-100"
+          aria-label={`Remove ${tag.name} tag`}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </span>
+  )
+}
+
+/** Compact inline cluster: up to MAX_TAG_BADGES + "+N" overflow chip. */
+function TagBadgeCluster({
+  tags,
+  onRemove,
+  className,
+}: {
+  tags: TagItem[]
+  onRemove?: (tagId: string) => void
+  className?: string
+}) {
+  if (!tags || tags.length === 0) return null
+  const visible = tags.slice(0, MAX_TAG_BADGES)
+  const overflow = tags.length - visible.length
+  return (
+    <div className={cn('flex flex-wrap items-center gap-1', className)}>
+      {visible.map((t) => (
+        <TagPill key={t.id} tag={t} onRemove={onRemove ? () => onRemove(t.id) : undefined} />
+      ))}
+      {overflow > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              +{overflow}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            {tags.slice(MAX_TAG_BADGES).map((t) => t.name).join(', ')}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
+/** Popover that lets the user search existing tags + create a new one. */
+function TagPicker({
+  open,
+  onOpenChange,
+  allTags,
+  currentTagIds,
+  onAddExisting,
+  onCreate,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  allTags: TagWithCount[]
+  currentTagIds: Set<string>
+  onAddExisting: (tagId: string) => Promise<void> | void
+  onCreate: (name: string) => Promise<void> | void
+}) {
+  const [query, setQuery] = React.useState('')
+  const [creating, setCreating] = React.useState(false)
+  const [addingId, setAddingId] = React.useState<string | null>(null)
+
+  // Reset the search field each time the popover opens.
+  React.useEffect(() => {
+    if (open) {
+      setQuery('')
+      setCreating(false)
+      setAddingId(null)
+    }
+  }, [open])
+
+  const q = query.trim().toLowerCase()
+  const filtered = React.useMemo(
+    () =>
+      allTags.filter((t) => (q ? t.name.toLowerCase().includes(q) : true)),
+    [allTags, q],
+  )
+
+  // Show a "create" option when the user typed something that doesn't match
+  // an existing tag exactly (case-insensitive).
+  const trimmedQuery = query.trim()
+  const exactMatch = allTags.some(
+    (t) => t.name.toLowerCase() === trimmedQuery.toLowerCase(),
+  )
+  const canCreate = trimmedQuery.length > 0 && !exactMatch
+
+  const handleCreate = async () => {
+    if (!canCreate) return
+    setCreating(true)
+    try {
+      await onCreate(trimmedQuery)
+      onOpenChange(false)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handlePick = async (tagId: string) => {
+    setAddingId(tagId)
+    try {
+      await onAddExisting(tagId)
+      onOpenChange(false)
+    } finally {
+      setAddingId(null)
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 text-xs"
+          aria-label="Add tag"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add tag
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <div className="border-b p-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search or create tag…"
+              className="h-8 pl-7 pr-7 text-xs"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-h-64 overflow-y-auto p-1 scrollbar-thin">
+          {filtered.length === 0 && !canCreate ? (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No tags found.
+            </div>
+          ) : (
+            filtered.map((t) => {
+              const c = tagColor(t.color)
+              const active = currentTagIds.has(t.id)
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  onClick={() => void handlePick(t.id)}
+                  disabled={active || addingId === t.id}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                    active
+                      ? 'cursor-default opacity-50'
+                      : 'hover:bg-muted',
+                  )}
+                >
+                  <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', c.dot)} />
+                  <span className="flex-1 truncate">{t.name}</span>
+                  {active ? (
+                    <Check className="h-3 w-3 text-emerald-400" />
+                  ) : addingId === t.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                  ) : (
+                    <span className="text-[10px] text-muted-foreground tabular-nums">
+                      {t.contactCount}
+                    </span>
+                  )}
+                </button>
+              )
+            })
+          )}
+          {canCreate && (
+            <button
+              type="button"
+              onClick={() => void handleCreate()}
+              disabled={creating}
+              className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed bg-background/40 px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted"
+            >
+              {creating ? (
+                <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />
+              ) : (
+                <Plus className="h-3 w-3 text-emerald-400" />
+              )}
+              <span className="flex-1">
+                Create tag <span className="font-semibold">“{trimmedQuery}”</span>
+              </span>
+            </button>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function MessageBubble({
   message,
   onReply,
@@ -415,11 +685,14 @@ interface ConversationListProps {
   selectedId: string | null
   search: string
   filter: FilterKey
+  tagFilter: string
+  allTags: TagWithCount[]
   totalUnread: number
   markingAllRead: boolean
   onSelect: (id: string) => void
   onSearchChange: (v: string) => void
   onFilterChange: (v: FilterKey) => void
+  onTagFilterChange: (tag: string) => void
   onMarkAllRead: () => void
 }
 
@@ -429,13 +702,22 @@ function ConversationList({
   selectedId,
   search,
   filter,
+  tagFilter,
+  allTags,
   totalUnread,
   markingAllRead,
   onSelect,
   onSearchChange,
   onFilterChange,
+  onTagFilterChange,
   onMarkAllRead,
 }: ConversationListProps) {
+  const [tagFilterOpen, setTagFilterOpen] = React.useState(false)
+  const activeTag = React.useMemo(
+    () => (tagFilter ? allTags.find((t) => t.name === tagFilter) ?? null : null),
+    [tagFilter, allTags],
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
@@ -470,7 +752,7 @@ function ConversationList({
             </button>
           )}
         </div>
-        {/* Filter + Mark all read */}
+        {/* Filter + Tag filter + Mark all read */}
         <div className="mt-2 flex items-center gap-1.5">
           <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
@@ -485,6 +767,79 @@ function ConversationList({
               ))}
             </SelectContent>
           </Select>
+          {/* Tag filter popover */}
+          <Popover open={tagFilterOpen} onOpenChange={setTagFilterOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={tagFilter ? 'default' : 'outline'}
+                    size="icon"
+                    className={cn(
+                      'h-8 w-8 shrink-0',
+                      tagFilter &&
+                        'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+                    )}
+                    aria-label="Filter by tag"
+                  >
+                    <TagIcon className="h-3.5 w-3.5" />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">Filter by tag</TooltipContent>
+            </Tooltip>
+            <PopoverContent align="end" className="w-56 p-0">
+              <div className="border-b px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Filter by tag
+              </div>
+              <div className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
+                {allTags.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    No tags yet.
+                  </div>
+                ) : (
+                  allTags.map((t) => {
+                    const c = tagColor(t.color)
+                    const isActive = tagFilter === t.name
+                    return (
+                      <button
+                        type="button"
+                        key={t.id}
+                        onClick={() => {
+                          onTagFilterChange(isActive ? '' : t.name)
+                          setTagFilterOpen(false)
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted',
+                          isActive && 'bg-muted',
+                        )}
+                      >
+                        <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', c.dot)} />
+                        <span className="flex-1 truncate">{t.name}</span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {t.contactCount}
+                        </span>
+                        {isActive && <Check className="h-3 w-3 text-emerald-400" />}
+                      </button>
+                    )
+                  })
+                )}
+                {tagFilter && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onTagFilterChange('')
+                      setTagFilterOpen(false)
+                    }}
+                    className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed bg-background/40 px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted"
+                  >
+                    <X className="h-3 w-3" />
+                    Clear tag filter
+                  </button>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
           {totalUnread > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -508,6 +863,25 @@ function ConversationList({
           )}
         </div>
       </div>
+
+      {/* Active tag filter banner */}
+      {activeTag && (
+        <div className="flex items-center justify-between gap-2 border-b bg-primary/5 px-3 py-1.5 text-[11px]">
+          <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
+            <Tags className="h-3 w-3 shrink-0 text-primary" />
+            <span className="truncate">Tagged:</span>
+            <TagPill tag={activeTag} />
+          </span>
+          <button
+            type="button"
+            onClick={() => onTagFilterChange('')}
+            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Clear tag filter"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Unread banner */}
       {totalUnread > 0 && (
@@ -539,9 +913,13 @@ function ConversationList({
               <Inbox className="h-6 w-6" />
             </div>
             <div>
-              <div className="text-sm font-medium">No conversations yet</div>
+              <div className="text-sm font-medium">
+                {tagFilter ? `No conversations tagged “${tagFilter}”` : 'No conversations yet'}
+              </div>
               <div className="mt-0.5 text-[11px] text-muted-foreground">
-                Use the Simulator to test the AI.
+                {tagFilter
+                  ? 'Try a different tag or clear the filter.'
+                  : 'Use the Simulator to test the AI.'}
               </div>
             </div>
           </div>
@@ -600,6 +978,10 @@ function ConversationList({
                         <span className="text-[10px] text-muted-foreground">{c.phone}</span>
                         {c.leadScore >= 25 && <LeadBadge score={c.leadScore} className="text-[9px]" />}
                       </div>
+                      {/* Tag badges (up to 2 + "+N") */}
+                      {c.tags.length > 0 && (
+                        <TagBadgeCluster tags={c.tags} className="mt-1.5" />
+                      )}
                     </div>
                   </button>
                 </li>
@@ -639,9 +1021,23 @@ function ChatWindow({
   const [text, setText] = React.useState('')
   const [exporting, setExporting] = React.useState(false)
   const [showScrollButton, setShowScrollButton] = React.useState(false)
+  const [scheduleOpen, setScheduleOpen] = React.useState(false)
+  const [scheduleAt, setScheduleAt] = React.useState('')
+  const [scheduling, setScheduling] = React.useState(false)
+  const [qrManagerOpen, setQrManagerOpen] = React.useState(false)
+  const [cursor, setCursor] = React.useState(0)
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const pinnedToBottomRef = React.useRef(true)
+
+  // Quick replies: shared between the Zap popover, the slash-command
+  // dropdown, and the manager dialog.
+  const qr = useQuickReplies()
+  const slash = useSlashCommand({
+    text,
+    cursor,
+    items: qr.items,
+  })
 
   // Auto-scroll: always jump to bottom when switching contacts; only follow
   // new messages when the user hasn't scrolled up to read history.
@@ -733,6 +1129,62 @@ function ChatWindow({
     textareaRef.current?.focus()
   }
 
+  // --- Quick reply insertion ---
+  // Insert a quick reply body into the composer. When the textarea is empty
+  // the body replaces it; otherwise the body is appended after a separating
+  // newline so multi-line snippets stay readable.
+  const insertQuickReply = (reply: QuickReplyRow) => {
+    setText((prev) => {
+      const trimmed = prev.replace(/\s+$/, '')
+      if (!trimmed) return reply.body
+      return `${trimmed}\n${reply.body}`
+    })
+    // Place cursor at the end after insertion.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const end = ta.value.length
+      ta.focus()
+      ta.setSelectionRange(end, end)
+      setCursor(end)
+    })
+    void qr.bumpUsage(reply.id)
+    showQuickReplyToast(reply)
+  }
+
+  // Insert from slash-command dropdown: replaces the `/partial` token at the
+  // cursor with the chosen reply's body.
+  const insertSlashReply = (reply: QuickReplyRow) => {
+    const det = slash.detection
+    if (!det) return
+    const before = text.slice(0, det.start)
+    const after = text.slice(det.end)
+    const next = `${before}${reply.body}${after}`
+    setText(next)
+    const newCursor = det.start + reply.body.length
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(newCursor, newCursor)
+      setCursor(newCursor)
+    })
+    slash.reset()
+    void qr.bumpUsage(reply.id)
+    showQuickReplyToast(reply)
+  }
+
+  // Composer change handler — keep cursor in sync so the slash dropdown
+  // updates as the user types or moves the caret.
+  const handleComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setText(e.target.value)
+    setCursor(e.target.selectionStart)
+  }
+  const handleComposerSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const ta = e.currentTarget
+    setCursor(ta.selectionStart)
+  }
+
   if (!contact) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
@@ -761,9 +1213,90 @@ function ChatWindow({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash-command dropdown navigation (only when matches are visible).
+    if (slash.matches.length > 0 && slash.detection) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        slash.setActiveIndex(
+          (slash.activeIndex + 1) % slash.matches.length,
+        )
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        slash.setActiveIndex(
+          (slash.activeIndex - 1 + slash.matches.length) % slash.matches.length,
+        )
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        const picked = slash.matches[slash.activeIndex]
+        if (picked) insertSlashReply(picked)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        slash.reset()
+        // Collapse detection by moving the cursor out of the slash token.
+        const ta = textareaRef.current
+        if (ta) {
+          const end = ta.value.length
+          ta.setSelectionRange(end, end)
+          setCursor(end)
+        }
+        return
+      }
+      if (e.key === 'Tab') {
+        // Tab also selects the active match (handy on mobile keyboards
+        // where Enter is reserved by the send shortcut).
+        e.preventDefault()
+        const picked = slash.matches[slash.activeIndex]
+        if (picked) insertSlashReply(picked)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSubmit()
+    }
+  }
+
+  // --- Schedule dialog helpers ---
+  const openSchedule = () => {
+    if (!text.trim() || !contact) return
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const d = new Date(Date.now() + 60 * 60 * 1000)
+    setScheduleAt(
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+        `T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    )
+    setScheduleOpen(true)
+  }
+
+  const handleScheduleSubmit = async () => {
+    if (!contact || !text.trim() || !scheduleAt) return
+    setScheduling(true)
+    try {
+      await apiPost<{ item: { id: string } }>(
+        '/api/scheduled',
+        {
+          contactId: contact.contactId,
+          text: text.trim(),
+          scheduledAt: new Date(scheduleAt).toISOString(),
+        },
+      )
+      toast.success('Message scheduled', {
+        description: `Will be sent to ${contact.name} at ${new Date(scheduleAt).toLocaleString()}`,
+      })
+      setScheduleOpen(false)
+    } catch (err) {
+      toast.error('Failed to schedule message', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
+      setScheduling(false)
     }
   }
 
@@ -788,7 +1321,7 @@ function ChatWindow({
         </Button>
         <Avatar name={contact.name} phone={contact.phone} size="sm" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="truncate text-sm font-semibold">{contact.name}</span>
             {contact.leadScore >= 25 && <LeadBadge score={contact.leadScore} />}
             {contact.humanMode && (
@@ -796,6 +1329,7 @@ function ChatWindow({
                 Human
               </Badge>
             )}
+            {contact.tags.length > 0 && <TagBadgeCluster tags={contact.tags} />}
           </div>
           <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
         </div>
@@ -921,17 +1455,48 @@ function ChatWindow({
             <span>AI is handling this conversation. Take over to reply manually.</span>
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div className="relative flex items-end gap-2">
+          <QuickReplySlashDropdown
+            matches={slash.matches}
+            activeIndex={slash.activeIndex}
+            detection={slash.detection}
+            onSelect={insertSlashReply}
+            onHover={slash.setActiveIndex}
+          />
           <Textarea
             ref={textareaRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={handleComposerChange}
+            onKeyUp={handleComposerSelect}
+            onClick={handleComposerSelect}
+            onSelect={handleComposerSelect}
             onKeyDown={handleKeyDown}
-            placeholder={aiActive ? 'Type to take over & send…' : 'Type a message…'}
+            placeholder={aiActive ? 'Type to take over & send… · / for quick replies' : 'Type a message… · / for quick replies'}
             className="min-h-10 max-h-30 resize-none text-sm"
             rows={1}
             aria-label="Message composer"
           />
+          <QuickReplyPicker
+            items={qr.items}
+            loading={qr.loading}
+            onPick={insertQuickReply}
+            onManage={() => setQrManagerOpen(true)}
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-10 shrink-0 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
+                onClick={openSchedule}
+                disabled={!text.trim() || !contact}
+                aria-label="Schedule message"
+              >
+                <Clock className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Schedule this message for later</TooltipContent>
+          </Tooltip>
           <Button
             onClick={handleSubmit}
             disabled={!text.trim() || sending}
@@ -958,6 +1523,76 @@ function ChatWindow({
           <span className="tabular-nums">{text.length}/4000</span>
         </div>
       </div>
+
+      {/* Schedule-message dialog (composed from current composer text) */}
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Clock className="h-4 w-4 text-emerald-400" />
+              Schedule message
+            </DialogTitle>
+            <DialogDescription>
+              Send this message to {contact?.name} at a future time.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4">
+            <div className="rounded-md border bg-muted/40 p-3 text-xs text-foreground/80">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Message preview
+              </div>
+              <p className="whitespace-pre-wrap break-words">{text.trim()}</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="chat-sched-at" className="text-xs">
+                Send at
+              </Label>
+              <Input
+                id="chat-sched-at"
+                type="datetime-local"
+                value={scheduleAt}
+                onChange={(e) => setScheduleAt(e.target.value)}
+                className="bg-background text-sm [color-scheme:dark]"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setScheduleOpen(false)}
+              disabled={scheduling}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleScheduleSubmit}
+              disabled={scheduling || !scheduleAt || !text.trim()}
+              className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+            >
+              {scheduling ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Clock className="h-4 w-4" />
+              )}
+              Schedule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Reply manager dialog — opened from the Zap popover */}
+      <QuickReplyManagerDialog
+        open={qrManagerOpen}
+        onOpenChange={setQrManagerOpen}
+        items={qr.items}
+        loading={qr.loading}
+        onCreate={qr.createReply}
+        onUpdate={qr.updateReply}
+        onDelete={qr.deleteReply}
+      />
     </div>
   )
 }
@@ -970,10 +1605,14 @@ interface DetailsPanelProps {
   loading: boolean
   waConnected: boolean
   pinned: boolean
+  allTags: TagWithCount[]
   onToggleHumanMode: (enabled: boolean) => Promise<void>
   onPin: (pinned: boolean) => Promise<void>
   onStatusChange: (status: ContactStatus) => Promise<void>
   onNotesSave: (notes: string) => Promise<void>
+  onAddTag: (tagId: string) => Promise<void>
+  onCreateTag: (name: string) => Promise<void>
+  onRemoveTag: (tagId: string) => Promise<void>
   onViewProfile?: (contactId: string) => void
 }
 
@@ -981,15 +1620,21 @@ function DetailsPanel({
   detail,
   loading,
   pinned,
+  allTags,
   onToggleHumanMode,
   onPin,
   onStatusChange,
   onNotesSave,
+  onAddTag,
+  onCreateTag,
+  onRemoveTag,
   onViewProfile,
 }: DetailsPanelProps) {
   const [notesDraft, setNotesDraft] = React.useState('')
   const [savingNotes, setSavingNotes] = React.useState(false)
   const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+  const [tagPickerOpen, setTagPickerOpen] = React.useState(false)
+  const [removingTagId, setRemovingTagId] = React.useState<string | null>(null)
 
   // Keep a local draft synced with server-loaded notes
   React.useEffect(() => {
@@ -1030,6 +1675,17 @@ function DetailsPanel({
     }
   }
 
+  const handleRemoveTag = async (tagId: string) => {
+    setRemovingTagId(tagId)
+    try {
+      await onRemoveTag(tagId)
+    } finally {
+      setRemovingTagId(null)
+    }
+  }
+
+  const currentTagIds = new Set(detail.tags.map((t) => t.id))
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
       {/* Header */}
@@ -1067,6 +1723,37 @@ function DetailsPanel({
           </p>
         )}
       </div>
+
+      {/* Tags section */}
+      <Section icon={<Tags className="h-3.5 w-3.5" />} title="Tags">
+        {detail.tags.length === 0 ? (
+          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+            No tags yet. Use “Add tag” to organize this conversation.
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {detail.tags.map((t) => (
+              <TagPill
+                key={t.id}
+                tag={t}
+                onRemove={
+                  removingTagId === t.id ? undefined : () => void handleRemoveTag(t.id)
+                }
+              />
+            ))}
+          </div>
+        )}
+        <div className="mt-2">
+          <TagPicker
+            open={tagPickerOpen}
+            onOpenChange={setTagPickerOpen}
+            allTags={allTags}
+            currentTagIds={currentTagIds}
+            onAddExisting={onAddTag}
+            onCreate={onCreateTag}
+          />
+        </div>
+      </Section>
 
       {/* Status section */}
       <Section icon={<UserCog className="h-3.5 w-3.5" />} title="Status">
@@ -1300,6 +1987,7 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [detail, setDetail] = React.useState<ContactDetail | null>(null)
   const [waState, setWaState] = React.useState<WhatsAppState>('disconnected')
+  const [allTags, setAllTags] = React.useState<TagWithCount[]>([])
 
   // --- UI state ---
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
@@ -1308,6 +1996,7 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
   const [search, setSearch] = React.useState('')
   const [debouncedSearch, setDebouncedSearch] = React.useState('')
   const [filter, setFilter] = React.useState<FilterKey>('all')
+  const [tagFilter, setTagFilter] = React.useState('')
   const [loadingChats, setLoadingChats] = React.useState(true)
   const [loadingMessages, setLoadingMessages] = React.useState(false)
   const [loadingDetail, setLoadingDetail] = React.useState(false)
@@ -1325,10 +2014,11 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
     const p = new URLSearchParams()
     if (debouncedSearch.trim()) p.set('search', debouncedSearch.trim())
     if (filter !== 'all') p.set('filter', filter)
+    if (tagFilter.trim()) p.set('tag', tagFilter.trim())
     p.set('sort', 'recent')
     p.set('limit', '100')
     return p.toString()
-  }, [debouncedSearch, filter])
+  }, [debouncedSearch, filter, tagFilter])
 
   // --- Fetch chats list ---
   const fetchChats = React.useCallback(
@@ -1345,6 +2035,16 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
     },
     [chatsQuery],
   )
+
+  // --- Fetch the full tag list (with contact counts) for the picker / filter ---
+  const fetchAllTags = React.useCallback(async () => {
+    try {
+      const data = await apiGet<{ items: TagWithCount[] }>('/api/tags')
+      setAllTags(data.items ?? [])
+    } catch {
+      /* non-fatal — picker just shows fewer options */
+    }
+  }, [])
 
   // --- Fetch WA state (cheap, polled less frequently) ---
   const fetchWaState = React.useCallback(async () => {
@@ -1400,15 +2100,16 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
     [selectedId],
   )
 
-  // --- Initial load + refetch on filter/search change ---
+  // --- Initial load + refetch on filter/search/tag change ---
   React.useEffect(() => {
     void fetchChats()
   }, [fetchChats])
 
-  // --- Initial WA state fetch ---
+  // --- Initial WA state fetch + tags list ---
   React.useEffect(() => {
     void fetchWaState()
-  }, [fetchWaState])
+    void fetchAllTags()
+  }, [fetchWaState, fetchAllTags])
 
   // --- Auto-select first conversation on first load ---
   const autoSelected = React.useRef(false)
@@ -1626,6 +2327,104 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
     }
   }
 
+  // --- Tag handlers ---
+  // After any tag mutation we refresh three things in parallel:
+  //   · the chats list (so tag badges in the list reflect the change)
+  //   · the contact detail (so the right panel shows the new tag set)
+  //   · the global allTags list (so contact counts in the picker stay fresh)
+  const refreshAfterTagChange = React.useCallback(() => {
+    void fetchChats({ silent: true })
+    void fetchDetail({ silent: true })
+    void fetchAllTags()
+  }, [fetchChats, fetchDetail, fetchAllTags])
+
+  const handleAddTag = React.useCallback(
+    async (tagId: string) => {
+      if (!selectedId) return
+      try {
+        const res = await apiPost<{ items: TagItem[] }>(
+          `/api/contacts/${encodeURIComponent(selectedId)}/tags`,
+          { tagId },
+        )
+        // Update the detail + the chats list optimistically from the response.
+        setDetail((d) => (d && d.id === selectedId ? { ...d, tags: res.items } : d))
+        setItems((prev) =>
+          prev.map((c) =>
+            c.contactId === selectedId ? { ...c, tags: res.items } : c,
+          ),
+        )
+        const added = allTags.find((t) => t.id === tagId)
+        toast.success(`Tag${added ? ` “${added.name}”` : ''} added`, {
+          description: 'Conversation updated.',
+        })
+        refreshAfterTagChange()
+      } catch (err) {
+        toast.error('Failed to add tag', {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    },
+    [selectedId, allTags, refreshAfterTagChange],
+  )
+
+  const handleCreateTag = React.useCallback(
+    async (name: string) => {
+      if (!selectedId) return
+      try {
+        const res = await apiPost<{ items: TagItem[] }>(
+          `/api/contacts/${encodeURIComponent(selectedId)}/tags`,
+          { name },
+        )
+        setDetail((d) => (d && d.id === selectedId ? { ...d, tags: res.items } : d))
+        setItems((prev) =>
+          prev.map((c) =>
+            c.contactId === selectedId ? { ...c, tags: res.items } : c,
+          ),
+        )
+        toast.success(`Tag “${name}” created`, {
+          description: 'Added to this conversation.',
+        })
+        refreshAfterTagChange()
+      } catch (err) {
+        toast.error('Failed to create tag', {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    },
+    [selectedId, refreshAfterTagChange],
+  )
+
+  const handleRemoveTag = React.useCallback(
+    async (tagId: string) => {
+      if (!selectedId) return
+      try {
+        await apiDelete<{ ok: boolean }>(
+          `/api/contacts/${encodeURIComponent(selectedId)}/tags?tagId=${encodeURIComponent(tagId)}`,
+        )
+        // Optimistic update of detail + list
+        setDetail((d) =>
+          d && d.id === selectedId
+            ? { ...d, tags: d.tags.filter((t) => t.id !== tagId) }
+            : d,
+        )
+        setItems((prev) =>
+          prev.map((c) =>
+            c.contactId === selectedId
+              ? { ...c, tags: c.tags.filter((t) => t.id !== tagId) }
+              : c,
+          ),
+        )
+        toast.success('Tag removed')
+        refreshAfterTagChange()
+      } catch (err) {
+        toast.error('Failed to remove tag', {
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    },
+    [selectedId, refreshAfterTagChange],
+  )
+
   const handleMarkAllRead = async () => {
     setMarkingAllRead(true)
     try {
@@ -1664,11 +2463,14 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
             selectedId={selectedId}
             search={search}
             filter={filter}
+            tagFilter={tagFilter}
+            allTags={allTags}
             totalUnread={totalUnread}
             markingAllRead={markingAllRead}
             onSelect={handleSelect}
             onSearchChange={setSearch}
             onFilterChange={setFilter}
+            onTagFilterChange={setTagFilter}
             onMarkAllRead={() => void handleMarkAllRead()}
           />
         </aside>
@@ -1699,10 +2501,14 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
             loading={loadingDetail}
             waConnected={waState === 'connected'}
             pinned={selectedContact?.pinned ?? false}
+            allTags={allTags}
             onToggleHumanMode={handleToggleHumanMode}
             onPin={handlePin}
             onStatusChange={handleStatusChange}
             onNotesSave={handleNotesSave}
+            onAddTag={handleAddTag}
+            onCreateTag={handleCreateTag}
+            onRemoveTag={handleRemoveTag}
             onViewProfile={onViewProfile}
           />
         </aside>
@@ -1722,12 +2528,16 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
                 loading={loadingDetail}
                 waConnected={waState === 'connected'}
                 pinned={selectedContact?.pinned ?? false}
+                allTags={allTags}
                 onToggleHumanMode={async (v) => {
                   await handleToggleHumanMode(v)
                 }}
                 onPin={handlePin}
                 onStatusChange={handleStatusChange}
                 onNotesSave={handleNotesSave}
+                onAddTag={handleAddTag}
+                onCreateTag={handleCreateTag}
+                onRemoveTag={handleRemoveTag}
                 onViewProfile={onViewProfile}
               />
             </div>

@@ -9,6 +9,7 @@
 // Query params:
 //   search  — substring on name / phone / lastMessage
 //   filter  — all | unread | lead | hot | ai | human | pinned
+//   tag     — tag name; restricts the list to contacts carrying that tag
 //   sort    — recent | oldest | score_desc | score_asc
 //   limit   — cap on number of rows (default 100, max 500)
 //   phone   — filter to a specific phone (used by the simulator)
@@ -16,7 +17,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import type { ChatListItem } from '@/lib/types'
+import type { ChatListItem, TagItem } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,6 +49,10 @@ function isSortKey(v: string | null): v is SortKey {
   return v !== null && (VALID_SORTS as readonly string[]).includes(v)
 }
 
+function mapTag(t: { id: string; name: string; color: string }): TagItem {
+  return { id: t.id, name: t.name, color: t.color }
+}
+
 export async function GET(request: Request) {
   const user = await getCurrentUser()
   if (!user) {
@@ -63,6 +68,7 @@ export async function GET(request: Request) {
     ? (searchParams.get('sort') as SortKey)
     : 'recent'
   const phone = (searchParams.get('phone') ?? '').trim()
+  const tag = (searchParams.get('tag') ?? '').trim()
 
   const limitRaw = Number(searchParams.get('limit') ?? 100)
   const limit =
@@ -77,14 +83,16 @@ export async function GET(request: Request) {
     humanMode?: boolean
     leadScore?: { gte: number }
     status?: string
+    tags?: { some: { tag: { name: string } } }
   } = {}
   if (phone) where.phone = phone
   if (filter === 'pinned') where.pinned = true
   if (filter === 'human') where.humanMode = true
   if (filter === 'lead') where.status = 'lead'
   if (filter === 'hot') where.leadScore = { gte: 70 }
+  if (tag) where.tags = { some: { tag: { name: tag } } }
 
-  // --- Fetch contacts with their latest message in one shot ---
+  // --- Fetch contacts with their latest message + tags in one shot ---
   // SQLite doesn't have great native support for "unread count" via
   // relation aggregation, so we fetch contacts + last message via
   // include, and compute unread counts in a single groupBy pass.
@@ -96,6 +104,10 @@ export async function GET(request: Request) {
         orderBy: { timestamp: 'desc' },
         take: 1,
         select: { text: true, timestamp: true, direction: true, source: true },
+      },
+      tags: {
+        orderBy: [{ tag: { name: 'asc' } }],
+        select: { tag: { select: { id: true, name: true, color: true } } },
       },
     },
     take: limit * 2, // over-fetch so post-filters don't starve the limit
@@ -137,6 +149,7 @@ export async function GET(request: Request) {
       pinned: c.pinned,
       humanMode: c.humanMode,
       status: c.status,
+      tags: c.tags.map((ct) => mapTag(ct.tag)),
     }
   })
 

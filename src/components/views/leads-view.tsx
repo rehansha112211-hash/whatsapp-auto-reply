@@ -21,6 +21,8 @@ import {
   FileJson,
   FileSpreadsheet,
   Inbox,
+  Tag as TagIcon,
+  Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -30,12 +32,14 @@ import {
   LEAD_CATEGORIES,
   type LeadCategory,
   type LeadRow,
+  type TagWithCount,
   type ViewKey,
 } from '@/lib/types'
 import {
   colorFromString,
   downloadFile,
   initials,
+  tagColor,
   timeAgo,
 } from '@/lib/format'
 import { LeadBadge } from '@/components/status'
@@ -47,6 +51,11 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Slider } from '@/components/ui/slider'
 import { Separator } from '@/components/ui/separator'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -114,18 +123,57 @@ function buildParams(opts: {
   status: StatusKey
   minScore: number
   sort: SortKey
+  tag: string
 }): string {
   const p = new URLSearchParams()
   if (opts.search.trim()) p.set('search', opts.search.trim())
   if (opts.category !== 'all') p.set('category', opts.category)
   if (opts.minScore > 0) p.set('minScore', String(opts.minScore))
   if (opts.status !== 'all') p.set('status', opts.status)
+  if (opts.tag) p.set('tag', opts.tag)
   p.set('sort', opts.sort)
   return p.toString()
 }
 
 function categoryLabel(value: string): string {
   return LEAD_CATEGORIES.find((c) => c.value === value)?.label ?? value
+}
+
+/** Compact tag badge cluster for the leads table (up to 2 + "+N" tooltip). */
+function LeadTagBadges({ tags }: { tags: LeadRow['tags'] }) {
+  if (!tags || tags.length === 0) {
+    return <span className="text-[11px] text-muted-foreground">—</span>
+  }
+  const visible = tags.slice(0, 2)
+  const overflow = tags.length - visible.length
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((t) => {
+        const c = tagColor(t.color)
+        return (
+          <span
+            key={t.id}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium',
+              c.bg,
+              c.text,
+            )}
+          >
+            <span className={cn('h-1.5 w-1.5 rounded-full', c.dot)} />
+            <span className="truncate max-w-[80px]">{t.name}</span>
+          </span>
+        )
+      })}
+      {overflow > 0 && (
+        <span
+          title={tags.slice(2).map((t) => t.name).join(', ')}
+          className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          +{overflow}
+        </span>
+      )}
+    </div>
+  )
 }
 
 function LeadScoreCell({ score }: { score: number }) {
@@ -209,14 +257,17 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
   const [status, setStatus] = React.useState<StatusKey>('all')
   const [minScore, setMinScore] = React.useState(0)
   const [sort, setSort] = React.useState<SortKey>('score_desc')
+  const [tagFilter, setTagFilter] = React.useState('')
 
   // --- Data state ---
   const [items, setItems] = React.useState<LeadRow[]>([])
+  const [allTags, setAllTags] = React.useState<TagWithCount[]>([])
   const [summary, setSummary] = React.useState<LeadSummary>({ total: 0, hot: 0, warm: 0, cold: 0 })
   const [loading, setLoading] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [exporting, setExporting] = React.useState(false)
+  const [tagFilterOpen, setTagFilterOpen] = React.useState(false)
 
   // --- Debounce search input (300ms) ---
   React.useEffect(() => {
@@ -233,8 +284,9 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
         status,
         minScore,
         sort,
+        tag: tagFilter,
       }),
-    [debouncedSearch, category, status, minScore, sort],
+    [debouncedSearch, category, status, minScore, sort, tagFilter],
   )
 
   // --- Fetch leads items ---
@@ -267,15 +319,26 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
     }
   }, [])
 
+  // --- Fetch the global tag list (for the tag filter popover) ---
+  const fetchAllTags = React.useCallback(async () => {
+    try {
+      const data = await apiGet<{ items: TagWithCount[] }>('/api/tags')
+      setAllTags(data.items ?? [])
+    } catch {
+      /* non-fatal */
+    }
+  }, [])
+
   // --- Initial fetch + refetch on filter change ---
   React.useEffect(() => {
     fetchItems()
   }, [fetchItems])
 
-  // --- Initial summary fetch ---
+  // --- Initial summary + tag list fetch ---
   React.useEffect(() => {
     fetchSummary()
-  }, [fetchSummary])
+    fetchAllTags()
+  }, [fetchSummary, fetchAllTags])
 
   // --- Polling: refetch every 15s without resetting filters ---
   React.useEffect(() => {
@@ -290,6 +353,7 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
   const handleRefresh = () => {
     fetchItems({ silent: true })
     fetchSummary()
+    fetchAllTags()
   }
 
   const handleClearFilters = () => {
@@ -299,6 +363,7 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
     setStatus('all')
     setMinScore(0)
     setSort('score_desc')
+    setTagFilter('')
   }
 
   const hasActiveFilters =
@@ -306,7 +371,8 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
     category !== 'all' ||
     status !== 'all' ||
     minScore > 0 ||
-    sort !== 'score_desc'
+    sort !== 'score_desc' ||
+    tagFilter !== ''
 
   const handleExportCsv = async () => {
     setExporting(true)
@@ -499,6 +565,91 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
               </SelectContent>
             </Select>
 
+            {/* Tag filter popover */}
+            <div className="flex items-center gap-1">
+              <Popover open={tagFilterOpen} onOpenChange={setTagFilterOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={tagFilter ? 'default' : 'outline'}
+                    size="sm"
+                    className={cn(
+                      'gap-1.5',
+                      tagFilter &&
+                        'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+                    )}
+                    aria-label="Filter by tag"
+                  >
+                    <TagIcon className="h-3.5 w-3.5" />
+                    <span className="max-w-[110px] truncate">
+                      {tagFilter || 'Tag'}
+                    </span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-56 p-0">
+                  <div className="border-b px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Filter by tag
+                  </div>
+                  <div className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
+                    {allTags.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                        No tags yet.
+                      </div>
+                    ) : (
+                      allTags.map((t) => {
+                        const c = tagColor(t.color)
+                        const isActive = tagFilter === t.name
+                        return (
+                          <button
+                            type="button"
+                            key={t.id}
+                            onClick={() => {
+                              setTagFilter(isActive ? '' : t.name)
+                              setTagFilterOpen(false)
+                            }}
+                            className={cn(
+                              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted',
+                              isActive && 'bg-muted',
+                            )}
+                          >
+                            <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', c.dot)} />
+                            <span className="flex-1 truncate">{t.name}</span>
+                            <span className="text-[10px] text-muted-foreground tabular-nums">
+                              {t.contactCount}
+                            </span>
+                            {isActive && <Check className="h-3 w-3 text-emerald-400" />}
+                          </button>
+                        )
+                      })
+                    )}
+                    {tagFilter && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTagFilter('')
+                          setTagFilterOpen(false)
+                        }}
+                        className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed bg-background/40 px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted"
+                      >
+                        <X className="h-3 w-3" />
+                        Clear tag filter
+                      </button>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              {tagFilter && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => setTagFilter('')}
+                  aria-label="Clear tag filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+
             <div className="flex min-w-[180px] flex-1 items-center gap-3 rounded-md border bg-background/40 px-3 py-1.5">
               <span className="text-[11px] font-medium text-muted-foreground whitespace-nowrap">
                 Min score
@@ -570,6 +721,7 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
                   <TableHead className="min-w-[160px]">Service</TableHead>
                   <TableHead className="min-w-[150px]">Lead Score</TableHead>
                   <TableHead className="min-w-[110px]">Status</TableHead>
+                  <TableHead className="min-w-[150px]">Tags</TableHead>
                   <TableHead className="min-w-[260px]">Last Message</TableHead>
                   <TableHead className="w-[110px] text-right pr-4">Actions</TableHead>
                 </TableRow>
@@ -646,6 +798,11 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
                         >
                           {row.status}
                         </Badge>
+                      </TableCell>
+
+                      {/* Tags */}
+                      <TableCell>
+                        <LeadTagBadges tags={row.tags} />
                       </TableCell>
 
                       {/* Last Message */}

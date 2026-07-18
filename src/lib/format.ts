@@ -92,6 +92,24 @@ export function downloadFile(filename: string, content: string, type = 'text/pla
   URL.revokeObjectURL(url)
 }
 
+// ---------------- Tag colors ----------------
+// Shared color palette for conversation tags / labels.
+// `bg` and `text` are used on the badge; `dot` is the small swatch.
+export const TAG_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
+  emerald: { bg: 'bg-emerald-500/15', text: 'text-emerald-300', dot: 'bg-emerald-500' },
+  amber: { bg: 'bg-amber-500/15', text: 'text-amber-300', dot: 'bg-amber-500' },
+  rose: { bg: 'bg-rose-500/15', text: 'text-rose-300', dot: 'bg-rose-500' },
+  sky: { bg: 'bg-sky-500/15', text: 'text-sky-300', dot: 'bg-sky-500' },
+  violet: { bg: 'bg-violet-500/15', text: 'text-violet-300', dot: 'bg-violet-500' },
+  zinc: { bg: 'bg-zinc-500/15', text: 'text-zinc-300', dot: 'bg-zinc-500' },
+  orange: { bg: 'bg-orange-500/15', text: 'text-orange-300', dot: 'bg-orange-500' },
+  teal: { bg: 'bg-teal-500/15', text: 'text-teal-300', dot: 'bg-teal-500' },
+}
+
+export function tagColor(color: string) {
+  return TAG_COLORS[color] ?? TAG_COLORS.emerald
+}
+
 export function toCsv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return ''
   const headers = Object.keys(rows[0])

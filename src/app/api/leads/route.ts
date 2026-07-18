@@ -7,7 +7,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import type { LeadRow, LeadCategory } from '@/lib/types'
+import type { LeadRow, LeadCategory, TagItem } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,6 +57,7 @@ export async function GET(request: Request) {
   const status: string = VALID_STATUSES.includes(statusRaw as (typeof VALID_STATUSES)[number])
     ? statusRaw
     : 'all'
+  const tag = (searchParams.get('tag') ?? '').trim()
   const summaryOnly = searchParams.get('summary') === '1'
 
   // --- Summary endpoint: lead pipeline totals independent of filters ---
@@ -74,10 +75,12 @@ export async function GET(request: Request) {
   const where: {
     leadScore: { gte: number }
     status?: string
+    tags?: { some: { tag: { name: string } } }
   } = {
     leadScore: { gte: minScore },
   }
   if (status !== 'all') where.status = status
+  if (tag) where.tags = { some: { tag: { name: tag } } }
 
   // --- Fetch matching contacts with their latest message ---
   // NOTE: LeadScore has no Prisma relation back to Contact, so we fetch
@@ -90,6 +93,10 @@ export async function GET(request: Request) {
         orderBy: { timestamp: 'desc' },
         take: 1,
         select: { text: true, timestamp: true },
+      },
+      tags: {
+        orderBy: [{ tag: { name: 'asc' } }],
+        select: { tag: { select: { id: true, name: true, color: true } } },
       },
     },
   })
@@ -121,6 +128,11 @@ export async function GET(request: Request) {
   let rows: LeadRow[] = contacts.map((c) => {
     const lastMsg = c.messages[0]
     const latestScore = latestScoreByContact.get(c.id)
+    const tags: TagItem[] = c.tags.map((ct) => ({
+      id: ct.tag.id,
+      name: ct.tag.name,
+      color: ct.tag.color,
+    }))
     return {
       id: c.id,
       name: c.name,
@@ -132,6 +144,7 @@ export async function GET(request: Request) {
       lastMessageAt: lastMsg?.timestamp.toISOString() ?? c.lastMessageAt?.toISOString() ?? null,
       category: latestScore?.category ?? 'general',
       notified: latestScore?.notified ?? false,
+      tags,
     }
   })
 

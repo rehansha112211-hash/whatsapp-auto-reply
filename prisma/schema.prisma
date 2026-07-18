@@ -115,10 +115,34 @@ model Contact {
   memories     ConversationMemory[]
   notifications Notification[]
   logs         Log[]
+  tags         ContactTag[]
+  scheduledMessages ScheduledMessage[]
 
   @@index([status])
   @@index([leadScore])
   @@index([lastMessageAt])
+}
+
+// ---------------- Tags (conversation labels) ----------------
+model Tag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("emerald") // emerald | amber | rose | sky | violet | zinc | orange | teal
+  createdAt DateTime @default(now())
+
+  contacts  ContactTag[]
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId])
 }
 
 // ---------------- Messages ----------------
@@ -254,4 +278,34 @@ model Template {
   updatedAt DateTime @updatedAt
 
   @@index([category])
+}
+
+// ---------------- Quick replies (composer snippets) ----------------
+model QuickReply {
+  id        String   @id @default(cuid())
+  shortcut  String   @unique // e.g. "hi", "price", "hours" — typed as /shortcut in composer
+  title     String // short label
+  body      String // the full reply text
+  category  String   @default("general") // greeting | pricing | support | hours | general
+  usageCount Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+}
+
+// ---------------- Scheduled messages (owner-authored, future send) ----------------
+model ScheduledMessage {
+  id        String   @id @default(cuid())
+  contactId String
+  text      String
+  scheduledAt DateTime
+  status    String   @default("pending") // pending | sent | cancelled | failed
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+  @@index([contactId])
 }

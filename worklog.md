@@ -784,3 +784,184 @@ Platform was stable at start: 13 views, 34 API routes, 16 Prisma models, lint cl
 4. Add a "Quick Replies" / canned responses feature in the chat composer (snippets library).
 5. Add conversation tagging/labels for organization (e.g. "urgent", "follow-up", "closed").
 6. Add a scheduled messages feature (send a message at a future time).
+
+---
+Task ID: F1
+Agent: full-stack-developer (Quick Replies)
+Task: Build a Quick Replies / canned-responses feature for the chat composer — a snippets library with slash shortcuts, a Zap-button popover picker, and a full CRUD manager dialog.
+
+Work Log:
+- Read worklog.md, prisma/schema.prisma, src/components/views/chats-view.tsx, src/lib/api-client.ts, src/lib/auth.ts, src/app/api/templates/route.ts (reference pattern), and the existing UI component set to match conventions.
+- Added a `QuickReply` model to `prisma/schema.prisma` (id, unique shortcut, title, body, category, usageCount, timestamps, @@index([category])). Ran `bun run db:push` — schema in sync, Prisma client regenerated.
+- Added `QuickReplyRow` + `QuickReplyCategory` types to `src/lib/types.ts` (shared, avoids exporting types from route files).
+- Created `src/app/api/quick-replies/route.ts`:
+  - GET → auth-gated; auto-seeds 6 QorvixNode-branded defaults (hi/price/hours/website/owner/thanks) on first call; returns items sorted by category then shortcut.
+  - POST → validates shortcut (required, alphanumeric+underscore, max 40, unique), title (required, max 120), body (required, max 4000), category (validated against the 5 allowed keys); returns 201 with the created row.
+- Created `src/app/api/quick-replies/[id]/route.ts`:
+  - PUT → when `?used=1` query param present, only increments `usageCount` (used by the composer each time a reply is inserted); otherwise updates any of shortcut/title/body/category with the same validation + uniqueness check as POST.
+  - DELETE → removes the record (404 if missing).
+- Built the QuickReply UI layer under `src/components/quick-replies/`:
+  - `quick-reply-helpers.ts` — category metadata (greeting=emerald, pricing=amber, hours=sky, support=violet, general=zinc), grouping/sorting, free-text filtering, body preview, and the `detectSlashCommand` / `matchSlash` pure functions (slash token must be at start-of-text or after whitespace; partial must be empty or alphanumeric).
+  - `quick-reply-hooks.ts` — `useQuickReplies` (load/create/update/delete/bumpUsage with optimistic local state) and `useSlashCommand` (cursor-driven detection + match scoring by exact→prefix→includes, sorted by usageCount desc).
+  - `quick-reply-picker.tsx` — `QuickReplyPicker` (Zap ghost icon button, emerald when items exist; w-80 popover with search input, scrollable categorized list, usage counts, "Manage" link) and `QuickReplySlashDropdown` (floating `absolute bottom-full left-0 w-72` autocomplete with `/shortcut` badges, keyboard hint footer).
+  - `quick-reply-manager-dialog.tsx` — `max-w-2xl` two-column Dialog (searchable list left, form right on desktop; stacked on mobile) with create/edit/delete-with-confirm (AlertDialog), category Select with colored dots, live char counter, inline validation toasts.
+- Modified `src/components/views/chats-view.tsx` ChatWindow:
+  - Added `useQuickReplies` + `useSlashCommand` hooks, `qrManagerOpen` + `cursor` state, and `insertQuickReply` / `insertSlashReply` / `handleComposerChange` / `handleComposerSelect` handlers.
+  - Extended `handleKeyDown` to intercept ArrowUp/Down/Enter/Tab/Escape when the slash dropdown is open (Enter inserts the active match, Tab too, Escape dismisses + jumps cursor to end).
+  - Composer row is now `relative` and contains: `<QuickReplySlashDropdown>` (floats above textarea) → `<Textarea>` (with onChange/onKeyUp/onClick/onSelect syncing cursor) → `<QuickReplyPicker>` (Zap button) → existing Schedule tooltip button → Send button. Placeholder now hints "/ for quick replies".
+  - Added `<QuickReplyManagerDialog>` at the end of ChatWindow, wired to the shared `qr` state.
+  - Fixed a pre-existing blocker: the tags feature had imported a non-existent `Labels` icon from lucide-react (used in 2 places) which would crash the chats view at runtime — replaced with `Tags` (which exists). This was necessary so the Quick Replies feature is actually testable.
+- Ran `bun run lint` → clean. Ran `npx tsc --noEmit` → no errors in any quick-reply file or in chats-view.tsx (remaining TS errors are pre-existing in unrelated files: examples/, skills/, src/lib/ai-engine.ts, src/app/api/tags/route.ts, src/components/views/leads-view.tsx).
+
+Stage Summary:
+- Modified: `prisma/schema.prisma` (added QuickReply model), `src/lib/types.ts` (QuickReplyRow + QuickReplyCategory), `src/components/views/chats-view.tsx` (composer quick-reply integration + Labels→Tags fix).
+- Created: `src/app/api/quick-replies/route.ts`, `src/app/api/quick-replies/[id]/route.ts`, `src/components/quick-replies/quick-reply-helpers.ts`, `src/components/quick-replies/quick-reply-hooks.ts`, `src/components/quick-replies/quick-reply-picker.tsx`, `src/components/quick-replies/quick-reply-manager-dialog.tsx`.
+- DB: `bun run db:push` succeeded; QuickReply table created.
+- UX: click the Zap button → searchable categorized popover → click a reply to insert (replaces empty composer or appends after a newline); type `/` in the composer → floating autocomplete with ↑↓/Enter/Tab/Escape keyboard nav; "Manage" link opens a full CRUD dialog with two-column list+form layout, delete confirmation, and colored category badges.
+
+---
+Task ID: F3
+Agent: full-stack-developer (Scheduled Messages)
+Task: Build a Scheduled Messages feature — owner composes a message to a contact with a future send time; a background checker polls and sends due messages via wa-engine.sendOwnerMessage.
+
+Work Log:
+- Read prior worklog, schema, types, nav, wa-engine, page.tsx, broadcast-view (for patterns), chats-view composer.
+- Added ScheduledMessage model to prisma/schema.prisma + scheduledMessages relation on Contact. Ran `bun run db:push` (Prisma client regenerated).
+- Added 'scheduled' to ViewKey in src/lib/types.ts; also added a ScheduledMessageRow interface.
+- Added Clock import + Scheduled nav entry (group: 'main') in src/lib/nav.ts.
+- Created src/app/api/scheduled/route.ts (GET: pending-first then recent, joins contact name+phone; POST: validates contact exists + text + future time, creates status='pending', writes Log).
+- Created src/app/api/scheduled/[id]/route.ts (PATCH only while pending, re-validates text/time; DELETE cancels pending -> status='cancelled', no-op for terminal records).
+- Created src/app/api/scheduled/process/route.ts (finds due pending rows, capped at 100/tick, calls sendOwnerMessage for each, flips to status='sent' + sentAt, logs per-contact, returns { ok, processed, failed }).
+- Created src/components/views/scheduled-view.tsx: header + New button, 3 AnimatedCounter stat cards (Pending/Sent today/Cancelled), auto-processing indicator (pausable), Tabs (Pending|Sent|All). New/Edit dialog uses a Popover-based ContactPicker over /api/chats?limit=100, Textarea with char-count (max 1000), datetime-local input + 4 quick-pick chips. Rows show avatar, contact name/phone, message preview, scheduled time with relative "in Xh/Xm" badge (emerald/amber/rose for overdue), Edit/Cancel actions. Polls POST /api/scheduled/process every 30s (skipped while document hidden).
+- Wired ScheduledView into src/app/page.tsx (import + router case passing onNavigate={setActive}).
+- Added a Clock icon button + Schedule dialog to the chats-view composer (pre-fills with current contact + composer text); imported Dialog + Label.
+- Ran bun run lint (exit 0). End-to-end tested the full lifecycle: create pending → wait 70s → process → confirmed status='sent' and the outgoing owner message appeared in the contact's chat. Also verified PATCH (edit) and DELETE (cancel).
+
+Stage Summary:
+- MODIFIED: prisma/schema.prisma, src/lib/types.ts, src/lib/nav.ts, src/app/page.tsx, src/components/views/chats-view.tsx
+- CREATED: src/app/api/scheduled/route.ts, src/app/api/scheduled/[id]/route.ts, src/app/api/scheduled/process/route.ts, src/components/views/scheduled-view.tsx
+- Agent record: /home/z/my-project/agent-ctx/F3-full-stack-developer.md
+
+---
+Task ID: F2
+Agent: full-stack-developer (Conversation Tags)
+Task: Build a Conversation Tags / Labels feature — owner can tag conversations with labels like "urgent", "follow-up", "vip", "closed", "Hot Lead" for organization and filtering across Chats + Leads views.
+
+Work Log:
+- Read worklog.md, prisma/schema.prisma, src/lib/format.ts, src/lib/types.ts, src/lib/auth.ts, src/lib/api-client.ts, src/app/api/chats/route.ts, src/app/api/contacts/[id]/route.ts, src/app/api/leads/route.ts, src/app/api/leads/export/route.ts, src/components/views/chats-view.tsx (1739 lines — full read), src/components/views/leads-view.tsx to map insertion points and stay consistent with prior conventions.
+- Added `Tag` and `ContactTag` models to `prisma/schema.prisma` (Tag: id, unique name, color, timestamps; ContactTag: composite PK [contactId, tagId] with @@index([tagId]) and Cascade on both sides). Added a `tags ContactTag[]` relation to the existing Contact model. Ran `bun run db:push` — schema in sync, Prisma client regenerated.
+- Added shared color palette to `src/lib/format.ts`: `TAG_COLORS` (8 keys: emerald, amber, rose, sky, violet, zinc, orange, teal — each with `bg`, `text`, `dot` Tailwind class strings) + `tagColor(color)` helper that falls back to emerald.
+- Added `TagItem` and `TagWithCount` interfaces to `src/lib/types.ts`. Extended `ChatListItem`, `ContactDetail`, and `LeadRow` with a `tags: TagItem[]` field so all downstream consumers are typed end-to-end.
+- Created `src/app/api/tags/route.ts`:
+  - GET → auth-gated; auto-seeds 5 defaults (Urgent=rose, Follow-up=amber, VIP=violet, Closed=zinc, Hot Lead=emerald) on first call when no tags exist; returns items with `contactCount` via Prisma's `_count` include. Note: SQLite's Prisma adapter doesn't support `skipDuplicates` on createMany, so the seed uses a plain createMany guarded by a count check.
+  - POST → validates `name` (required, trimmed, max 40) and `color` (must be one of 8 valid keys, defaults to emerald); 409 on name collision (case-insensitive); 201 on success.
+- Created `src/app/api/tags/[id]/route.ts`:
+  - PUT → updates `name` and/or `color` with the same validation; 409 if a different tag already has the same name; 404 if the tag doesn't exist.
+  - DELETE → removes the tag; ContactTag rows cascade-delete automatically thanks to the schema's `onDelete: Cascade` on the join table.
+- Created `src/app/api/contacts/[id]/tags/route.ts`:
+  - GET → returns the contact's tags (sorted by name) as `{ items: TagItem[] }`.
+  - POST → accepts either `{ tagId }` (existing tag) or `{ name, color? }` (create-if-not-exists via `db.tag.upsert`); upserts the ContactTag join row (idempotent); returns the full updated tag set as `{ items: TagItem[] }` with status 201.
+  - DELETE → `?tagId=X` removes the join row; idempotent (returns 200 even if the row was already gone).
+- Modified `src/app/api/chats/route.ts`:
+  - Added `?tag=X` query support (X = tag name); filters contacts via `tags: { some: { tag: { name } } }`. Backwards-compatible — combines freely with `search`, `filter`, `phone`, `sort`.
+  - Includes `tags` in each ChatListItem response (one extra `include` on the contact query).
+- Modified `src/app/api/contacts/[id]/route.ts` (GET + PATCH): includes `tags` in the ContactDetail response so the right-side details panel shows them.
+- Modified `src/app/api/leads/route.ts` and `src/app/api/leads/export/route.ts`: added `?tag=` filter + `tags` in each LeadRow; CSV export now has a `Tags` column (pipe-separated names).
+- Added three reusable presentational components to `chats-view.tsx`:
+  - `TagPill` — single small colored pill with optional hover-X remove button.
+  - `TagBadgeCluster` — wraps up to 2 TagPills + a "+N" overflow chip with a tooltip listing the rest.
+  - `TagPicker` — Popover with search input, scrollable list of all tags (with color dots + contact counts), active-tag checkmark, and a "Create tag “…”" option that appears when the typed query doesn't match an existing tag exactly.
+- Modified `ConversationList` (left pane):
+  - Added a Tag-icon filter button next to the existing filter Select. When a tag filter is active, the button turns emerald-gradient; clicking it opens a Popover listing all tags with color dots, contact counts, and an active checkmark. A "Clear tag filter" option appears at the bottom when active.
+  - Added an "Active tag filter" banner above the list showing the active tag pill + X to clear.
+  - Each list row now renders `<TagBadgeCluster>` below the phone/lead-score row.
+  - Empty state adapts: "No conversations tagged “X”" when a tag filter is active.
+- Modified `ChatWindow` (center pane): the header row now uses `flex-wrap` and appends `<TagBadgeCluster>` after the LeadBadge/Human badges, so the contact's tags are visible in the chat header.
+- Modified `DetailsPanel` (right pane): added a new "Tags" section (with a Tags icon) at the top — shows current tags as removable TagPills (X on hover, with per-tag loading state during removal) and an "Add tag" button that opens the `TagPicker` Popover. Empty state: "No tags yet. Use 'Add tag' to organize this conversation." Both desktop and mobile Sheet instances get the new props.
+- Wired the main `ChatsView`:
+  - Added `tagFilter` state, `allTags` state, and `fetchAllTags` callback (called on mount and after every tag mutation).
+  - `chatsQuery` now includes `tag` when set; the polling/realtime refreshers pick it up automatically.
+  - Added `handleAddTag`, `handleCreateTag`, `handleRemoveTag` handlers — each calls the appropriate API, optimistically updates `items` + `detail` from the response (or by filtering the removed tag locally), toasts success/failure, then refreshes chats list + detail + allTags in parallel to keep counts in sync.
+- Modified `LeadsView`:
+  - Added a "Tags" column to the table (between Status and Last Message) with a `LeadTagBadges` cluster (up to 2 colored pills + "+N" with tooltip).
+  - Added a tag-filter Popover button in the toolbar (between Sort and Min-score slider) with the same UX as the chats-view one: emerald gradient when active, color-dotted list with counts, separate X clear button next to it when active.
+  - The Clear-filters button and `hasActiveFilters` flag now account for `tagFilter`.
+- Tested end-to-end against the running dev server (logged in as admin):
+  - GET /api/tags → 200, returns the 5 seeded defaults with `contactCount: 0`.
+  - POST /api/contacts/[id]/tags `{tagId}` → 201, returns updated tag set.
+  - POST /api/contacts/[id]/tags `{name, color}` → 201, creates the tag via upsert and returns the updated set.
+  - DELETE /api/contacts/[id]/tags?tagId=X → 200, removes the join row (idempotent).
+  - PUT /api/tags/[id] → 200, renames / re-colors.
+  - DELETE /api/tags/[id] → 200, cascades to ContactTag (verified by re-fetching the contact's tags).
+  - GET /api/chats?tag=Urgent → returns only conversations carrying the Urgent tag; each item includes its tags array.
+  - GET /api/leads?tag=Urgent → same behaviour for the leads table.
+  - GET /api/leads/export?limit=3 → CSV now includes a `Tags` column.
+  - GET / → 200, no rendering errors.
+- Pre-applied a few demo tags so the feature is visible on first preview: Vikram Singh → Hot Lead + VIP, Rahul Sharma → Follow-up, Priya Patel → Urgent.
+- Ran `bun run lint` → 0 errors, 0 warnings.
+
+Stage Summary:
+- MODIFIED: `prisma/schema.prisma` (Tag + ContactTag models + Contact.tags relation), `src/lib/format.ts` (TAG_COLORS + tagColor helper), `src/lib/types.ts` (TagItem, TagWithCount; tags field on ChatListItem/ContactDetail/LeadRow), `src/app/api/chats/route.ts` (?tag filter + tags in response), `src/app/api/contacts/[id]/route.ts` (tags in ContactDetail), `src/app/api/leads/route.ts` (?tag filter + tags in response), `src/app/api/leads/export/route.ts` (?tag filter + Tags CSV column), `src/components/views/chats-view.tsx` (TagPill/TagBadgeCluster/TagPicker components; tag badges in list + chat header + details panel; tag filter popover + active-filter banner; tag add/remove/create handlers with optimistic updates), `src/components/views/leads-view.tsx` (LeadTagBadges + Tags column + tag filter popover).
+- CREATED: `src/app/api/tags/route.ts`, `src/app/api/tags/[id]/route.ts`, `src/app/api/contacts/[id]/tags/route.ts`.
+- DB: `bun run db:push` succeeded; Tag and ContactTag tables created; default tags auto-seeded on first GET /api/tags.
+- Agent record: /home/z/my-project/agent-ctx/F2-full-stack-developer.md
+
+---
+Task ID: cron-review-20260718-1100
+Agent: Main (Z.ai Code) — scheduled dev review (round 3)
+Task: QA sweep + Quick Replies + Conversation Tags + Scheduled Messages
+
+## Current Project Status Assessment
+Platform was stable at start: 14 views, 37 API routes, 16 Prisma models, lint clean. QA sweep across all views confirmed zero console/page errors. Continued with 3 high-impact UX features from the worklog's priority recommendations.
+
+## Work Completed This Round
+
+### 1. Quick Replies / Canned Responses (Task F1 — via subagent)
+- New `QuickReply` Prisma model (shortcut, title, body, category, usageCount).
+- 2 API routes: `/api/quick-replies` (GET with auto-seed of 6 defaults, POST create), `/api/quick-replies/[id]` (PUT update + usage increment, DELETE).
+- 3 UI surfaces in chats-view composer:
+  - **Zap button** → popover with search + category-grouped list, click to insert body into composer.
+  - **Slash commands** — typing `/hi` or `/price` in composer shows autocomplete dropdown (arrow keys + Enter/Tab to select).
+  - **Manager Dialog** — create/edit/delete quick replies with category badges.
+- Categories: greeting (emerald), pricing (amber), hours (sky), support (violet), general (zinc).
+- Verified: Zap button opens popover with Greeting/Pricing/Hours, search input, Manage link.
+
+### 2. Conversation Tags / Labels (Task F2 — via subagent)
+- New `Tag` + `ContactTag` Prisma models (many-to-many between Contact and Tag).
+- 4 API routes: `/api/tags` (GET with auto-seed of 5 defaults: Urgent/Follow-up/VIP/Closed/Hot Lead, POST create), `/api/tags/[id]` (PUT, DELETE), `/api/contacts/[id]/tags` (GET, POST, DELETE).
+- Modified `/api/chats` to support `?tag=X` filter + include tags in response. Modified `/api/leads` + export to include tags.
+- Shared `TAG_COLORS` helper in format.ts (8 colors: emerald/amber/rose/sky/violet/zinc/orange/teal).
+- Chats view: tag badges in conversation list (up to 2 + "+N"), tag filter button with popover, tags in chat header, tag management in details panel (add/remove with picker).
+- Leads view: new "Tags" column + tag filter button.
+- Pre-applied demo tags (Vikram→Hot Lead+VIP, Rahul→Follow-up, Priya→Urgent).
+- Verified: tags visible in chats list + leads table (Tags column confirmed in headers).
+
+### 3. Scheduled Messages (Task F3 — via subagent)
+- New `ScheduledMessage` Prisma model (contactId, text, scheduledAt, status, sentAt).
+- 3 API routes: `/api/scheduled` (GET list, POST create with validation), `/api/scheduled/[id]` (PATCH edit, DELETE cancel), `/api/scheduled/process` (POST — processes due messages via sendOwnerMessage).
+- New `ScheduledView` (15th view) with: 3 stat cards (AnimatedCounter), Tabs (Pending/Sent/All), New/Edit dialog with contact picker + textarea + datetime-local + quick-picks ("In 1 hour", "Tomorrow 9 AM", etc.), auto-processing every 30s.
+- Added Clock icon button in chats-view composer to schedule current text.
+- E2E verified: created message 60s in future → process returned 0 before due → waited 70s → process returned processed:1 → message appeared in contact's chat.
+- Added 'scheduled' to ViewKey + nav entry.
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200
+- Browser E2E: Quick Replies (Zap popover + slash commands), Tags (badges in chats + leads table + filter), Scheduled (page + dialog + auto-processing)
+- 16 views total (added Scheduled), 47 API routes, 19 Prisma models
+
+## Unresolved Issues / Risks
+- WebSocket gateway: still polling fallback (clients=0 on realtime health).
+- Real WhatsApp Baileys integration still simulation.
+- Single-user auth.
+- Light mode CSS not fully polished for every view.
+- Scheduled message processing relies on frontend polling (if no browser tab is open, messages won't be processed until the next page load). A server-side cron/worker would be more reliable.
+
+## Priority Recommendations for Next Phase
+1. Add a server-side background worker (or use the cron tool) to process scheduled messages even when no browser is open.
+2. Polish light-mode CSS for all views (test each view in light mode).
+3. Wire WebSocket gateway for true real-time push.
+4. Add multi-user authentication with roles.
+5. Add conversation search across ALL messages (global message search, not just contact names).
+6. Add a dashboard "activity feed" widget showing recent AI replies, new leads, and owner actions in real time.
+7. Add export/import for quick replies and tags (JSON backup of snippets library).

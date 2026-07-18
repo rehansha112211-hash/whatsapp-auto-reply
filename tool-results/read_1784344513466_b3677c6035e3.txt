@@ -1,0 +1,1740 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// ChatsView — WhatsApp-Web-style 3-pane chat interface
+     5→//
+     6→//  · Left   → conversation list (search + filter, pinned-first sort)
+     7→//  · Center → chat window (bubbles, date separators, composer)
+     8→//  · Right  → customer details panel (lead info, memory, actions)
+     9→//
+    10→// On mobile, the layout collapses to a single pane with a back
+    11→// button to swap between list and chat, and the details panel
+    12→// becomes a Sheet triggered from the chat header.
+    13→//
+    14→// Polling: chats list every 8s, messages every 4s. Realtime:
+    15→// listens for `dashboard:tick` and `simulator:message` events
+    16→// from the war-realtime websocket mini-service for instant refresh.
+    17→// ============================================================
+    18→import * as React from 'react'
+    19→import { toast } from 'sonner'
+    20→import {
+    21→  MessageCircle,
+    22→  Search,
+    23→  Filter,
+    24→  Pin,
+    25→  Send,
+    26→  ArrowLeft,
+    27→  Info,
+    28→  Bot,
+    29→  User,
+    30→  UserCog,
+    31→  Flame,
+    32→  Clock,
+    33→  Check,
+    34→  CheckCheck,
+    35→  AlertTriangle,
+    36→  MoreVertical,
+    37→  Shield,
+    38→  Bell,
+    39→  Loader2,
+    40→  Inbox,
+    41→  X,
+    42→  Sparkles,
+    43→  Download,
+    44→  FileText,
+    45→  Braces,
+    46→  Copy,
+    47→  CornerUpLeft,
+    48→  ArrowDown,
+    49→  ExternalLink,
+    50→} from 'lucide-react'
+    51→
+    52→import { cn } from '@/lib/utils'
+    53→import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
+    54→import {
+    55→  colorFromString,
+    56→  initials,
+    57→  timeAgo,
+    58→  formatTime,
+    59→  formatDateTime,
+    60→  downloadFile,
+    61→} from '@/lib/format'
+    62→import { useRealtime } from '@/hooks/use-realtime'
+    63→import { LeadBadge } from '@/components/status'
+    64→import type {
+    65→  ChatListItem,
+    66→  ChatMessage,
+    67→  ContactDetail,
+    68→  ContactStatus,
+    69→  MessageStatus,
+    70→  WhatsAppState,
+    71→} from '@/lib/types'
+    72→
+    73→import { Button } from '@/components/ui/button'
+    74→import { Input } from '@/components/ui/input'
+    75→import { Badge } from '@/components/ui/badge'
+    76→import { Textarea } from '@/components/ui/textarea'
+    77→import { Separator } from '@/components/ui/separator'
+    78→import { Switch } from '@/components/ui/switch'
+    79→import { Progress } from '@/components/ui/progress'
+    80→import {
+    81→  Select,
+    82→  SelectContent,
+    83→  SelectItem,
+    84→  SelectTrigger,
+    85→  SelectValue,
+    86→} from '@/components/ui/select'
+    87→import {
+    88→  Sheet,
+    89→  SheetContent,
+    90→  SheetHeader,
+    91→  SheetTitle,
+    92→} from '@/components/ui/sheet'
+    93→import {
+    94→  Tooltip,
+    95→  TooltipContent,
+    96→  TooltipProvider,
+    97→  TooltipTrigger,
+    98→} from '@/components/ui/tooltip'
+    99→import {
+   100→  DropdownMenu,
+   101→  DropdownMenuContent,
+   102→  DropdownMenuItem,
+   103→  DropdownMenuTrigger,
+   104→} from '@/components/ui/dropdown-menu'
+   105→
+   106→// ------------------------------------------------------------
+   107→// Types
+   108→// ------------------------------------------------------------
+   109→type FilterKey = 'all' | 'unread' | 'lead' | 'hot' | 'ai' | 'human' | 'pinned'
+   110→
+   111→interface WaStateResponse {
+   112→  state: WhatsAppState
+   113→  connectedNumber: string
+   114→  connectedName: string
+   115→}
+   116→
+   117→interface SendMessageResponse {
+   118→  ok: boolean
+   119→  message: ChatMessage
+   120→}
+   121→
+   122→interface HumanModeResponse {
+   123→  ok: boolean
+   124→  humanMode: boolean
+   125→}
+   126→
+   127→const FILTER_OPTIONS: { value: FilterKey; label: string }[] = [
+   128→  { value: 'all', label: 'All conversations' },
+   129→  { value: 'unread', label: 'Unread only' },
+   130→  { value: 'lead', label: 'Leads' },
+   131→  { value: 'hot', label: 'Hot leads (≥70)' },
+   132→  { value: 'ai', label: 'AI active' },
+   133→  { value: 'human', label: 'Human mode' },
+   134→  { value: 'pinned', label: 'Pinned' },
+   135→]
+   136→
+   137→const STATUS_BADGE: Record<ContactStatus, string> = {
+   138→  new: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+   139→  active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   140→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   141→  customer: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   142→  blocked: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   143→}
+   144→
+   145→const MEMORY_KEY_LABELS: Record<string, string> = {
+   146→  name: 'Name',
+   147→  business: 'Business',
+   148→  requirements: 'Requirements',
+   149→  budget: 'Budget',
+   150→  language: 'Language',
+   151→  last_intent: 'Last intent',
+   152→  intent: 'Intent',
+   153→  project_status: 'Project status',
+   154→  timeline: 'Timeline',
+   155→  location: 'Location',
+   156→  service: 'Service',
+   157→  contact_method: 'Contact method',
+   158→}
+   159→
+   160→// ------------------------------------------------------------
+   161→// Helpers
+   162→// ------------------------------------------------------------
+   163→
+   164→/** Group messages into buckets keyed by YYYY-MM-DD so we can render date separators. */
+   165→function groupByDay(messages: ChatMessage[]): { day: string; items: ChatMessage[] }[] {
+   166→  const out: { day: string; items: ChatMessage[] }[] = []
+   167→  for (const m of messages) {
+   168→    const d = new Date(m.timestamp)
+   169→    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+   170→    const last = out[out.length - 1]
+   171→    if (last && last.day === key) last.items.push(m)
+   172→    else out.push({ day: key, items: [m] })
+   173→  }
+   174→  return out
+   175→}
+   176→
+   177→function formatDayHeader(day: string): string {
+   178→  const d = new Date(day + 'T00:00:00')
+   179→  const today = new Date()
+   180→  const yesterday = new Date()
+   181→  yesterday.setDate(today.getDate() - 1)
+   182→  const sameDay = (a: Date, b: Date) =>
+   183→    a.getFullYear() === b.getFullYear() &&
+   184→    a.getMonth() === b.getMonth() &&
+   185→    a.getDate() === b.getDate()
+   186→  if (sameDay(d, today)) return 'Today'
+   187→  if (sameDay(d, yesterday)) return 'Yesterday'
+   188→  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+   189→}
+   190→
+   191→function memoryLabel(key: string): string {
+   192→  return MEMORY_KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+   193→}
+   194→
+   195→/** Compact "Ns ago" / "just now" label for the AI replied badge. */
+   196→function aiRepliedAgoLabel(timestamp: string): string {
+   197→  const d = new Date(timestamp)
+   198→  const diff = Date.now() - d.getTime()
+   199→  if (diff < 5000) return 'just now'
+   200→  return timeAgo(timestamp)
+   201→}
+   202→
+   203→/** True when an AI message is recent enough to show a live pulse on the icon. */
+   204→function isAiMessageRecent(timestamp: string): boolean {
+   205→  return Date.now() - new Date(timestamp).getTime() < 8000
+   206→}
+   207→
+   208→function categoryLabel(svc: string): string {
+   209→  const map: Record<string, string> = {
+   210→    website: 'Website Development',
+   211→    app: 'Android App Development',
+   212→    crm: 'CRM Development',
+   213→    software: 'Business Software',
+   214→    ai_automation: 'AI Automation',
+   215→    maintenance: 'Maintenance',
+   216→    general: 'General Inquiry',
+   217→    support: 'Support Request',
+   218→    high_priority: 'High Priority',
+   219→  }
+   220→  return map[svc] ?? (svc ? svc : '—')
+   221→}
+   222→
+   223→// ------------------------------------------------------------
+   224→// Small presentational components
+   225→// ------------------------------------------------------------
+   226→
+   227→function Avatar({ name, phone, size = 'md' }: { name: string; phone: string; size?: 'sm' | 'md' | 'lg' }) {
+   228→  const cls = colorFromString(name || phone)
+   229→  const dim =
+   230→    size === 'sm' ? 'h-8 w-8 text-[10px]' : size === 'lg' ? 'h-14 w-14 text-base' : 'h-10 w-10 text-xs'
+   231→  return (
+   232→    <div
+   233→      className={cn(
+   234→        'grid shrink-0 place-items-center rounded-full font-bold',
+   235→        dim,
+   236→        cls,
+   237→      )}
+   238→      aria-hidden
+   239→    >
+   240→      {initials(name || phone)}
+   241→    </div>
+   242→  )
+   243→}
+   244→
+   245→function DeliveryIcon({ status }: { status: MessageStatus }) {
+   246→  if (status === 'failed') {
+   247→    return (
+   248→      <Tooltip>
+   249→        <TooltipTrigger asChild>
+   250→          <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+   251→        </TooltipTrigger>
+   252→        <TooltipContent side="top">Failed to send</TooltipContent>
+   253→      </Tooltip>
+   254→    )
+   255→  }
+   256→  if (status === 'pending') {
+   257→    return <Clock className="h-3.5 w-3.5 opacity-70" />
+   258→  }
+   259→  if (status === 'sent') {
+   260→    return <Check className="h-3.5 w-3.5 opacity-70" />
+   261→  }
+   262→  if (status === 'delivered') {
+   263→    return <CheckCheck className="h-3.5 w-3.5 opacity-70" />
+   264→  }
+   265→  // read
+   266→  return <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+   267→}
+   268→
+   269→function SourceBadge({ source }: { source: ChatMessage['source'] }) {
+   270→  if (source === 'customer') return null
+   271→  const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+   272→    ai: {
+   273→      label: 'AI',
+   274→      cls: 'bg-emerald-500/20 text-emerald-200',
+   275→      icon: <Bot className="h-3 w-3" />,
+   276→    },
+   277→    owner: {
+   278→      label: 'You',
+   279→      cls: 'bg-primary/30 text-primary-foreground',
+   280→      icon: <User className="h-3 w-3" />,
+   281→    },
+   282→    system: {
+   283→      label: 'System',
+   284→      cls: 'bg-zinc-500/20 text-zinc-300',
+   285→      icon: <Shield className="h-3 w-3" />,
+   286→    },
+   287→  }
+   288→  const cfg = map[source]
+   289→  if (!cfg) return null
+   290→  return (
+   291→    <span
+   292→      className={cn(
+   293→        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider',
+   294→        cfg.cls,
+   295→      )}
+   296→    >
+   297→      {cfg.icon}
+   298→      {cfg.label}
+   299→    </span>
+   300→  )
+   301→}
+   302→
+   303→function MessageBubble({
+   304→  message,
+   305→  onReply,
+   306→}: {
+   307→  message: ChatMessage
+   308→  onReply?: (text: string) => void
+   309→}) {
+   310→  const isOutgoing = message.direction === 'outgoing'
+   311→  const isAi = message.source === 'ai'
+   312→  const [copied, setCopied] = React.useState(false)
+   313→
+   314→  const handleCopy = async () => {
+   315→    try {
+   316→      await navigator.clipboard.writeText(message.text)
+   317→      setCopied(true)
+   318→      window.setTimeout(() => setCopied(false), 1400)
+   319→    } catch {
+   320→      /* clipboard may be unavailable in insecure contexts — ignore */
+   321→    }
+   322→  }
+   323→
+   324→  return (
+   325→    <div className={cn('group relative flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
+   326→      <div
+   327→        className={cn(
+   328→          'shadow-sm max-w-[78%] sm:max-w-[68%] rounded-2xl px-3 py-2 text-sm break-words',
+   329→          isOutgoing
+   330→            ? 'chat-bubble-out rounded-tr-sm'
+   331→            : 'chat-bubble-in rounded-tl-sm',
+   332→        )}
+   333→      >
+   334→        {/* Source badge row (for AI / Owner / System outgoing, none for customer) */}
+   335→        {isOutgoing && message.source !== 'owner' && (
+   336→          <div className="mb-1">
+   337→            <SourceBadge source={message.source} />
+   338→          </div>
+   339→        )}
+   340→        <div className="whitespace-pre-wrap leading-relaxed">{message.text}</div>
+   341→        <div
+   342→          className={cn(
+   343→            'mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums',
+   344→            isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+   345→          )}
+   346→        >
+   347→          <span>{formatTime(message.timestamp)}</span>
+   348→          {isOutgoing && <DeliveryIcon status={message.status} />}
+   349→        </div>
+   350→        {/* AI "replied Ns ago" subtle sublabel */}
+   351→        {isAi && (
+   352→          <div className="mt-0.5 flex items-center justify-end">
+   353→            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400/70">
+   354→              <Bot
+   355→                className={cn(
+   356→                  'h-2.5 w-2.5',
+   357→                  isAiMessageRecent(message.timestamp) && 'animate-pulse',
+   358→                )}
+   359→              />
+   360→              AI · {aiRepliedAgoLabel(message.timestamp)}
+   361→            </span>
+   362→          </div>
+   363→        )}
+   364→      </div>
+   365→      {/* Hover actions: copy + reply (incoming only) */}
+   366→      <div
+   367→        className={cn(
+   368→          'pointer-events-none absolute top-0 flex items-center gap-0.5 rounded-md border bg-card/95 p-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:pointer-events-auto group-hover:opacity-100',
+   369→          isOutgoing ? 'right-0' : 'left-0',
+   370→        )}
+   371→      >
+   372→        <button
+   373→          type="button"
+   374→          onClick={handleCopy}
+   375→          className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   376→          aria-label="Copy message text"
+   377→        >
+   378→          {copied ? (
+   379→            <Check className="h-3 w-3 text-emerald-400" />
+   380→          ) : (
+   381→            <Copy className="h-3 w-3" />
+   382→          )}
+   383→        </button>
+   384→        {!isOutgoing && (
+   385→          <button
+   386→            type="button"
+   387→            onClick={() => onReply?.(message.text)}
+   388→            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   389→            aria-label="Quote message in reply"
+   390→          >
+   391→            <CornerUpLeft className="h-3 w-3" />
+   392→          </button>
+   393→        )}
+   394→      </div>
+   395→    </div>
+   396→  )
+   397→}
+   398→
+   399→function DateSeparator({ day }: { day: string }) {
+   400→  return (
+   401→    <div className="flex justify-center py-2">
+   402→      <span className="rounded-full bg-muted/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+   403→        {formatDayHeader(day)}
+   404→      </span>
+   405→    </div>
+   406→  )
+   407→}
+   408→
+   409→// ------------------------------------------------------------
+   410→// ConversationList — left pane
+   411→// ------------------------------------------------------------
+   412→interface ConversationListProps {
+   413→  items: ChatListItem[]
+   414→  loading: boolean
+   415→  selectedId: string | null
+   416→  search: string
+   417→  filter: FilterKey
+   418→  totalUnread: number
+   419→  markingAllRead: boolean
+   420→  onSelect: (id: string) => void
+   421→  onSearchChange: (v: string) => void
+   422→  onFilterChange: (v: FilterKey) => void
+   423→  onMarkAllRead: () => void
+   424→}
+   425→
+   426→function ConversationList({
+   427→  items,
+   428→  loading,
+   429→  selectedId,
+   430→  search,
+   431→  filter,
+   432→  totalUnread,
+   433→  markingAllRead,
+   434→  onSelect,
+   435→  onSearchChange,
+   436→  onFilterChange,
+   437→  onMarkAllRead,
+   438→}: ConversationListProps) {
+   439→  return (
+   440→    <div className="flex h-full min-h-0 flex-col">
+   441→      {/* Header */}
+   442→      <div className="border-b p-3">
+   443→        <div className="flex items-center justify-between">
+   444→          <h2 className="flex items-center gap-2 text-sm font-semibold">
+   445→            <MessageCircle className="h-4 w-4 text-primary" />
+   446→            Chats
+   447→          </h2>
+   448→          <Badge variant="outline" className="text-[10px] tabular-nums">
+   449→            {items.length}
+   450→          </Badge>
+   451→        </div>
+   452→        {/* Search */}
+   453→        <div className="relative mt-2">
+   454→          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   455→          <Input
+   456→            value={search}
+   457→            onChange={(e) => onSearchChange(e.target.value)}
+   458→            placeholder="Search name, phone or message…"
+   459→            className="h-9 pl-8 pr-7 text-sm"
+   460→            aria-label="Search conversations"
+   461→          />
+   462→          {search && (
+   463→            <button
+   464→              type="button"
+   465→              onClick={() => onSearchChange('')}
+   466→              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+   467→              aria-label="Clear search"
+   468→            >
+   469→              <X className="h-3.5 w-3.5" />
+   470→            </button>
+   471→          )}
+   472→        </div>
+   473→        {/* Filter + Mark all read */}
+   474→        <div className="mt-2 flex items-center gap-1.5">
+   475→          <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+   476→          <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
+   477→            <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
+   478→              <SelectValue />
+   479→            </SelectTrigger>
+   480→            <SelectContent>
+   481→              {FILTER_OPTIONS.map((opt) => (
+   482→                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+   483→                  {opt.label}
+   484→                </SelectItem>
+   485→              ))}
+   486→            </SelectContent>
+   487→          </Select>
+   488→          {totalUnread > 0 && (
+   489→            <Tooltip>
+   490→              <TooltipTrigger asChild>
+   491→                <Button
+   492→                  variant="ghost"
+   493→                  size="icon"
+   494→                  className="h-8 w-8 shrink-0"
+   495→                  onClick={onMarkAllRead}
+   496→                  disabled={markingAllRead}
+   497→                  aria-label="Mark all conversations as read"
+   498→                >
+   499→                  {markingAllRead ? (
+   500→                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   501→                  ) : (
+   502→                    <CheckCheck className="h-3.5 w-3.5 text-emerald-400" />
+   503→                  )}
+   504→                </Button>
+   505→              </TooltipTrigger>
+   506→              <TooltipContent side="top">Mark all read</TooltipContent>
+   507→            </Tooltip>
+   508→          )}
+   509→        </div>
+   510→      </div>
+   511→
+   512→      {/* Unread banner */}
+   513→      {totalUnread > 0 && (
+   514→        <div className="flex items-center justify-between gap-2 border-b bg-emerald-500/5 px-3 py-1.5 text-[11px]">
+   515→          <span className="flex items-center gap-1.5 font-medium text-emerald-300">
+   516→            <Bell className="h-3 w-3" />
+   517→            {totalUnread} unread conversation{totalUnread === 1 ? '' : 's'}
+   518→          </span>
+   519→          <button
+   520→            type="button"
+   521→            onClick={onMarkAllRead}
+   522→            disabled={markingAllRead}
+   523→            className="font-semibold text-emerald-300 transition-colors hover:text-emerald-200 disabled:opacity-50"
+   524→          >
+   525→            {markingAllRead ? 'Marking…' : 'Mark all read'}
+   526→          </button>
+   527→        </div>
+   528→      )}
+   529→
+   530→      {/* List */}
+   531→      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+   532→        {loading && items.length === 0 ? (
+   533→          <div className="flex h-32 items-center justify-center text-muted-foreground">
+   534→            <Loader2 className="h-4 w-4 animate-spin" />
+   535→          </div>
+   536→        ) : items.length === 0 ? (
+   537→          <div className="flex h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+   538→            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-muted/60 text-muted-foreground">
+   539→              <Inbox className="h-6 w-6" />
+   540→            </div>
+   541→            <div>
+   542→              <div className="text-sm font-medium">No conversations yet</div>
+   543→              <div className="mt-0.5 text-[11px] text-muted-foreground">
+   544→                Use the Simulator to test the AI.
+   545→              </div>
+   546→            </div>
+   547→          </div>
+   548→        ) : (
+   549→          <ul className="divide-y divide-border/60">
+   550→            {items.map((c) => {
+   551→              const active = c.contactId === selectedId
+   552→              const previewPrefix =
+   553→                c.lastDirection === 'outgoing'
+   554→                  ? c.lastMessage.startsWith('AI:') || c.lastMessage.startsWith('You:')
+   555→                    ? ''
+   556→                    : 'You: '
+   557→                  : ''
+   558→              return (
+   559→                <li key={c.contactId}>
+   560→                  <button
+   561→                    type="button"
+   562→                    onClick={() => onSelect(c.contactId)}
+   563→                    className={cn(
+   564→                      'group relative flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
+   565→                      active ? 'bg-primary/10' : 'hover:bg-muted/40',
+   566→                    )}
+   567→                  >
+   568→                    {/* active left accent */}
+   569→                    {active && (
+   570→                      <span className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+   571→                    )}
+   572→                    <Avatar name={c.name} phone={c.phone} />
+   573→                    <div className="min-w-0 flex-1">
+   574→                      <div className="flex items-center justify-between gap-2">
+   575→                        <span className="truncate text-sm font-semibold">{c.name}</span>
+   576→                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+   577→                          {timeAgo(c.lastMessageAt)}
+   578→                        </span>
+   579→                      </div>
+   580→                      <div className="flex items-center justify-between gap-2">
+   581→                        <span className="line-clamp-1 text-xs text-muted-foreground">
+   582→                          {previewPrefix}
+   583→                          {c.lastMessage || '—'}
+   584→                        </span>
+   585→                        <div className="flex shrink-0 items-center gap-1">
+   586→                          {c.humanMode && (
+   587→                            <Badge className="border-amber-500/30 bg-amber-500/15 px-1 py-0 text-[9px] font-semibold text-amber-300">
+   588→                              Human
+   589→                            </Badge>
+   590→                          )}
+   591→                          {c.pinned && <Pin className="h-3 w-3 text-muted-foreground" />}
+   592→                          {c.unread > 0 && (
+   593→                            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-white">
+   594→                              {c.unread > 99 ? '99+' : c.unread}
+   595→                            </span>
+   596→                          )}
+   597→                        </div>
+   598→                      </div>
+   599→                      <div className="mt-1 flex items-center gap-1.5">
+   600→                        <span className="text-[10px] text-muted-foreground">{c.phone}</span>
+   601→                        {c.leadScore >= 25 && <LeadBadge score={c.leadScore} className="text-[9px]" />}
+   602→                      </div>
+   603→                    </div>
+   604→                  </button>
+   605→                </li>
+   606→              )
+   607→            })}
+   608→          </ul>
+   609→        )}
+   610→      </div>
+   611→    </div>
+   612→  )
+   613→}
+   614→
+   615→// ------------------------------------------------------------
+   616→// ChatWindow — center pane
+   617→// ------------------------------------------------------------
+   618→interface ChatWindowProps {
+   619→  contact: ChatListItem | null
+   620→  messages: ChatMessage[]
+   621→  loadingMessages: boolean
+   622→  waState: WhatsAppState
+   623→  onBack: () => void
+   624→  onOpenDetails: () => void
+   625→  onSend: (text: string) => Promise<void>
+   626→  sending: boolean
+   627→}
+   628→
+   629→function ChatWindow({
+   630→  contact,
+   631→  messages,
+   632→  loadingMessages,
+   633→  waState,
+   634→  onBack,
+   635→  onOpenDetails,
+   636→  onSend,
+   637→  sending,
+   638→}: ChatWindowProps) {
+   639→  const [text, setText] = React.useState('')
+   640→  const [exporting, setExporting] = React.useState(false)
+   641→  const [showScrollButton, setShowScrollButton] = React.useState(false)
+   642→  const scrollRef = React.useRef<HTMLDivElement>(null)
+   643→  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+   644→  const pinnedToBottomRef = React.useRef(true)
+   645→
+   646→  // Auto-scroll: always jump to bottom when switching contacts; only follow
+   647→  // new messages when the user hasn't scrolled up to read history.
+   648→  React.useEffect(() => {
+   649→    const el = scrollRef.current
+   650→    if (!el) return
+   651→    el.scrollTop = el.scrollHeight
+   652→    pinnedToBottomRef.current = true
+   653→    setShowScrollButton(false)
+   654→  }, [contact?.contactId])
+   655→
+   656→  React.useEffect(() => {
+   657→    const el = scrollRef.current
+   658→    if (!el) return
+   659→    if (pinnedToBottomRef.current) {
+   660→      el.scrollTop = el.scrollHeight
+   661→    }
+   662→  }, [messages])
+   663→
+   664→  // Auto-grow the textarea up to ~4 lines
+   665→  React.useEffect(() => {
+   666→    const ta = textareaRef.current
+   667→    if (!ta) return
+   668→    ta.style.height = 'auto'
+   669→    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
+   670→  }, [text])
+   671→
+   672→  const handleScroll = () => {
+   673→    const el = scrollRef.current
+   674→    if (!el) return
+   675→    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+   676→    const atBottom = distanceFromBottom < 80
+   677→    pinnedToBottomRef.current = atBottom
+   678→    setShowScrollButton(!atBottom && messages.length > 0)
+   679→  }
+   680→
+   681→  const scrollToBottom = () => {
+   682→    const el = scrollRef.current
+   683→    if (!el) return
+   684→    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+   685→    pinnedToBottomRef.current = true
+   686→    setShowScrollButton(false)
+   687→  }
+   688→
+   689→  const handleExport = async (format: 'csv' | 'json') => {
+   690→    if (!contact) return
+   691→    setExporting(true)
+   692→    try {
+   693→      const res = await fetch(
+   694→        `/api/messages/export?contactId=${encodeURIComponent(contact.contactId)}&format=${format}`,
+   695→        { credentials: 'same-origin' },
+   696→      )
+   697→      if (!res.ok) {
+   698→        throw new Error(`Export failed (${res.status})`)
+   699→      }
+   700→      const content = await res.text()
+   701→      const safeName =
+   702→        (contact.name || contact.phone)
+   703→          .trim()
+   704→          .replace(/[^a-zA-Z0-9-_]+/g, '_')
+   705→          .replace(/^_+|_+$/g, '') || 'conversation'
+   706→      const ext = format === 'csv' ? 'csv' : 'json'
+   707→      const mime =
+   708→        format === 'csv'
+   709→          ? 'text/csv;charset=utf-8'
+   710→          : 'application/json;charset=utf-8'
+   711→      downloadFile(`chat-${safeName}.${ext}`, content, mime)
+   712→      toast.success(`Exported as ${format.toUpperCase()}`)
+   713→    } catch (err) {
+   714→      toast.error('Failed to export conversation', {
+   715→        description: err instanceof Error ? err.message : undefined,
+   716→      })
+   717→    } finally {
+   718→      setExporting(false)
+   719→    }
+   720→  }
+   721→
+   722→  // Quote-reply: insert `> {line}` for each line of the quoted message
+   723→  // so it reads as a markdown block-quote prefix in the composer.
+   724→  const handleReply = (quotedText: string) => {
+   725→    const prefix = quotedText
+   726→      .split('\n')
+   727→      .map((line) => `> ${line}`)
+   728→      .join('\n')
+   729→    setText((prev) => {
+   730→      const merged = prev && !prev.endsWith('\n') ? prev + '\n' : prev
+   731→      return `${merged}${prefix}\n`
+   732→    })
+   733→    textareaRef.current?.focus()
+   734→  }
+   735→
+   736→  if (!contact) {
+   737→    return (
+   738→      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+   739→        <div className="grid h-16 w-16 place-items-center rounded-3xl bg-muted/60 text-muted-foreground">
+   740→          <MessageCircle className="h-8 w-8" />
+   741→        </div>
+   742→        <div>
+   743→          <div className="text-base font-semibold">Select a conversation</div>
+   744→          <div className="mt-1 text-sm text-muted-foreground">
+   745→            Pick a chat from the list to view messages and details.
+   746→          </div>
+   747→        </div>
+   748→      </div>
+   749→    )
+   750→  }
+   751→
+   752→  const grouped = groupByDay(messages)
+   753→  const aiActive = !contact.humanMode
+   754→  const waConnected = waState === 'connected'
+   755→
+   756→  const handleSubmit = async () => {
+   757→    const trimmed = text.trim()
+   758→    if (!trimmed || sending) return
+   759→    setText('')
+   760→    await onSend(trimmed)
+   761→  }
+   762→
+   763→  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+   764→    if (e.key === 'Enter' && !e.shiftKey) {
+   765→      e.preventDefault()
+   766→      void handleSubmit()
+   767→    }
+   768→  }
+   769→
+   770→  const statusLine = contact.humanMode
+   771→    ? 'Human mode active — AI paused'
+   772→    : waConnected
+   773→      ? 'AI auto-reply is handling this chat'
+   774→      : 'AI auto-reply is handling this chat (simulated)'
+   775→
+   776→  return (
+   777→    <div className="flex h-full min-h-0 flex-col">
+   778→      {/* Header */}
+   779→      <header className="flex items-center gap-2 border-b p-3">
+   780→        <Button
+   781→          variant="ghost"
+   782→          size="icon"
+   783→          className="lg:hidden"
+   784→          onClick={onBack}
+   785→          aria-label="Back to list"
+   786→        >
+   787→          <ArrowLeft className="h-5 w-5" />
+   788→        </Button>
+   789→        <Avatar name={contact.name} phone={contact.phone} size="sm" />
+   790→        <div className="min-w-0 flex-1">
+   791→          <div className="flex items-center gap-2">
+   792→            <span className="truncate text-sm font-semibold">{contact.name}</span>
+   793→            {contact.leadScore >= 25 && <LeadBadge score={contact.leadScore} />}
+   794→            {contact.humanMode && (
+   795→              <Badge className="border-amber-500/30 bg-amber-500/15 px-1.5 py-0 text-[10px] font-semibold text-amber-300">
+   796→                Human
+   797→              </Badge>
+   798→            )}
+   799→          </div>
+   800→          <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
+   801→        </div>
+   802→        {/* Export conversation */}
+   803→        <DropdownMenu>
+   804→          <DropdownMenuTrigger asChild>
+   805→            <Button
+   806→              variant="ghost"
+   807→              size="icon"
+   808→              className="h-8 w-8 shrink-0"
+   809→              disabled={exporting || messages.length === 0}
+   810→              aria-label="Export conversation"
+   811→            >
+   812→              {exporting ? (
+   813→                <Loader2 className="h-4 w-4 animate-spin" />
+   814→              ) : (
+   815→                <Download className="h-4 w-4" />
+   816→              )}
+   817→            </Button>
+   818→          </DropdownMenuTrigger>
+   819→          <DropdownMenuContent align="end">
+   820→            <DropdownMenuItem
+   821→              onClick={() => void handleExport('csv')}
+   822→              className="gap-2 text-xs"
+   823→            >
+   824→              <FileText className="h-3.5 w-3.5" />
+   825→              Export as CSV
+   826→            </DropdownMenuItem>
+   827→            <DropdownMenuItem
+   828→              onClick={() => void handleExport('json')}
+   829→              className="gap-2 text-xs"
+   830→            >
+   831→              <Braces className="h-3.5 w-3.5" />
+   832→              Export as JSON
+   833→            </DropdownMenuItem>
+   834→          </DropdownMenuContent>
+   835→        </DropdownMenu>
+   836→        <Button
+   837→          variant="ghost"
+   838→          size="icon"
+   839→          className="lg:hidden"
+   840→          onClick={onOpenDetails}
+   841→          aria-label="View details"
+   842→        >
+   843→          <Info className="h-5 w-5" />
+   844→        </Button>
+   845→      </header>
+   846→
+   847→      {/* Status banner */}
+   848→      <div
+   849→        className={cn(
+   850→          'flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium',
+   851→          contact.humanMode
+   852→            ? 'bg-amber-500/15 text-amber-300'
+   853→            : 'bg-emerald-500/10 text-emerald-300',
+   854→        )}
+   855→      >
+   856→        {contact.humanMode ? <UserCog className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+   857→        <span>
+   858→          {contact.humanMode
+   859→            ? 'Human mode — AI paused. You reply manually.'
+   860→            : 'AI auto-reply is ON. Take over to reply manually.'}
+   861→        </span>
+   862→      </div>
+   863→      {!waConnected && (
+   864→        <div className="flex items-center gap-2 bg-zinc-500/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300">
+   865→          <AlertTriangle className="h-3.5 w-3.5" />
+   866→          <span>WhatsApp not connected — messages are simulated.</span>
+   867→        </div>
+   868→      )}
+   869→
+   870→      {/* Messages area */}
+   871→      <div className="relative min-h-0 flex-1">
+   872→        <div
+   873→          ref={scrollRef}
+   874→          onScroll={handleScroll}
+   875→          className="relative h-full overflow-y-auto scrollbar-thin bg-background px-3 py-4"
+   876→        >
+   877→          <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+   878→          <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
+   879→            {loadingMessages && messages.length === 0 ? (
+   880→              <div className="flex h-32 items-center justify-center text-muted-foreground">
+   881→                <Loader2 className="h-4 w-4 animate-spin" />
+   882→              </div>
+   883→            ) : messages.length === 0 ? (
+   884→              <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+   885→                <MessageCircle className="h-6 w-6" />
+   886→                <span className="text-xs">No messages yet. Say hello!</span>
+   887→              </div>
+   888→            ) : (
+   889→              grouped.map((group) => (
+   890→                <div key={group.day} className="flex flex-col gap-2">
+   891→                  <DateSeparator day={group.day} />
+   892→                  {group.items.map((m) => (
+   893→                    <MessageBubble key={m.id} message={m} onReply={handleReply} />
+   894→                  ))}
+   895→                </div>
+   896→              ))
+   897→            )}
+   898→          </div>
+   899→        </div>
+   900→        {/* Scroll-to-bottom floating button */}
+   901→        <button
+   902→          type="button"
+   903→          onClick={scrollToBottom}
+   904→          className={cn(
+   905→            'absolute bottom-4 right-4 grid h-9 w-9 place-items-center rounded-full border bg-card shadow-lg transition-opacity hover:bg-muted',
+   906→            showScrollButton
+   907→              ? 'opacity-100'
+   908→              : 'pointer-events-none opacity-0',
+   909→          )}
+   910→          aria-label="Scroll to latest message"
+   911→        >
+   912→          <ArrowDown className="h-4 w-4" />
+   913→        </button>
+   914→      </div>
+   915→
+   916→      {/* Composer */}
+   917→      <div className="border-t bg-background/95 p-3 backdrop-blur">
+   918→        {aiActive && (
+   919→          <div className="mb-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+   920→            <Sparkles className="h-3 w-3 text-primary" />
+   921→            <span>AI is handling this conversation. Take over to reply manually.</span>
+   922→          </div>
+   923→        )}
+   924→        <div className="flex items-end gap-2">
+   925→          <Textarea
+   926→            ref={textareaRef}
+   927→            value={text}
+   928→            onChange={(e) => setText(e.target.value)}
+   929→            onKeyDown={handleKeyDown}
+   930→            placeholder={aiActive ? 'Type to take over & send…' : 'Type a message…'}
+   931→            className="min-h-10 max-h-30 resize-none text-sm"
+   932→            rows={1}
+   933→            aria-label="Message composer"
+   934→          />
+   935→          <Button
+   936→            onClick={handleSubmit}
+   937→            disabled={!text.trim() || sending}
+   938→            className={cn(
+   939→              'h-10 shrink-0 gap-1.5 px-3',
+   940→              aiActive
+   941→                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
+   942→                : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+   943→            )}
+   944→            aria-label={aiActive ? 'Take over and send' : 'Send message'}
+   945→          >
+   946→            {sending ? (
+   947→              <Loader2 className="h-4 w-4 animate-spin" />
+   948→            ) : (
+   949→              <Send className="h-4 w-4" />
+   950→            )}
+   951→            <span className="hidden text-xs font-semibold sm:inline">
+   952→              {aiActive ? 'Take over & send' : 'Send'}
+   953→            </span>
+   954→          </Button>
+   955→        </div>
+   956→        <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+   957→          <span>Enter to send · Shift+Enter for newline</span>
+   958→          <span className="tabular-nums">{text.length}/4000</span>
+   959→        </div>
+   960→      </div>
+   961→    </div>
+   962→  )
+   963→}
+   964→
+   965→// ------------------------------------------------------------
+   966→// DetailsPanel — right pane (also rendered inside the mobile Sheet)
+   967→// ------------------------------------------------------------
+   968→interface DetailsPanelProps {
+   969→  detail: ContactDetail | null
+   970→  loading: boolean
+   971→  waConnected: boolean
+   972→  pinned: boolean
+   973→  onToggleHumanMode: (enabled: boolean) => Promise<void>
+   974→  onPin: (pinned: boolean) => Promise<void>
+   975→  onStatusChange: (status: ContactStatus) => Promise<void>
+   976→  onNotesSave: (notes: string) => Promise<void>
+   977→  onViewProfile?: (contactId: string) => void
+   978→}
+   979→
+   980→function DetailsPanel({
+   981→  detail,
+   982→  loading,
+   983→  pinned,
+   984→  onToggleHumanMode,
+   985→  onPin,
+   986→  onStatusChange,
+   987→  onNotesSave,
+   988→  onViewProfile,
+   989→}: DetailsPanelProps) {
+   990→  const [notesDraft, setNotesDraft] = React.useState('')
+   991→  const [savingNotes, setSavingNotes] = React.useState(false)
+   992→  const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+   993→
+   994→  // Keep a local draft synced with server-loaded notes
+   995→  React.useEffect(() => {
+   996→    setNotesDraft(detail?.notes ?? '')
+   997→  }, [detail?.id, detail?.notes])
+   998→
+   999→  if (loading && !detail) {
+  1000→    return (
+  1001→      <div className="flex h-full items-center justify-center text-muted-foreground">
+  1002→        <Loader2 className="h-5 w-5 animate-spin" />
+  1003→      </div>
+  1004→    )
+  1005→  }
+  1006→  if (!detail) {
+  1007→    return (
+  1008→      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
+  1009→        <User className="h-8 w-8" />
+  1010→        <span className="text-xs">Select a conversation to see customer details.</span>
+  1011→      </div>
+  1012→    )
+  1013→  }
+  1014→
+  1015→  const scoreColor =
+  1016→    detail.leadScore >= 70
+  1017→      ? 'bg-emerald-500'
+  1018→      : detail.leadScore >= 50
+  1019→        ? 'bg-amber-500'
+  1020→        : detail.leadScore >= 25
+  1021→          ? 'bg-orange-500'
+  1022→          : 'bg-muted-foreground/40'
+  1023→
+  1024→  const run = async (key: string, fn: () => Promise<void>) => {
+  1025→    setActionLoading(key)
+  1026→    try {
+  1027→      await fn()
+  1028→    } finally {
+  1029→      setActionLoading(null)
+  1030→    }
+  1031→  }
+  1032→
+  1033→  return (
+  1034→    <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
+  1035→      {/* Header */}
+  1036→      <div className="border-b p-4">
+  1037→        <div className="flex items-center gap-3">
+  1038→          <Avatar name={detail.name} phone={detail.phone} size="lg" />
+  1039→          <div className="min-w-0 flex-1">
+  1040→            <div className="truncate text-sm font-semibold">{detail.name}</div>
+  1041→            <div className="truncate text-xs text-muted-foreground">{detail.phone}</div>
+  1042→            <Badge
+  1043→              variant="outline"
+  1044→              className={cn(
+  1045→                'mt-1 px-1.5 py-0 text-[10px] font-medium capitalize',
+  1046→                STATUS_BADGE[detail.status],
+  1047→              )}
+  1048→            >
+  1049→              {detail.status}
+  1050→            </Badge>
+  1051→          </div>
+  1052→        </div>
+  1053→        {onViewProfile && (
+  1054→          <Button
+  1055→            variant="outline"
+  1056→            size="sm"
+  1057→            className="mt-3 w-full gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:text-emerald-100"
+  1058→            onClick={() => onViewProfile(detail.id)}
+  1059→          >
+  1060→            <ExternalLink className="h-3.5 w-3.5" />
+  1061→            View Full Profile
+  1062→          </Button>
+  1063→        )}
+  1064→        {detail.summary && (
+  1065→          <p className="mt-3 rounded-lg bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+  1066→            {detail.summary}
+  1067→          </p>
+  1068→        )}
+  1069→      </div>
+  1070→
+  1071→      {/* Status section */}
+  1072→      <Section icon={<UserCog className="h-3.5 w-3.5" />} title="Status">
+  1073→        <div className="flex items-center justify-between rounded-md border bg-background/40 px-3 py-2">
+  1074→          <div className="flex flex-col">
+  1075→            <span className="text-xs font-medium">
+  1076→              {detail.humanMode ? 'Human mode' : 'AI auto-reply'}
+  1077→            </span>
+  1078→            <span className="text-[10px] text-muted-foreground">
+  1079→              {detail.humanMode ? 'AI paused · you reply' : 'AI handling replies'}
+  1080→            </span>
+  1081→          </div>
+  1082→          <Switch
+  1083→            checked={detail.humanMode}
+  1084→            onCheckedChange={(v) => void run('human', () => onToggleHumanMode(v))}
+  1085→            disabled={actionLoading === 'human'}
+  1086→            aria-label="Toggle human mode"
+  1087→          />
+  1088→        </div>
+  1089→        <Button
+  1090→          variant={detail.humanMode ? 'default' : 'outline'}
+  1091→          size="sm"
+  1092→          className="mt-2 w-full gap-1.5"
+  1093→          disabled={actionLoading === 'human'}
+  1094→          onClick={() =>
+  1095→            void run('human', () => onToggleHumanMode(!detail.humanMode))
+  1096→          }
+  1097→        >
+  1098→          {actionLoading === 'human' ? (
+  1099→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1100→          ) : detail.humanMode ? (
+  1101→            <Bot className="h-3.5 w-3.5" />
+  1102→          ) : (
+  1103→            <UserCog className="h-3.5 w-3.5" />
+  1104→          )}
+  1105→          {detail.humanMode ? 'Resume AI' : 'Take over chat'}
+  1106→        </Button>
+  1107→      </Section>
+  1108→
+  1109→      {/* Lead info */}
+  1110→      <Section icon={<Flame className="h-3.5 w-3.5" />} title="Lead info">
+  1111→        <div className="flex items-center justify-between">
+  1112→          <span className="text-xs text-muted-foreground">Lead score</span>
+  1113→          <LeadBadge score={detail.leadScore} />
+  1114→        </div>
+  1115→        <Progress
+  1116→          value={detail.leadScore}
+  1117→          className={cn('mt-1 h-1.5', scoreColor)}
+  1118→        />
+  1119→        <div className="mt-2 flex items-center justify-between text-xs">
+  1120→          <span className="text-muted-foreground">Detected service</span>
+  1121→          <span className="text-right font-medium">{categoryLabel(detail.detectedService)}</span>
+  1122→        </div>
+  1123→        <div className="mt-1 flex items-center justify-between text-xs">
+  1124→          <span className="text-muted-foreground">Language</span>
+  1125→          <span className="font-medium">{detail.language || '—'}</span>
+  1126→        </div>
+  1127→      </Section>
+  1128→
+  1129→      {/* Customer info */}
+  1130→      <Section icon={<User className="h-3.5 w-3.5" />} title="Customer info">
+  1131→        <InfoRow label="First seen" value={formatDateTime(detail.firstSeen)} />
+  1132→        <InfoRow label="Last active" value={timeAgo(detail.lastSeen)} />
+  1133→        <InfoRow
+  1134→          label="Last message"
+  1135→          value={detail.lastMessageAt ? timeAgo(detail.lastMessageAt) : '—'}
+  1136→        />
+  1137→        <InfoRow label="Status" value={detail.status} />
+  1138→        <InfoRow label="Country code" value={detail.countryCode || '—'} />
+  1139→      </Section>
+  1140→
+  1141→      {/* AI Memory */}
+  1142→      <Section icon={<Bot className="h-3.5 w-3.5" />} title="AI memory">
+  1143→        {detail.memories.length === 0 ? (
+  1144→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+  1145→            No memory extracted yet. Send a message via the simulator to populate.
+  1146→          </div>
+  1147→        ) : (
+  1148→          <dl className="overflow-hidden rounded-md border">
+  1149→            {detail.memories.map((m, idx) => (
+  1150→              <div
+  1151→                key={m.key}
+  1152→                className={cn(
+  1153→                  'flex items-start gap-2 px-2.5 py-1.5',
+  1154→                  idx % 2 === 0 ? 'bg-background/40' : 'bg-transparent',
+  1155→                )}
+  1156→              >
+  1157→                <dt className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1158→                  {memoryLabel(m.key)}
+  1159→                </dt>
+  1160→                <dd className="flex-1 break-words text-xs">{m.value || '—'}</dd>
+  1161→              </div>
+  1162→            ))}
+  1163→          </dl>
+  1164→        )}
+  1165→      </Section>
+  1166→
+  1167→      {/* Notes */}
+  1168→      <Section icon={<MoreVertical className="h-3.5 w-3.5" />} title="Notes">
+  1169→        <Textarea
+  1170→          value={notesDraft}
+  1171→          onChange={(e) => setNotesDraft(e.target.value)}
+  1172→          placeholder="Add private notes about this customer…"
+  1173→          className="min-h-16 text-xs"
+  1174→        />
+  1175→        <Button
+  1176→          size="sm"
+  1177→          variant="outline"
+  1178→          className="mt-2 w-full gap-1.5"
+  1179→          disabled={savingNotes || notesDraft === (detail.notes ?? '')}
+  1180→          onClick={async () => {
+  1181→            setSavingNotes(true)
+  1182→            try {
+  1183→              await onNotesSave(notesDraft)
+  1184→            } finally {
+  1185→              setSavingNotes(false)
+  1186→            }
+  1187→          }}
+  1188→        >
+  1189→          {savingNotes ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+  1190→          Save notes
+  1191→        </Button>
+  1192→      </Section>
+  1193→
+  1194→      {/* Actions */}
+  1195→      <Section icon={<Shield className="h-3.5 w-3.5" />} title="Actions">
+  1196→        <Button
+  1197→          variant="outline"
+  1198→          size="sm"
+  1199→          className="w-full gap-1.5"
+  1200→          disabled={actionLoading === 'pin'}
+  1201→          onClick={() => void run('pin', () => onPin(!pinned))}
+  1202→        >
+  1203→          {actionLoading === 'pin' ? (
+  1204→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1205→          ) : (
+  1206→            <Pin className="h-3.5 w-3.5" />
+  1207→          )}
+  1208→          {pinned ? 'Unpin conversation' : 'Pin conversation'}
+  1209→        </Button>
+  1210→        {detail.status !== 'customer' && (
+  1211→          <Button
+  1212→            variant="outline"
+  1213→            size="sm"
+  1214→            className="mt-2 w-full gap-1.5"
+  1215→            disabled={actionLoading === 'customer'}
+  1216→            onClick={() => void run('customer', () => onStatusChange('customer'))}
+  1217→          >
+  1218→            {actionLoading === 'customer' ? (
+  1219→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1220→            ) : (
+  1221→              <Check className="h-3.5 w-3.5" />
+  1222→            )}
+  1223→            Mark as customer
+  1224→          </Button>
+  1225→        )}
+  1226→        {detail.status !== 'blocked' ? (
+  1227→          <Button
+  1228→            variant="destructive"
+  1229→            size="sm"
+  1230→            className="mt-2 w-full gap-1.5"
+  1231→            disabled={actionLoading === 'block'}
+  1232→            onClick={() => void run('block', () => onStatusChange('blocked'))}
+  1233→          >
+  1234→            {actionLoading === 'block' ? (
+  1235→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1236→            ) : (
+  1237→              <AlertTriangle className="h-3.5 w-3.5" />
+  1238→            )}
+  1239→            Block contact
+  1240→          </Button>
+  1241→        ) : (
+  1242→          <Button
+  1243→            variant="outline"
+  1244→            size="sm"
+  1245→            className="mt-2 w-full gap-1.5"
+  1246→            disabled={actionLoading === 'unblock'}
+  1247→            onClick={() => void run('unblock', () => onStatusChange('active'))}
+  1248→          >
+  1249→            {actionLoading === 'unblock' ? (
+  1250→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1251→            ) : (
+  1252→              <Shield className="h-3.5 w-3.5" />
+  1253→            )}
+  1254→            Unblock contact
+  1255→          </Button>
+  1256→        )}
+  1257→      </Section>
+  1258→      <div className="mt-auto p-3 text-center text-[10px] text-muted-foreground">
+  1259→        Contact ID: <span className="font-mono">{detail.id.slice(-8)}</span>
+  1260→      </div>
+  1261→    </div>
+  1262→  )
+  1263→}
+  1264→
+  1265→function Section({
+  1266→  icon,
+  1267→  title,
+  1268→  children,
+  1269→}: {
+  1270→  icon: React.ReactNode
+  1271→  title: string
+  1272→  children: React.ReactNode
+  1273→}) {
+  1274→  return (
+  1275→    <div className="border-b p-4">
+  1276→      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1277→        {icon}
+  1278→        <span>{title}</span>
+  1279→      </div>
+  1280→      <div className="flex flex-col gap-1.5">{children}</div>
+  1281→    </div>
+  1282→  )
+  1283→}
+  1284→
+  1285→function InfoRow({ label, value }: { label: string; value: string }) {
+  1286→  return (
+  1287→    <div className="flex items-center justify-between text-xs">
+  1288→      <span className="text-muted-foreground">{label}</span>
+  1289→      <span className="font-medium capitalize">{value}</span>
+  1290→    </div>
+  1291→  )
+  1292→}
+  1293→
+  1294→// ------------------------------------------------------------
+  1295→// Main ChatsView
+  1296→// ------------------------------------------------------------
+  1297→export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: string) => void } ) {
+  1298→  // --- Data state ---
+  1299→  const [items, setItems] = React.useState<ChatListItem[]>([])
+  1300→  const [messages, setMessages] = React.useState<ChatMessage[]>([])
+  1301→  const [detail, setDetail] = React.useState<ContactDetail | null>(null)
+  1302→  const [waState, setWaState] = React.useState<WhatsAppState>('disconnected')
+  1303→
+  1304→  // --- UI state ---
+  1305→  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  1306→  const [mobilePane, setMobilePane] = React.useState<'list' | 'chat'>('list')
+  1307→  const [detailsSheetOpen, setDetailsSheetOpen] = React.useState(false)
+  1308→  const [search, setSearch] = React.useState('')
+  1309→  const [debouncedSearch, setDebouncedSearch] = React.useState('')
+  1310→  const [filter, setFilter] = React.useState<FilterKey>('all')
+  1311→  const [loadingChats, setLoadingChats] = React.useState(true)
+  1312→  const [loadingMessages, setLoadingMessages] = React.useState(false)
+  1313→  const [loadingDetail, setLoadingDetail] = React.useState(false)
+  1314→  const [sending, setSending] = React.useState(false)
+  1315→  const [markingAllRead, setMarkingAllRead] = React.useState(false)
+  1316→
+  1317→  // --- Debounced search (300ms) ---
+  1318→  React.useEffect(() => {
+  1319→    const t = setTimeout(() => setDebouncedSearch(search), 300)
+  1320→    return () => clearTimeout(t)
+  1321→  }, [search])
+  1322→
+  1323→  // --- Build query params for chats list ---
+  1324→  const chatsQuery = React.useMemo(() => {
+  1325→    const p = new URLSearchParams()
+  1326→    if (debouncedSearch.trim()) p.set('search', debouncedSearch.trim())
+  1327→    if (filter !== 'all') p.set('filter', filter)
+  1328→    p.set('sort', 'recent')
+  1329→    p.set('limit', '100')
+  1330→    return p.toString()
+  1331→  }, [debouncedSearch, filter])
+  1332→
+  1333→  // --- Fetch chats list ---
+  1334→  const fetchChats = React.useCallback(
+  1335→    async (opts: { silent?: boolean } = {}) => {
+  1336→      if (!opts.silent) setLoadingChats(true)
+  1337→      try {
+  1338→        const data = await apiGet<{ items: ChatListItem[] }>(`/api/chats?${chatsQuery}`)
+  1339→        setItems(data.items ?? [])
+  1340→      } catch {
+  1341→        /* silent — polls will retry */
+  1342→      } finally {
+  1343→        setLoadingChats(false)
+  1344→      }
+  1345→    },
+  1346→    [chatsQuery],
+  1347→  )
+  1348→
+  1349→  // --- Fetch WA state (cheap, polled less frequently) ---
+  1350→  const fetchWaState = React.useCallback(async () => {
+  1351→    try {
+  1352→      const data = await apiGet<WaStateResponse>('/api/whatsapp')
+  1353→      setWaState(data.state)
+  1354→    } catch {
+  1355→      /* non-fatal */
+  1356→    }
+  1357→  }, [])
+  1358→
+  1359→  // --- Fetch messages for the selected contact ---
+  1360→  const fetchMessages = React.useCallback(
+  1361→    async (opts: { silent?: boolean } = {}) => {
+  1362→      if (!selectedId) {
+  1363→        setMessages([])
+  1364→        return
+  1365→      }
+  1366→      if (!opts.silent) setLoadingMessages(true)
+  1367→      try {
+  1368→        const data = await apiGet<{ items: ChatMessage[] }>(
+  1369→          `/api/messages?contactId=${encodeURIComponent(selectedId)}&limit=200`,
+  1370→        )
+  1371→        setMessages(data.items ?? [])
+  1372→      } catch {
+  1373→        /* silent */
+  1374→      } finally {
+  1375→        setLoadingMessages(false)
+  1376→      }
+  1377→    },
+  1378→    [selectedId],
+  1379→  )
+  1380→
+  1381→  // --- Fetch detail for the selected contact ---
+  1382→  const fetchDetail = React.useCallback(
+  1383→    async (opts: { silent?: boolean } = {}) => {
+  1384→      if (!selectedId) {
+  1385→        setDetail(null)
+  1386→        return
+  1387→      }
+  1388→      if (!opts.silent) setLoadingDetail(true)
+  1389→      try {
+  1390→        const data = await apiGet<ContactDetail>(
+  1391→          `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1392→        )
+  1393→        setDetail(data)
+  1394→      } catch {
+  1395→        /* silent */
+  1396→      } finally {
+  1397→        setLoadingDetail(false)
+  1398→      }
+  1399→    },
+  1400→    [selectedId],
+  1401→  )
+  1402→
+  1403→  // --- Initial load + refetch on filter/search change ---
+  1404→  React.useEffect(() => {
+  1405→    void fetchChats()
+  1406→  }, [fetchChats])
+  1407→
+  1408→  // --- Initial WA state fetch ---
+  1409→  React.useEffect(() => {
+  1410→    void fetchWaState()
+  1411→  }, [fetchWaState])
+  1412→
+  1413→  // --- Auto-select first conversation on first load ---
+  1414→  const autoSelected = React.useRef(false)
+  1415→  React.useEffect(() => {
+  1416→    if (autoSelected.current) return
+  1417→    if (items.length > 0 && !selectedId) {
+  1418→      autoSelected.current = true
+  1419→      setSelectedId(items[0].contactId)
+  1420→    }
+  1421→  }, [items, selectedId])
+  1422→
+  1423→  // --- Fetch messages + detail when selection changes ---
+  1424→  React.useEffect(() => {
+  1425→    if (!selectedId) {
+  1426→      setMessages([])
+  1427→      setDetail(null)
+  1428→      return
+  1429→    }
+  1430→    void fetchMessages()
+  1431→    void fetchDetail()
+  1432→    setMobilePane('chat')
+  1433→  }, [selectedId, fetchMessages, fetchDetail])
+  1434→
+  1435→  // --- Polling: chats every 8s, messages every 4s ---
+  1436→  React.useEffect(() => {
+  1437→    const t = setInterval(() => {
+  1438→      void fetchChats({ silent: true })
+  1439→    }, 8000)
+  1440→    return () => clearInterval(t)
+  1441→  }, [fetchChats])
+  1442→
+  1443→  React.useEffect(() => {
+  1444→    if (!selectedId) return
+  1445→    const t = setInterval(() => {
+  1446→      void fetchMessages({ silent: true })
+  1447→    }, 4000)
+  1448→    return () => clearInterval(t)
+  1449→  }, [selectedId, fetchMessages])
+  1450→
+  1451→  // --- WA state poll every 30s (cheap, slow-changing) ---
+  1452→  React.useEffect(() => {
+  1453→    const t = setInterval(() => {
+  1454→      void fetchWaState()
+  1455→    }, 30000)
+  1456→    return () => clearInterval(t)
+  1457→  }, [fetchWaState])
+  1458→
+  1459→  // --- Realtime: refresh on dashboard tick + simulator message ---
+  1460→  const refreshOnTick = React.useCallback(() => {
+  1461→    void fetchChats({ silent: true })
+  1462→    if (selectedId) void fetchMessages({ silent: true })
+  1463→  }, [fetchChats, fetchMessages, selectedId])
+  1464→
+  1465→  const onSimulatorMessage = React.useCallback(
+  1466→    (payload: unknown) => {
+  1467→      const p = (payload ?? {}) as { contactId?: string }
+  1468→      void fetchChats({ silent: true })
+  1469→      if (p.contactId && p.contactId === selectedId) {
+  1470→        void fetchMessages({ silent: true })
+  1471→        void fetchDetail({ silent: true })
+  1472→      }
+  1473→    },
+  1474→    [fetchChats, fetchMessages, fetchDetail, selectedId],
+  1475→  )
+  1476→
+  1477→  useRealtime([
+  1478→    { event: 'dashboard:tick', handler: refreshOnTick },
+  1479→    { event: 'simulator:message', handler: onSimulatorMessage },
+  1480→  ])
+  1481→
+  1482→  // --- Handlers ---
+  1483→  const selectedContact = React.useMemo(
+  1484→    () => items.find((c) => c.contactId === selectedId) ?? null,
+  1485→    [items, selectedId],
+  1486→  )
+  1487→
+  1488→  const totalUnread = React.useMemo(
+  1489→    () => items.filter((c) => c.unread > 0).length,
+  1490→    [items],
+  1491→  )
+  1492→
+  1493→  const handleSelect = (id: string) => {
+  1494→    setSelectedId(id)
+  1495→    setMobilePane('chat')
+  1496→  }
+  1497→
+  1498→  const handleBack = () => setMobilePane('list')
+  1499→
+  1500→  const handleSend = async (text: string) => {
+  1501→    if (!selectedId) return
+  1502→    setSending(true)
+  1503→    try {
+  1504→      // If AI is still active, take over first so the manual send makes sense.
+  1505→      const current = items.find((c) => c.contactId === selectedId)
+  1506→      if (current && !current.humanMode) {
+  1507→        try {
+  1508→          await apiPost<HumanModeResponse>(
+  1509→            `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1510→            { enabled: true },
+  1511→          )
+  1512→          // Optimistically reflect the toggle
+  1513→          setItems((prev) =>
+  1514→            prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: true } : c)),
+  1515→          )
+  1516→          setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: true } : d))
+  1517→          toast.success('Human mode enabled', {
+  1518→            description: 'AI auto-reply is paused for this chat.',
+  1519→          })
+  1520→        } catch (err) {
+  1521→          toast.error('Failed to take over chat', {
+  1522→            description: err instanceof Error ? err.message : undefined,
+  1523→          })
+  1524→          setSending(false)
+  1525→          return
+  1526→        }
+  1527→      }
+  1528→
+  1529→      // Send the manual message
+  1530→      const res = await apiPost<SendMessageResponse>('/api/messages', {
+  1531→        contactId: selectedId,
+  1532→        text,
+  1533→      })
+  1534→      setMessages((prev) => [...prev, res.message])
+  1535→      // Refresh the chats list so the last-message preview updates
+  1536→      void fetchChats({ silent: true })
+  1537→      void fetchDetail({ silent: true })
+  1538→      toast.success('Message sent')
+  1539→    } catch (err) {
+  1540→      toast.error('Failed to send message', {
+  1541→        description: err instanceof Error ? err.message : undefined,
+  1542→      })
+  1543→    } finally {
+  1544→      setSending(false)
+  1545→    }
+  1546→  }
+  1547→
+  1548→  const handleToggleHumanMode = async (enabled: boolean) => {
+  1549→    if (!selectedId) return
+  1550→    try {
+  1551→      await apiPost<HumanModeResponse>(
+  1552→        `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1553→        { enabled },
+  1554→      )
+  1555→      setItems((prev) =>
+  1556→        prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: enabled } : c)),
+  1557→      )
+  1558→      setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: enabled } : d))
+  1559→      toast.success(enabled ? 'Human mode enabled' : 'AI auto-reply resumed')
+  1560→    } catch (err) {
+  1561→      toast.error('Failed to toggle human mode', {
+  1562→        description: err instanceof Error ? err.message : undefined,
+  1563→      })
+  1564→    }
+  1565→  }
+  1566→
+  1567→  const handlePin = async (pinned: boolean) => {
+  1568→    if (!selectedId) return
+  1569→    try {
+  1570→      await apiPatch<ContactDetail>(
+  1571→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1572→        { pinned },
+  1573→      )
+  1574→      // ContactDetail doesn't carry pinned, so update items list locally
+  1575→      // and refetch the chats list to re-sort (pinned float to top).
+  1576→      setItems((prev) =>
+  1577→        prev.map((c) => (c.contactId === selectedId ? { ...c, pinned } : c)),
+  1578→      )
+  1579→      void fetchChats({ silent: true })
+  1580→      toast.success(pinned ? 'Conversation pinned' : 'Conversation unpinned')
+  1581→    } catch (err) {
+  1582→      toast.error('Failed to update pin', {
+  1583→        description: err instanceof Error ? err.message : undefined,
+  1584→      })
+  1585→    }
+  1586→  }
+  1587→
+  1588→  const handleStatusChange = async (status: ContactStatus) => {
+  1589→    if (!selectedId) return
+  1590→    try {
+  1591→      const updated = await apiPatch<ContactDetail>(
+  1592→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1593→        { status },
+  1594→      )
+  1595→      setDetail(updated)
+  1596→      setItems((prev) =>
+  1597→        prev.map((c) => (c.contactId === selectedId ? { ...c, status: updated.status } : c)),
+  1598→      )
+  1599→      if (status === 'blocked') {
+  1600→        toast.warning('Contact blocked')
+  1601→      } else if (status === 'customer') {
+  1602→        toast.success('Marked as customer')
+  1603→      } else {
+  1604→        toast.success(`Status updated: ${status}`)
+  1605→      }
+  1606→    } catch (err) {
+  1607→      toast.error('Failed to update status', {
+  1608→        description: err instanceof Error ? err.message : undefined,
+  1609→      })
+  1610→    }
+  1611→  }
+  1612→
+  1613→  const handleNotesSave = async (notes: string) => {
+  1614→    if (!selectedId) return
+  1615→    try {
+  1616→      const updated = await apiPatch<ContactDetail>(
+  1617→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1618→        { notes },
+  1619→      )
+  1620→      setDetail(updated)
+  1621→      toast.success('Notes saved')
+  1622→    } catch (err) {
+  1623→      toast.error('Failed to save notes', {
+  1624→        description: err instanceof Error ? err.message : undefined,
+  1625→      })
+  1626→    }
+  1627→  }
+  1628→
+  1629→  const handleMarkAllRead = async () => {
+  1630→    setMarkingAllRead(true)
+  1631→    try {
+  1632→      const res = await apiPost<{ ok: boolean; updated: number }>(
+  1633→        '/api/chats/mark-all-read',
+  1634→      )
+  1635→      // Optimistically clear unread counts on all visible conversations so
+  1636→      // the list updates instantly (the next poll will confirm).
+  1637→      setItems((prev) => prev.map((c) => (c.unread > 0 ? { ...c, unread: 0 } : c)))
+  1638→      toast.success(
+  1639→        `Marked ${res.updated} message${res.updated === 1 ? '' : 's'} as read`,
+  1640→      )
+  1641→    } catch (err) {
+  1642→      toast.error('Failed to mark all as read', {
+  1643→        description: err instanceof Error ? err.message : undefined,
+  1644→      })
+  1645→    } finally {
+  1646→      setMarkingAllRead(false)
+  1647→    }
+  1648→  }
+  1649→
+  1650→  // --- Render ---
+  1651→  return (
+  1652→    <TooltipProvider delayDuration={300}>
+  1653→      <div className="flex h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-xl border bg-card/30 backdrop-blur lg:grid lg:grid-cols-[320px_1fr_288px]">
+  1654→        {/* LEFT — conversation list */}
+  1655→        <aside
+  1656→          className={cn(
+  1657→            'min-h-0 flex flex-col border-r',
+  1658→            mobilePane === 'chat' && 'hidden lg:flex',
+  1659→          )}
+  1660→        >
+  1661→          <ConversationList
+  1662→            items={items}
+  1663→            loading={loadingChats}
+  1664→            selectedId={selectedId}
+  1665→            search={search}
+  1666→            filter={filter}
+  1667→            totalUnread={totalUnread}
+  1668→            markingAllRead={markingAllRead}
+  1669→            onSelect={handleSelect}
+  1670→            onSearchChange={setSearch}
+  1671→            onFilterChange={setFilter}
+  1672→            onMarkAllRead={() => void handleMarkAllRead()}
+  1673→          />
+  1674→        </aside>
+  1675→
+  1676→        {/* CENTER — chat window */}
+  1677→        <section
+  1678→          className={cn(
+  1679→            'min-h-0 flex flex-col',
+  1680→            mobilePane === 'list' && 'hidden lg:flex',
+  1681→          )}
+  1682→        >
+  1683→          <ChatWindow
+  1684→            contact={selectedContact}
+  1685→            messages={messages}
+  1686→            loadingMessages={loadingMessages}
+  1687→            waState={waState}
+  1688→            onBack={handleBack}
+  1689→            onOpenDetails={() => setDetailsSheetOpen(true)}
+  1690→            onSend={handleSend}
+  1691→            sending={sending}
+  1692→          />
+  1693→        </section>
+  1694→
+  1695→        {/* RIGHT — details panel (desktop) */}
+  1696→        <aside className="hidden min-h-0 flex-col border-l lg:flex">
+  1697→          <DetailsPanel
+  1698→            detail={detail}
+  1699→            loading={loadingDetail}
+  1700→            waConnected={waState === 'connected'}
+  1701→            pinned={selectedContact?.pinned ?? false}
+  1702→            onToggleHumanMode={handleToggleHumanMode}
+  1703→            onPin={handlePin}
+  1704→            onStatusChange={handleStatusChange}
+  1705→            onNotesSave={handleNotesSave}
+  1706→            onViewProfile={onViewProfile}
+  1707→          />
+  1708→        </aside>
+  1709→
+  1710→        {/* MOBILE — details sheet */}
+  1711→        <Sheet open={detailsSheetOpen} onOpenChange={setDetailsSheetOpen}>
+  1712→          <SheetContent side="right" className="w-full max-w-sm p-0 sm:max-w-md">
+  1713→            <SheetHeader className="border-b">
+  1714→              <SheetTitle className="flex items-center gap-2 text-sm">
+  1715→                <Info className="h-4 w-4 text-primary" />
+  1716→                Customer details
+  1717→              </SheetTitle>
+  1718→            </SheetHeader>
+  1719→            <div className="min-h-0 flex-1 overflow-hidden">
+  1720→              <DetailsPanel
+  1721→                detail={detail}
+  1722→                loading={loadingDetail}
+  1723→                waConnected={waState === 'connected'}
+  1724→                pinned={selectedContact?.pinned ?? false}
+  1725→                onToggleHumanMode={async (v) => {
+  1726→                  await handleToggleHumanMode(v)
+  1727→                }}
+  1728→                onPin={handlePin}
+  1729→                onStatusChange={handleStatusChange}
+  1730→                onNotesSave={handleNotesSave}
+  1731→                onViewProfile={onViewProfile}
+  1732→              />
+  1733→            </div>
+  1734→          </SheetContent>
+  1735→        </Sheet>
+  1736→      </div>
+  1737→    </TooltipProvider>
+  1738→  )
+  1739→}
+  1740→

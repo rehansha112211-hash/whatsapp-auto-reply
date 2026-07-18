@@ -18,6 +18,7 @@ import { LogsView } from '@/components/views/logs-view'
 import { SystemView } from '@/components/views/system-view'
 import { SimulatorView } from '@/components/views/simulator-view'
 import { BroadcastView } from '@/components/views/broadcast-view'
+import { ScheduledView } from '@/components/views/scheduled-view'
 import { AnalyticsView } from '@/components/views/analytics-view'
 import { ContactProfileView } from '@/components/views/contact-profile-view'
 import { apiGet, apiPost } from '@/lib/api-client'
@@ -145,6 +146,7 @@ export default function Home() {
           {active === 'leads' && <LeadsView onNavigate={setActive} />}
           {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
           {active === 'broadcast' && <BroadcastView />}
+          {active === 'scheduled' && <ScheduledView onNavigate={setActive} />}
           {active === 'analytics' && <AnalyticsView />}
           {active === 'contact-profile' && profileContactId && (
             <ContactProfileView

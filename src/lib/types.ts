@@ -67,6 +67,7 @@ export type ViewKey =
   | 'system'
   | 'simulator'
   | 'broadcast'
+  | 'scheduled'
   | 'analytics'
   | 'contact-profile'
 
@@ -110,6 +111,19 @@ export interface ChatListItem {
   pinned: boolean
   humanMode: boolean
   status: string
+  tags: TagItem[]
+}
+
+// A conversation tag/label (color is one of TAG_COLORS keys in src/lib/format.ts)
+export interface TagItem {
+  id: string
+  name: string
+  color: string
+}
+
+// Tag with a count of contacts using it (used in tag management UI)
+export interface TagWithCount extends TagItem {
+  contactCount: number
 }
 
 export interface ChatMessage {
@@ -139,6 +153,7 @@ export interface ContactDetail {
   lastMessageAt: string | null
   memories: { key: string; value: string }[]
   summary: string
+  tags: TagItem[]
 }
 
 export interface LeadRow {
@@ -152,6 +167,7 @@ export interface LeadRow {
   lastMessageAt: string | null
   category: string
   notified: boolean
+  tags: TagItem[]
 }
 
 export interface LogRow {
@@ -161,6 +177,18 @@ export interface LogRow {
   message: string
   meta: string
   contactId: string | null
+  createdAt: string
+}
+
+export interface ScheduledMessageRow {
+  id: string
+  contactId: string
+  contactName: string
+  contactPhone: string
+  text: string
+  scheduledAt: string
+  status: 'pending' | 'sent' | 'cancelled' | 'failed'
+  sentAt: string | null
   createdAt: string
 }
 
@@ -211,4 +239,23 @@ export const QORVIX_COMPANY = {
   website: 'https://qorvixnodetechnologies.indevs.in',
   description:
     'QorvixNode Technologies is a software development company delivering custom websites, Android apps, AI automation, CRMs, business software and end-to-end digital solutions for modern businesses.',
+}
+
+// ---------------- Quick Replies (composer snippets) ----------------
+export type QuickReplyCategory =
+  | 'greeting'
+  | 'pricing'
+  | 'support'
+  | 'hours'
+  | 'general'
+
+export interface QuickReplyRow {
+  id: string
+  shortcut: string
+  title: string
+  body: string
+  category: string
+  usageCount: number
+  createdAt: string
+  updatedAt: string
 }
