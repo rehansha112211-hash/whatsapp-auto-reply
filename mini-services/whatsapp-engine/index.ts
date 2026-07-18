@@ -358,4 +358,34 @@ server.listen(PORT, () => {
     console.log('[wa-engine] Found saved session — auto-connecting...')
     startConnection()
   }
+
+  // ============================================================
+  // Keep-alive: self-ping every 5 minutes to prevent the
+  // free-tier service from sleeping (Render/Heroku sleep
+  // after 15 min of inactivity).
+  // ============================================================
+  setInterval(async () => {
+    try {
+      const res = await fetch(`http://localhost:${PORT}/health`)
+      if (res.ok) {
+        console.log('[wa-engine] Keep-alive ping OK')
+      }
+    } catch {
+      // ignore
+    }
+  }, 5 * 60 * 1000) // every 5 minutes
+
+  // ============================================================
+  // Global error handlers — prevent crashes from killing
+  // the entire process.
+  // ============================================================
+  process.on('uncaughtException', (err) => {
+    console.error('[wa-engine] Uncaught exception:', err.message)
+    // Don't exit — try to recover
+  })
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[wa-engine] Unhandled rejection:', reason)
+    // Don't exit — try to recover
+  })
 })
