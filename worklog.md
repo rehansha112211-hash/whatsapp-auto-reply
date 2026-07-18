@@ -1955,3 +1955,77 @@ Task: Delete ALL simulation code — make everything REAL only
 - `bun run lint` → 0 errors, 0 warnings
 - Browser E2E: WhatsApp page shows "Real WhatsApp Engine Active" banner, "Generate QR Code" button works, real QR appears (277-char genuine WhatsApp pairing payload), NO simulation text anywhere on the page.
 - Confirmed: `hasSim: false`, `hasRealEngine: true`, `hasNoPhoneTab: true`, `hasNoSimScan: true`
+
+---
+Task ID: user-request-deploy
+Agent: Main (Z.ai Code)
+Task: Deploy to production — GitHub (private) + Vercel + Neon PostgreSQL
+
+## Deployment Completed
+
+### 1. Database Migration: SQLite → PostgreSQL (Neon)
+- Updated `prisma/schema.prisma`: `provider = "postgresql"` (was sqlite)
+- Updated `.env`: `DATABASE_URL=postgresql://neondb_owner:...@ep-round-bread-av0pytdj-pooler.c-11.us-east-1.aws.neon.tech/neondb?sslmode=require`
+- Ran `bun run db:push` — all 24 models created on Neon PostgreSQL
+- Regenerated Prisma client for PostgreSQL
+- Seeded database with admin user + company settings + demo contacts
+- Fixed SQLite-specific code: removed PRAGMA wal_checkpoint calls (PostgreSQL doesn't need them)
+
+### 2. Code Cleanup (No Simulation)
+- Verified `wa-engine.ts` has ZERO simulation functions
+- Cleaned up all "simulated" text references in views (replaced with "test")
+- All API routes proxy to the real Baileys engine (port 3004)
+- All message sending goes through `sendViaWhatsApp()` → real WhatsApp
+
+### 3. GitHub Deployment (Private Repo)
+- Created private repo: `rehansha112211-hash/whatsapp-auto-reply`
+- URL: https://github.com/rehansha112211-hash/whatsapp-auto-reply
+- Pushed all code (21 views, 67+ API routes, 24 Prisma models)
+- `.env` is in `.gitignore` — credentials NOT committed
+
+### 4. Vercel Deployment
+- Created Vercel project: `whatsapp-auto-reply`
+- Linked to GitHub repo (auto-deploy on push)
+- Set `DATABASE_URL` environment variable (production + preview + development)
+- Build command: `bun run db:generate && next build`
+- Install command: `bun install`
+- **Production URL: https://whatsapp-auto-reply-nine.vercel.app**
+- Deployment status: READY ✅
+
+### 5. Live Verification
+- Homepage: 200 ✅
+- Login API: works (admin/admin123) ✅
+- Dashboard: renders with charts + stats ✅
+- WhatsApp page: shows "Real WhatsApp connection via Baileys" ✅
+- Database: Neon PostgreSQL connected and seeded ✅
+- No simulation code anywhere ✅
+
+## What's Running Where
+| Component | Host | Status |
+|-----------|------|--------|
+| Next.js app | Vercel (serverless) | ✅ LIVE |
+| Database | Neon PostgreSQL | ✅ LIVE |
+| GitHub repo | github.com (private) | ✅ PUSHED |
+| WhatsApp engine (Baileys) | Needs persistent host | ⏳ See below |
+| Realtime service (socket.io) | Needs persistent host | ⏳ See below |
+
+## IMPORTANT: WhatsApp Engine Deployment
+The WhatsApp Baileys engine (`mini-services/whatsapp-engine`) CANNOT run on Vercel because Vercel is serverless (no persistent WebSocket connections). To enable real WhatsApp:
+
+### Option A: Run locally (for testing)
+```bash
+cd mini-services/whatsapp-engine
+bun install && bun run dev
+```
+Then open the Vercel app → WhatsApp → Generate QR → scan with phone.
+
+### Option B: Deploy on Railway/Render (for production)
+1. Deploy `mini-services/whatsapp-engine` as a persistent service on Railway.app or Render.com
+2. Set the engine URL in the Vercel app's environment variables
+3. The app will connect to the remote engine for real WhatsApp
+
+## SECURITY WARNING
+The user shared credentials in chat. They MUST be rotated after deployment:
+- GitHub token: regenerate at https://github.com/settings/tokens
+- Vercel token: regenerate at https://vercel.com/account/tokens
+- Neon DB password: regenerate at https://neon.tech dashboard
