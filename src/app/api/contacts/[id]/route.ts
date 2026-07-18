@@ -149,12 +149,15 @@ export async function GET(
 }
 
 // ------------------------------------------------------------
-// PATCH — update notes / pinned / status
+// PATCH — update notes / pinned / status / name / phone / language
 // ------------------------------------------------------------
 interface PatchBody {
   notes?: unknown
   pinned?: unknown
   status?: unknown
+  name?: unknown
+  phone?: unknown
+  language?: unknown
 }
 
 export async function PATCH(
@@ -176,7 +179,14 @@ export async function PATCH(
   }
 
   // Build the patch incrementally — only fields actually present get updated.
-  const data: { notes?: string; pinned?: boolean; status?: ContactStatus } = {}
+  const data: {
+    notes?: string
+    pinned?: boolean
+    status?: ContactStatus
+    name?: string
+    phone?: string
+    language?: string
+  } = {}
 
   if (typeof body.notes === 'string') {
     data.notes = body.notes.slice(0, 4000)
@@ -187,10 +197,21 @@ export async function PATCH(
   if (typeof body.status === 'string' && isContactStatus(body.status)) {
     data.status = body.status
   }
+  if (typeof body.name === 'string') {
+    const trimmed = body.name.trim()
+    if (trimmed.length > 0) data.name = trimmed.slice(0, 200)
+  }
+  if (typeof body.phone === 'string') {
+    const trimmed = body.phone.trim()
+    if (trimmed.length > 0) data.phone = trimmed.slice(0, 64)
+  }
+  if (typeof body.language === 'string' && ['en', 'hi', 'hinglish'].includes(body.language)) {
+    data.language = body.language
+  }
 
   if (Object.keys(data).length === 0) {
     return NextResponse.json(
-      { error: 'No valid fields to update (notes, pinned, status)' },
+      { error: 'No valid fields to update (notes, pinned, status, name, phone, language)' },
       { status: 400 },
     )
   }

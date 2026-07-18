@@ -11,6 +11,10 @@ import {
   ShieldCheck,
   MessageCircle,
   Search,
+  Volume2,
+  VolumeX,
+  Monitor,
+  MonitorOff,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -21,6 +25,8 @@ import { Separator } from '@/components/ui/separator'
 import { NAV_ITEMS } from '@/lib/nav'
 import type { ViewKey, AuthUser, DashboardStats } from '@/lib/types'
 import { WhatsAppStatusBadge } from '@/components/status'
+import { ThemeToggle } from '@/components/theme-toggle'
+import { useNotificationAlerts } from '@/hooks/use-notification-alerts'
 import { apiGet, apiPost } from '@/lib/api-client'
 import {
   DropdownMenu,
@@ -123,6 +129,7 @@ function NotificationsBell() {
     { id: string; type: string; title: string; body: string; severity: string; createdAt: string; read: boolean }[]
   >([])
   const [open, setOpen] = React.useState(false)
+  const { soundOn, desktopOn, toggleSound, toggleDesktop } = useNotificationAlerts(true)
 
   const refresh = React.useCallback(async () => {
     try {
@@ -155,17 +162,42 @@ function NotificationsBell() {
               {unread > 9 ? '9+' : unread}
             </span>
           )}
+          {soundOn && (
+            <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-background" />
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80 p-0">
         <div className="flex items-center justify-between border-b px-3 py-2">
           <span className="text-sm font-semibold">Notifications</span>
-          <button
-            onClick={markAll}
-            className="text-[11px] text-primary hover:underline"
-          >
-            Mark all read
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => toggleSound(!soundOn)}
+              title={soundOn ? 'Sound on' : 'Sound off'}
+              className={cn(
+                'rounded-md p-1.5 transition-colors',
+                soundOn ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+            </button>
+            <button
+              onClick={() => void toggleDesktop(!desktopOn)}
+              title={desktopOn ? 'Desktop alerts on' : 'Desktop alerts off'}
+              className={cn(
+                'rounded-md p-1.5 transition-colors',
+                desktopOn ? 'text-emerald-400 hover:bg-emerald-500/10' : 'text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {desktopOn ? <Monitor className="h-3.5 w-3.5" /> : <MonitorOff className="h-3.5 w-3.5" />}
+            </button>
+            <button
+              onClick={markAll}
+              className="ml-1 text-[11px] text-primary hover:underline"
+            >
+              Mark all
+            </button>
+          </div>
         </div>
         <ScrollArea className="max-h-80">
           <div className="flex flex-col">
@@ -337,6 +369,7 @@ export function AppShell({
                 </kbd>
               </Button>
             )}
+            <ThemeToggle />
             <NotificationsBell />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

@@ -17,12 +17,16 @@ import {
   Zap,
   Database,
   Monitor,
-  Power,
   Loader2,
+  Archive,
+  FileBox,
+  RotateCcw,
+  Trash2,
+  Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { apiGet } from '@/lib/api-client'
-import { formatUptime, formatDateTime } from '@/lib/format'
+import { apiGet, apiPost, apiDelete } from '@/lib/api-client'
+import { formatUptime, formatDateTime, timeAgo } from '@/lib/format'
 import type { LogRow, SystemHealth, WhatsAppState } from '@/lib/types'
 import {
   Card,
@@ -33,6 +37,17 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
+import { Separator } from '@/components/ui/separator'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { StatusDot, WhatsAppStatusBadge } from '@/components/status'
 
 interface SystemViewProps {
@@ -172,6 +187,369 @@ function waStateToStatus(
   if (s === 'logged_out') return 'error'
   if (s === 'qr_ready' || s === 'connecting') return 'warn'
   return 'idle'
+}
+
+// ============================================================
+// Backup & Recovery — real SQLite backup / restore / delete
+// ============================================================
+
+interface BackupItem {
+  id: string
+  filename: string
+  sizeBytes: number
+  createdAt: string
+}
+
+interface DbInfo {
+  path: string
+  sizeBytes: number
+  counts: { contacts: number; messages: number; logs: number }
+}
+
+interface BackupListResponse {
+  items: BackupItem[]
+  dbInfo: DbInfo
+}
+
+interface BackupCreateResponse {
+  ok: true
+  backup: BackupItem
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(
+    units.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+  )
+  const v = bytes / Math.pow(1024, i)
+  const digits = i > 0 && v < 10 ? 1 : 0
+  return `${v.toFixed(digits)} ${units[i]}`
+}
+
+function BackupRecoveryCard() {
+  const [backups, setBackups] = React.useState<BackupItem[]>([])
+  const [dbInfo, setDbInfo] = React.useState<DbInfo | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [creating, setCreating] = React.useState(false)
+  const [busyFilename, setBusyFilename] = React.useState<string | null>(null)
+  const [restoreTarget, setRestoreTarget] =
+    React.useState<BackupItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = React.useState<BackupItem | null>(
+    null,
+  )
+
+  const fetchBackups = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await apiGet<BackupListResponse>('/api/system/backup')
+      setBackups(data.items)
+      setDbInfo(data.dbInfo)
+    } catch {
+      /* silent */
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    fetchBackups()
+  }, [fetchBackups])
+
+  const handleCreate = async () => {
+    setCreating(true)
+    try {
+      const data = await apiPost<BackupCreateResponse>('/api/system/backup')
+      toast.success('Backup created', {
+        description: `${data.backup.filename} · ${formatBytes(
+          data.backup.sizeBytes,
+        )}`,
+      })
+      await fetchBackups()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error('Backup failed', { description: msg })
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleRestore = async (item: BackupItem) => {
+    setBusyFilename(item.filename)
+    try {
+      await apiPost('/api/system/backup/restore', {
+        filename: item.filename,
+      })
+      toast.success('Database restored', {
+        description: `Restored from ${item.filename}. Reload to see all changes.`,
+      })
+      setRestoreTarget(null)
+      await fetchBackups()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error('Restore failed', { description: msg })
+    } finally {
+      setBusyFilename(null)
+    }
+  }
+
+  const handleDelete = async (item: BackupItem) => {
+    setBusyFilename(item.filename)
+    try {
+      await apiDelete(
+        `/api/system/backup/${encodeURIComponent(item.filename)}`,
+      )
+      toast.success('Backup deleted', { description: item.filename })
+      setDeleteTarget(null)
+      await fetchBackups()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      toast.error('Delete failed', { description: msg })
+    } finally {
+      setBusyFilename(null)
+    }
+  }
+
+  return (
+    <Card className="rounded-xl border bg-card/60 p-5 backdrop-blur">
+      <CardHeader className="p-0 pb-4">
+        <CardTitle className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <Archive className="h-4 w-4 text-emerald-400" />
+            Backup &amp; Recovery
+          </span>
+          <Badge
+            variant="outline"
+            className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+          >
+            {backups.length} {backups.length === 1 ? 'backup' : 'backups'}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 p-0">
+        {/* Create backup row */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">
+              Create a snapshot of the live database
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              Copies the SQLite DB file and exports all settings (Company,
+              Owner, AI, Auto-Reply) as a companion JSON file.
+            </p>
+          </div>
+          <Button
+            onClick={handleCreate}
+            disabled={creating}
+            className="gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+          >
+            {creating ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {creating ? 'Creating…' : 'Create Backup'}
+          </Button>
+        </div>
+
+        <Separator />
+
+        {/* Backup history */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <FileBox className="h-3.5 w-3.5 text-emerald-400" />
+            Backup History
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded-md border bg-background/40 scrollbar-thin">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading backups…
+              </div>
+            ) : backups.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+                <FileBox className="h-8 w-8 text-muted-foreground/50" />
+                <p className="text-xs text-muted-foreground">
+                  No backups yet. Create your first backup.
+                </p>
+              </div>
+            ) : (
+              <ul className="flex flex-col divide-y divide-border/50">
+                {backups.map((item) => {
+                  const isBusy = busyFilename === item.filename
+                  return (
+                    <li
+                      key={item.id}
+                      className="group flex items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50"
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-300">
+                        <Database className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-mono text-xs font-medium">
+                          {item.filename}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <span className="tabular-nums">
+                            {formatBytes(item.sizeBytes)}
+                          </span>
+                          <span>·</span>
+                          <span>{timeAgo(item.createdAt)}</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 border-amber-500/30 px-2 text-[11px] text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                          disabled={isBusy}
+                          onClick={() => setRestoreTarget(item)}
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Restore
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 gap-1 px-2 text-[11px] text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+                          disabled={isBusy}
+                          onClick={() => setDeleteTarget(item)}
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                          Delete
+                        </Button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Database info */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <HardDrive className="h-3.5 w-3.5 text-emerald-400" />
+            Database Info
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-md border bg-background/40 px-3 py-2">
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                DB Path
+              </div>
+              <div
+                className="mt-0.5 truncate font-mono text-[11px]"
+                title={dbInfo?.path ?? ''}
+              >
+                {dbInfo?.path ?? '—'}
+              </div>
+            </div>
+            <div className="rounded-md border bg-background/40 px-3 py-2">
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                File Size
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+                {dbInfo ? formatBytes(dbInfo.sizeBytes) : '—'}
+              </div>
+            </div>
+            <div className="rounded-md border bg-background/40 px-3 py-2">
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                Contacts
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+                {dbInfo
+                  ? dbInfo.counts.contacts.toLocaleString()
+                  : '—'}
+              </div>
+            </div>
+            <div className="rounded-md border bg-background/40 px-3 py-2">
+              <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                Messages / Logs
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] tabular-nums">
+                {dbInfo
+                  ? `${dbInfo.counts.messages.toLocaleString()} / ${dbInfo.counts.logs.toLocaleString()}`
+                  : '—'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+
+      {/* Restore confirmation dialog */}
+      <AlertDialog
+        open={restoreTarget !== null}
+        onOpenChange={(open) => !open && setRestoreTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-400" />
+              Restore Database?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Restore from{' '}
+              <span className="font-mono font-semibold">
+                {restoreTarget?.filename}
+              </span>
+              ? This will overwrite the current database. The platform may need
+              a moment to reconnect afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700"
+              onClick={() => restoreTarget && handleRestore(restoreTarget)}
+            >
+              <RotateCcw className="h-4 w-4" />
+              Restore now
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-rose-400" />
+              Delete Backup?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete{' '}
+              <span className="font-mono font-semibold">
+                {deleteTarget?.filename}
+              </span>
+              ? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="gap-1.5 bg-rose-600 text-white hover:bg-rose-700"
+              onClick={() => deleteTarget && handleDelete(deleteTarget)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
+  )
 }
 
 export function SystemView(_props: SystemViewProps) {
@@ -461,86 +839,60 @@ export function SystemView(_props: SystemViewProps) {
         />
       </div>
 
-      {/* Uptime + restart */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur lg:col-span-2">
-          <CardHeader className="p-0 pb-3">
-            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              <Clock className="h-4 w-4 text-emerald-400" />
-              Uptime & Availability
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-4 p-0 sm:grid-cols-4">
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Uptime
-              </div>
-              <div className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {formatUptime(health?.uptimeSec ?? 0)}
-              </div>
+      {/* Uptime & availability (full width) */}
+      <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <Clock className="h-4 w-4 text-emerald-400" />
+            Uptime & Availability
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4 p-0 sm:grid-cols-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Uptime
             </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Started
-              </div>
-              <div className="mt-1 font-mono text-sm">
-                {formatDateTime(health?.startedAt ?? null)}
-              </div>
+            <div className="mt-1 font-mono text-lg font-semibold tabular-nums">
+              {formatUptime(health?.uptimeSec ?? 0)}
             </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Backend
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 text-sm">
-                <StatusDot state="ok" pulse />
-                <span className="text-emerald-300">OK</span>
-              </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Started
             </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Database
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 text-sm">
-                <StatusDot state={dbStatus} pulse={dbStatus === 'ok'} />
-                <span
-                  className={cn(
-                    dbStatus === 'ok' ? 'text-emerald-300' : 'text-rose-300',
-                  )}
-                >
-                  {dbStatus === 'ok' ? 'OK' : 'Error'}
-                </span>
-              </div>
+            <div className="mt-1 font-mono text-sm">
+              {formatDateTime(health?.startedAt ?? null)}
             </div>
-          </CardContent>
-        </Card>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Backend
+            </div>
+            <div className="mt-1 flex items-center gap-1.5 text-sm">
+              <StatusDot state="ok" pulse />
+              <span className="text-emerald-300">OK</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Database
+            </div>
+            <div className="mt-1 flex items-center gap-1.5 text-sm">
+              <StatusDot state={dbStatus} pulse={dbStatus === 'ok'} />
+              <span
+                className={cn(
+                  dbStatus === 'ok' ? 'text-emerald-300' : 'text-rose-300',
+                )}
+              >
+                {dbStatus === 'ok' ? 'OK' : 'Error'}
+              </span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card className="rounded-xl border bg-card/60 p-4 backdrop-blur">
-          <CardHeader className="p-0 pb-3">
-            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              <Power className="h-4 w-4 text-emerald-400" />
-              Engine Controls
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2 p-0">
-            <p className="text-[11px] text-muted-foreground">
-              Restart the WhatsApp + AI engine without rebooting the platform.
-            </p>
-            <Button
-              variant="outline"
-              className="w-full gap-1.5 border-amber-500/30 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
-              onClick={() => {
-                toast.success('Engine restart simulated', {
-                  description:
-                    'The WhatsApp + AI pipeline would be re-initialized in production.',
-                })
-              }}
-            >
-              <Power className="h-4 w-4" />
-              Restart Engine (simulated)
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Backup & recovery (real SQLite backup / restore) */}
+      <BackupRecoveryCard />
 
       {/* Recent events */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

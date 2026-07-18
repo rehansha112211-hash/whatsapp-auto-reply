@@ -46,6 +46,7 @@ import {
   Copy,
   CornerUpLeft,
   ArrowDown,
+  ExternalLink,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -973,6 +974,7 @@ interface DetailsPanelProps {
   onPin: (pinned: boolean) => Promise<void>
   onStatusChange: (status: ContactStatus) => Promise<void>
   onNotesSave: (notes: string) => Promise<void>
+  onViewProfile?: (contactId: string) => void
 }
 
 function DetailsPanel({
@@ -983,6 +985,7 @@ function DetailsPanel({
   onPin,
   onStatusChange,
   onNotesSave,
+  onViewProfile,
 }: DetailsPanelProps) {
   const [notesDraft, setNotesDraft] = React.useState('')
   const [savingNotes, setSavingNotes] = React.useState(false)
@@ -1047,6 +1050,17 @@ function DetailsPanel({
             </Badge>
           </div>
         </div>
+        {onViewProfile && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3 w-full gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:text-emerald-100"
+            onClick={() => onViewProfile(detail.id)}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            View Full Profile
+          </Button>
+        )}
         {detail.summary && (
           <p className="mt-3 rounded-lg bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
             {detail.summary}
@@ -1280,7 +1294,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 // ------------------------------------------------------------
 // Main ChatsView
 // ------------------------------------------------------------
-export function ChatsView() {
+export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: string) => void } ) {
   // --- Data state ---
   const [items, setItems] = React.useState<ChatListItem[]>([])
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
@@ -1689,6 +1703,7 @@ export function ChatsView() {
             onPin={handlePin}
             onStatusChange={handleStatusChange}
             onNotesSave={handleNotesSave}
+            onViewProfile={onViewProfile}
           />
         </aside>
 
@@ -1713,6 +1728,7 @@ export function ChatsView() {
                 onPin={handlePin}
                 onStatusChange={handleStatusChange}
                 onNotesSave={handleNotesSave}
+                onViewProfile={onViewProfile}
               />
             </div>
           </SheetContent>

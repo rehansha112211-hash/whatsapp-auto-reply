@@ -19,6 +19,7 @@ import { SystemView } from '@/components/views/system-view'
 import { SimulatorView } from '@/components/views/simulator-view'
 import { BroadcastView } from '@/components/views/broadcast-view'
 import { AnalyticsView } from '@/components/views/analytics-view'
+import { ContactProfileView } from '@/components/views/contact-profile-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
@@ -28,6 +29,7 @@ export default function Home() {
   const [active, setActive] = React.useState<ViewKey>('dashboard')
   const [stats, setStats] = React.useState<DashboardStats | null>(null)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
+  const [profileContactId, setProfileContactId] = React.useState<string | null>(null)
 
   // Check auth on mount
   React.useEffect(() => {
@@ -132,11 +134,25 @@ export default function Home() {
         <PageTransition viewKey={active}>
           {active === 'dashboard' && <DashboardView onNavigate={setActive} />}
           {active === 'whatsapp' && <WhatsAppView />}
-          {active === 'chats' && <ChatsView />}
+          {active === 'chats' && (
+            <ChatsView
+              onViewProfile={(id) => {
+                setProfileContactId(id)
+                setActive('contact-profile')
+              }}
+            />
+          )}
           {active === 'leads' && <LeadsView onNavigate={setActive} />}
           {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
           {active === 'broadcast' && <BroadcastView />}
           {active === 'analytics' && <AnalyticsView />}
+          {active === 'contact-profile' && profileContactId && (
+            <ContactProfileView
+              contactId={profileContactId}
+              onBack={() => setActive('chats')}
+              onNavigate={setActive}
+            />
+          )}
           {active === 'ai-settings' && <AISettingsView />}
           {active === 'company-settings' && <CompanySettingsView />}
           {active === 'owner-settings' && <OwnerSettingsView />}

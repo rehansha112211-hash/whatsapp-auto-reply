@@ -1,0 +1,54 @@
+{
+  "exportedAt": "2026-07-18T03:07:47.481Z",
+  "schema": "qorvixnode-backup-v1",
+  "company": {
+    "id": "company",
+    "name": "QorvixNode Technologies",
+    "website": "https://qorvixnodetechnologies.indevs.in",
+    "description": "QorvixNode Technologies is a software development company delivering custom websites, Android apps, AI automation, CRMs, business software and end-to-end digital solutions for modern businesses.",
+    "services": "[\"Custom Website Development\",\"Android App Development\",\"AI Automation\",\"Business Software\",\"CRM Development\",\"E-Commerce Website\",\"Portfolio Website\",\"Landing Pages\",\"Dashboard Development\",\"UI/UX Design\",\"API Integration\",\"Hosting\",\"Deployment\",\"Maintenance\"]",
+    "businessHours": "{\"mon\":\"09:00-19:00\",\"tue\":\"09:00-19:00\",\"wed\":\"09:00-19:00\",\"thu\":\"09:00-19:00\",\"fri\":\"09:00-19:00\",\"sat\":\"09:00-14:00\",\"sun\":\"closed\"}",
+    "greetingMsg": "Hi! 👋 Welcome to QorvixNode Technologies. We build custom websites, Android apps, AI automation, CRMs and business software. Tell us what you're looking for and we'll guide you from there.",
+    "closingMsg": "Thanks for chatting with QorvixNode Technologies! We will follow up shortly. 🙏",
+    "supportMsg": "For urgent support, reply with \"talk to owner\" and our team will reach out.",
+    "updatedAt": "2026-07-17T16:01:17.049Z"
+  },
+  "owner": {
+    "id": "owner",
+    "name": "QorvixNode Owner",
+    "phoneNumber": "+91 90000 00000",
+    "availability": "available",
+    "businessHours": "{\"days\":\"Mon-Sat\",\"hours\":\"09:00-19:00\",\"tz\":\"Asia/Kolkata\"}",
+    "humanTakeover": true,
+    "leadNotify": true,
+    "autoNotify": true,
+    "leadThreshold": 70,
+    "updatedAt": "2026-07-17T16:01:17.051Z"
+  },
+  "apiSetting": {
+    "id": "api",
+    "provider": "zai",
+    "baseUrl": "https://api.z.ai/api/paas/v4",
+    "apiKey": "",
+    "model": "glm-4.5",
+    "temperature": 0.7,
+    "topP": 0.9,
+    "maxTokens": 512,
+    "systemPrompt": "You are the official WhatsApp AI assistant for QorvixNode Technologies. Be concise, friendly, professional. Reply in the customer language.",
+    "status": "ok",
+    "lastTestedAt": "2026-07-17T16:27:54.627Z",
+    "updatedAt": "2026-07-17T16:27:54.628Z"
+  },
+  "autoReplySetting": {
+    "id": "autoreply",
+    "enabled": true,
+    "replyDelaySec": 1,
+    "typingDelaySec": 2,
+    "businessHoursOnly": false,
+    "greeting": "Hi! 👋 Welcome to QorvixNode Technologies — we build websites, apps & AI automation. How can we help?",
+    "awayMessage": "We're currently away. Leave your requirement and we'll reply during business hours (Mon-Sat 9-7 IST). 🙏",
+    "maxReplyLength": 600,
+    "languagePref": "auto",
+    "updatedAt": "2026-07-17T16:01:17.055Z"
+  }
+}

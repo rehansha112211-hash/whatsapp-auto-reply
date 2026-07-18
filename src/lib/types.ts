@@ -68,6 +68,7 @@ export type ViewKey =
   | 'simulator'
   | 'broadcast'
   | 'analytics'
+  | 'contact-profile'
 
 export interface AuthUser {
   id: string

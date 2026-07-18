@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
   const categoryParam = params.get('category') ?? 'all'
   const levelParam = params.get('level') ?? 'all'
   const search = (params.get('search') ?? '').trim()
+  const contactId = (params.get('contactId') ?? '').trim()
   const limitRaw = Number.parseInt(params.get('limit') ?? '200', 10)
   const limit = Number.isFinite(limitRaw)
     ? Math.max(1, Math.min(1000, limitRaw))
@@ -53,6 +54,9 @@ export async function GET(req: NextRequest) {
   if (level) where.level = level
   if (search) {
     where.message = { contains: search }
+  }
+  if (contactId) {
+    where.contactId = contactId
   }
   if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
     where.createdAt = { lt: beforeDate }

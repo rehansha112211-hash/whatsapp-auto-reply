@@ -594,3 +594,193 @@ The platform was stable at the start of this review: 12 views, 32 API routes, 16
 3. Implement actual SQLite backup/restore on the System page.
 4. Add notification sound + desktop notifications (Web Notifications API) for owner requests and hot leads.
 5. Add dark/light theme toggle in the topbar (theme is dark-only currently; next-themes is wired but no toggle UI).
+
+---
+Task ID: T4
+Agent: full-stack-developer (Backup/Restore)
+Task: Implement real SQLite backup/restore on the System Health page + backup history list. Replace the simulated "Restart Engine" button with a working backup/restore UI (create / list / restore / delete).
+
+Work Log:
+- Read prior worklog (foundation, analytics, command palette, styling) + existing `system-view.tsx`, `lib/db.ts`, `lib/auth.ts`, `lib/api-client.ts`, `lib/format.ts`, `lib/types.ts`, `prisma/schema.prisma`, `api/system/health/route.ts`, `api/dashboard/route.ts` to understand existing patterns. Confirmed DB at `/home/z/my-project/db/custom.db` (from `DATABASE_URL=file:/home/z/my-project/db/custom.db`).
+- Created `src/app/api/system/backup/route.ts` (GET + POST):
+  - GET: auth check → list `.db` files in `/home/z/my-project/db/backups/` (creates dir if missing), returns `{ items: [{ id, filename, sizeBytes, createdAt }], dbInfo: { path, sizeBytes, counts: { contacts, messages, logs } } }` sorted by createdAt desc. `dbInfo` powers the frontend Database Info mini-section in a single fetch.
+  - POST: auth check → `PRAGMA wal_checkpoint(TRUNCATE)` via `$queryRawUnsafe` (NOT `$executeRawUnsafe` — that errors on SQLite because the pragma returns a row) → `fs.copyFile` the live DB to `backup-{YYYY-MM-DD-HHmmss}.db` → export Company/Owner/ApiSetting/AutoReplySetting as companion `backup-{ts}.json` (schema-tagged `qorvixnode-backup-v1`) → create `database`/`info` Log entry `Backup created: {filename}` → return `{ ok: true, backup: {...} }`.
+  - DB path derived from `DATABASE_URL` env var (strips `file:` prefix) for portability.
+- Created `src/app/api/system/backup/restore/route.ts` (POST): auth check → body `{ filename }` → filename validated with `/^[a-zA-Z0-9._-]+$/` + `..`/slash/backslash rejection + `fs.realpath` containment check (defense-in-depth) → WAL checkpoint → `fs.copyFile(backupPath, DB_PATH)` overwrite → `database`/`warn` Log entry `Database restored from {filename}` → `{ ok: true, filename }`.
+- Created `src/app/api/system/backup/[filename]/route.ts` (DELETE): auth check → same filename validation + realpath containment → delete the `.db` + best-effort delete companion `.json` → `database`/`warn` Log entry `Backup deleted: {filename}` → `{ ok: true, filename }`. Uses Next.js 16 async params pattern `ctx: { params: Promise<{ filename: string }> }`.
+- Modified `src/components/views/system-view.tsx`:
+  - Updated imports: removed `Power`, added `Archive, FileBox, RotateCcw, Trash2, Download` (lucide); added `apiPost, apiDelete` (api-client); added `timeAgo` (format); added `Separator` + `AlertDialog*` (shadcn/ui).
+  - Added `formatBytes` helper (B/KB/MB/GB/TB, 1 decimal under 10).
+  - Added `BackupRecoveryCard` component: state for backups list + dbInfo + creating + busyFilename + restoreTarget + deleteTarget; `fetchBackups()` on mount; `handleCreate`/`handleRestore`/`handleDelete` with sonner toasts; UI = emerald-gradient "Create Backup" button with spinner, backup history list (`max-h-64 overflow-y-auto scrollbar-thin`) with each row (Database icon in emerald square, mono filename, formatted size, timeAgo, Restore amber-outline button + Delete ghost-red button), empty state "No backups yet. Create your first backup.", Database Info grid (4 tiles: DB path, file size, contacts, messages/logs), two AlertDialogs (restore confirm with amber gradient action + "Restore from {filename}? This will overwrite the current database.", delete confirm with rose action + "Delete {filename}? This action cannot be undone.").
+  - Restructured the "Uptime + restart" 3-col grid: Uptime & Availability card is now full-width (removed the grid wrapper); the old "Engine Controls" card (simulated restart button) is replaced by `<BackupRecoveryCard />` rendered below the Uptime card.
+- Bug fix during testing: initial WAL checkpoint used `db.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')` which produced Prisma errors "Execute returned results, which is not allowed in SQLite." Switched to `db.$queryRawUnsafe(...)` in both backup POST and restore POST. Errors disappeared.
+- Quality gates: `bun run lint` → 0 errors, 0 warnings. `bunx tsc --noEmit` → no errors in any of the 4 touched files (remaining repo errors are pre-existing in `examples/`, `skills/`, `src/lib/ai-engine.ts` — outside this task's scope). TypeScript strict, no `any`, no `console.log`, no `TODO`.
+- End-to-end curl test against live dev server (authed as admin/admin123):
+  - `GET /api/system/backup` (authed) → 200, `{items:[], dbInfo:{path:/home/z/my-project/db/custom.db, sizeBytes:253952, counts:{contacts:7, messages:33, logs:39}}}`.
+  - `GET /api/system/backup` (unauthed) → 401.
+  - `POST /api/system/backup` → 200, created `backup-2026-07-18-025020.db` (253952 bytes) + companion `.json` (2774 bytes with full company/owner/api/autoreply settings).
+  - `POST /api/system/backup` (2nd) → 200, created `backup-2026-07-18-025026.db`.
+  - `GET /api/system/backup` → 200, 2 items sorted desc by createdAt.
+  - `POST /api/system/backup/restore` with `../../../etc/passwd` → 400 "Invalid filename" (traversal blocked).
+  - `DELETE /api/system/backup/..%2F..%2F..%2Fetc%2Fpasswd` → 400 "Invalid filename".
+  - `POST /api/system/backup/restore` with nonexistent → 404 "Backup file not found".
+  - `POST /api/system/backup/restore` (unauthed) → 401.
+  - `POST /api/system/backup/restore` with valid `backup-2026-07-18-025020.db` → 200. DB logs went 41 → 40 (restored older state of 39 logs + 1 restore log entry) — confirms the overwrite worked.
+  - `DELETE /api/system/backup/backup-2026-07-18-025026.db` → 200, removed both `.db` and companion `.json`.
+  - Dev server log: all routes compile and return correct status codes; no Prisma errors after the `$queryRawUnsafe` fix.
+  - Test backups cleaned up — final state: empty backups dir, ready for user.
+
+Stage Summary:
+- CREATED `src/app/api/system/backup/route.ts` — GET (list backups + dbInfo) + POST (create backup: WAL checkpoint, DB copy, JSON settings export, Log entry).
+- CREATED `src/app/api/system/backup/restore/route.ts` — POST (validate filename, WAL checkpoint, overwrite DB, Log entry).
+- CREATED `src/app/api/system/backup/[filename]/route.ts` — DELETE (validate filename, delete .db + companion .json, Log entry).
+- MODIFIED `src/components/views/system-view.tsx` — updated imports; added `formatBytes` helper + `BackupRecoveryCard` component (Create Backup button + history list + Database Info + restore/delete confirmation dialogs); replaced the Engine Controls card with the new Backup & Recovery card; restructured the Uptime row to full-width.
+
+---
+Task ID: T2
+Agent: full-stack-developer (Contact Profile page)
+Task: Add a dedicated Contact Profile deep-dive view — full conversation timeline, editable AI memory, lead score history chart, contact actions. Opened from the Chats view's customer details panel.
+
+Work Log:
+- Read worklog.md (Tasks 1, 8-13, F-3, cron-review-20260718): 13 views already exist (dashboard, whatsapp, chats, leads, simulator, broadcast, analytics, ai-settings, company-settings, owner-settings, autoreply-settings, logs, system); existing libs identified (db.ts, types.ts, auth.ts, api-client.ts, format.ts, status.tsx, ui/chart.tsx, animated-counter.tsx, slider, dialog, tabs, select, dropdown-menu); re-used the analytics-view's chart-card + KPI patterns (CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 card-hover', SectionHeader shell, framer-motion staggered fade-in).
+- Re-read prisma/schema.prisma (Contact + Message + ConversationMemory + LeadScore + Log + Notification models with onDelete: Cascade), src/lib/types.ts (ViewKey union, ContactStatus, LeadCategory, LEAD_CATEGORIES, ChatMessage/ContactDetail interfaces), src/lib/auth.ts (getCurrentUser), src/lib/api-client.ts (apiGet/apiPost/apiPatch/apiDelete), src/lib/format.ts (formatDateTime, formatTime, timeAgo, initials, colorFromString, leadBadge, downloadFile, toCsv), src/components/status.tsx (LeadBadge), src/components/ui/chart.tsx (ChartContainer/ChartTooltip/ChartTooltipContent/ChartConfig), src/components/ui/animated-counter.tsx, src/app/api/contacts/[id]/route.ts (existing GET/PATCH pattern for ContactDetail + buildSummary), src/app/api/contacts/[id]/human-mode/route.ts (existing POST pattern), src/app/api/logs/route.ts (existing GET with category/level/search filters + CSV/JSON export).
+- MODIFIED `src/lib/types.ts` — appended `| 'contact-profile'` to the `ViewKey` union (now 14 views). No nav entry added — this view is opened programmatically from Chats, not from the sidebar.
+- MODIFIED `src/app/api/logs/route.ts` — added an optional `?contactId=X` query filter (small backwards-compatible extension) so the contact-profile Activity tab can fetch logs scoped to the contact via `/api/logs?contactId=X`.
+- CREATED `src/app/api/contacts/[id]/profile/route.ts` (GET, `force-dynamic`):
+  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+  - Returns a comprehensive payload mirroring the task spec:
+    - `contact` — id/name/phone/countryCode/language/status/leadScore/detectedService/notes/pinned/humanMode/firstSeen/lastSeen/lastMessageAt/createdAt.
+    - `messages` — ALL messages for this contact, ASC by timestamp, with id/direction/source/text/status/read/timestamp.
+    - `memories` — ASC by updatedAt, with id/key/value/updatedAt.
+    - `leadScoreHistory` — ASC by createdAt, with id/score/category/reason/createdAt.
+    - `stats` — totalMessages/incomingCount/outgoingCount/aiCount/ownerCount/avgResponseMs/firstMessageAt/lastMessageAt/conversationDays. avgResponseMs is parsed from AI-category log lines via the same `parseResponseMs` regex pattern as the analytics route (`/in\s+(\d+)\s*ms/i` matches the wa-engine log line `AI replied to {name} in {responseMs}ms`).
+    - `notifications` — last 200 notifications for this contact, desc by createdAt.
+  - Parallel `Promise.all` of 5 Prisma queries (contact + messages + memories + leadScoreHistory + notifications + aiLogs for responseMs parsing) for efficiency.
+  - 404 when contact doesn't exist.
+- CREATED `src/app/api/contacts/[id]/memory/route.ts` (POST + DELETE, `force-dynamic`):
+  - POST body `{ key, value }` — cleans key (trim + lowercase + snake_case + max 64 chars), slices value to 4000 chars, verifies contact exists (404 if not), upserts via the `contactId_key` unique constraint, returns `{ ok: true }`.
+  - DELETE `?key=X` — same key cleaning, deletes via `deleteMany` (idempotent), returns `{ ok: true }`.
+- CREATED `src/app/api/contacts/[id]/lead-score/route.ts` (POST, `force-dynamic`):
+  - Auth check.
+  - Validates score (must be a finite number; clamped to 0-100 via `Math.max(0, Math.min(100, Math.round(score)))`).
+  - Validates category against the `LeadCategory` union (returns 400 with the full valid list when invalid).
+  - Reason is optional (defaults to "Manual adjustment by operator"), sliced to 500 chars.
+  - Verifies contact exists (404 if not).
+  - Runs in a `db.$transaction`: creates a new LeadScore history record AND updates the contact's `leadScore` + `detectedService` (only when category is a service — not general/support).
+  - Returns `{ ok: true, leadScore }`.
+- MODIFIED `src/app/api/contacts/[id]/route.ts` — extended the PATCH handler to accept `name`, `phone`, `language` (in addition to existing `notes`, `pinned`, `status`). Validation: name trimmed + non-empty + max 200; phone trimmed + non-empty + max 64; language must be one of en/hi/hinglish. Backwards-compatible (existing PATCH callers are unaffected).
+- CREATED `src/components/views/contact-profile-view.tsx` (`'use client'`, named `ContactProfileView`, signature `export function ContactProfileView({ contactId, onBack, onNavigate }: { contactId: string; onBack: () => void; onNavigate?: (v: ViewKey) => void })`). Layout: responsive mobile-first, `max-w-6xl mx-auto`:
+  - **Header bar** — Back button (ArrowLeft → onBack), 14×14 avatar (initials + colorFromString), name (text-2xl font-bold), phone (mono), country code, category, language; status badge + LeadBadge (large) + Pinned/Human-mode badges when active; "Open Chat" button (→ onNavigate('chats')) + "Take Over"/"Resume AI" button (toggles human mode via POST `/api/contacts/[id]/human-mode`).
+  - **Section 1 — Stats Grid** (4 cards, grid-cols-2 lg:grid-cols-4): Total Messages (AnimatedCounter + in/out split emerald/sky), AI vs Owner (e.g. "2 / 2" with % AI), Avg Response (formatResponseTime: <1s → "123ms", ≥1s → "1.2s"), Duration (AnimatedCounter with day/days suffix + "from Jul 17"). Each card uses `CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 card-hover'` + an accent radial glow in the corner.
+  - **Section 2 — Lead Score History** — `AreaChart` (recharts via ChartContainer, 200px height, emerald line with linear-gradient fill, X-axis short dates, Y-axis 0-100 ticks at 0/25/50/75/100, `ReferenceLine y={70}` amber dashed with "Hot (70)" label). Auto-appends the current score as a "Now" point so the chart always reflects the latest state. Below: scrollable list of score events (date, score badge, category, reason) desc by createdAt, max-h-72. "Adjust Score" button opens a Dialog with: slider (0-100) showing live score badge, category Select (all 9 LEAD_CATEGORIES), reason Input, Save → POST `/api/contacts/[id]/lead-score`. Toast on success.
+  - **Section 3 — Tabs** (shadcn Tabs):
+    - **Conversation** — full read-only message timeline. Date-separator bubbles ("Today" / "Yesterday" / weekday + month + day). Outgoing AI = emerald bubble (rounded-br-sm), outgoing owner = sky bubble, incoming = muted bubble. Source badge on outgoing (AI / You / System). Delivery icon (Check / CheckCheck / Clock / AlertTriangle). Scrollable max-h-600. Export dropdown (CSV via toCsv + downloadFile, JSON via JSON.stringify) — filenames like `chat-Vikram_Singh.csv`.
+    - **AI Memory** — editable key-value list. Each row: key (mono, emerald label), value (inline Textarea), Save (only enabled when dirty), Delete (rose-tinted). "Add new memory" form at the bottom (key Input + value Textarea + Add button, emerald-bordered card). All changes POST/DELETE to `/api/contacts/[id]/memory`. Toast on success.
+    - **Activity Log** — merged timeline of notifications (severity icon: success/warning/error/info) + logs (level dot: info/warn/error/debug), sorted desc by createdAt, scrollable max-h-600. Notifications show title + body + type badge; logs show category + message.
+    - **Details** — editable fields: name, phone, language (Select: English/Hindi/Hinglish), status (Select: New/Active/Lead/Customer/Blocked), notes (Textarea max 4000). "Save details" button → PATCH `/api/contacts/[id]`. Below: read-only metadata grid (First seen, Last seen, Last message, Created at, Country code, Contact ID).
+  - **Section 4 — Danger Zone** (bottom, `border-rose-500/30 bg-rose-500/5`): "Pin/Unpin contact" (PATCH with `pinned`), "Block contact"/"Unblock contact" (PATCH with `status`). Per spec: the "Delete all messages" button was deferred (commented out, may add in a future task).
+  - Every section wrapped in `<motion.div initial={{opacity:0, y:8}} animate={{opacity:1, y:0}} transition={{delay: N*0.05, duration: 0.25}}>` — staggered fade-in + slide-up.
+  - Loading state: skeleton header + 4 skeleton stat cards + skeleton chart + skeleton tabs (full ~30-line skeleton).
+  - Error state: rose-tinted card with AlertTriangle icon + retry button.
+  - WhatsApp-green theme throughout (emerald/teal/amber/orange + sky for the owner series only). No indigo/blue.
+  - Icons from lucide-react: ArrowLeft, MessageSquare, Bot, User, Clock, Brain, TrendingUp, Flame, Edit, Trash2, Plus, Save, Download, Ban, Pin, PinOff, Activity, History, Check, CheckCheck, AlertTriangle, Loader2, FileText, Braces, Inbox, ShieldAlert, Info, Bell.
+  - TypeScript strict throughout — typed interfaces for every API payload shape; `ChartConfig` imported as a type; no `any`, no `console.log`, no TODO.
+- MODIFIED `src/app/page.tsx`:
+  - Added `import { ContactProfileView } from '@/components/views/contact-profile-view'`.
+  - Added `const [profileContactId, setProfileContactId] = React.useState<string | null>(null)`.
+  - Updated ChatsView router case to pass `onViewProfile={(id) => { setProfileContactId(id); setActive('contact-profile') }}`.
+  - Added new router case `{active === 'contact-profile' && profileContactId && <ContactProfileView contactId={profileContactId} onBack={() => setActive('chats')} onNavigate={setActive} />}`.
+- MODIFIED `src/components/views/chats-view.tsx`:
+  - Imported `ExternalLink` from lucide-react.
+  - Added `onViewProfile?: (contactId: string) => void` to `DetailsPanelProps`.
+  - Added `onViewProfile` to the `DetailsPanel` function signature.
+  - In the DetailsPanel header (immediately below the avatar/name/status row, above the summary): added an emerald-accented "View Full Profile" button (`<Button variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:text-emerald-100">` with `<ExternalLink>` icon) that calls `onViewProfile(detail.id)`. Only rendered when the prop is passed.
+  - Passed `onViewProfile={onViewProfile}` to both DetailsPanel render sites (desktop aside + mobile Sheet).
+  - Updated the exported `ChatsView` signature to `export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: string) => void })`.
+- Quality gates:
+  - `bun run lint` → **0 errors, 0 warnings** (clean).
+  - Smoke-tested all 3 new API endpoints end-to-end against the seeded DB:
+    - `POST /api/auth/login` {admin/admin123} → 200, captured `war_session` cookie.
+    - `GET /api/contacts/{Vikram-id}/profile` (authed) → 200 with comprehensive payload: contact {name: "Vikram Singh", leadScore: 90, status: "customer", detectedService: "high_priority", pinned: true}, 6 messages (2 in / 4 out), 3 memories (language=en, last_intent=high_priority, name=Vikram Singh), 1 lead-score history entry (90 / High Priority / "Seed demo"), stats {totalMessages:6, incomingCount:2, outgoingCount:4, aiCount:2, ownerCount:2, avgResponseMs:0, conversationDays:1}, 0 notifications.
+    - `POST /api/contacts/{id}/memory` {key:"test_key", value:"test value from script"} → `{ok:true}` (verified upsert).
+    - `DELETE /api/contacts/{id}/memory?key=test_key` → `{ok:true}` (verified delete).
+    - `POST /api/contacts/{id}/lead-score` {score:85, category:"crm", reason:"Manual test adjustment"} → `{ok:true, leadScore:85}` (contact's leadScore updated to 85; detectedService updated to crm).
+    - `POST /api/contacts/{id}/lead-score` {score:150, category:"crm", reason:"clamp test"} → `{ok:true, leadScore:100}` (score clamped to 100).
+    - `POST /api/contacts/{id}/lead-score` {score:"banana", category:"crm"} → 400 `{error: "score (number 0–100) is required"}`.
+    - `POST /api/contacts/{id}/lead-score` {score:85, category:"bogus", reason:"x"} → 400 `{error: "category must be one of: website, app, crm, software, ai_automation, maintenance, general, support, high_priority"}`.
+    - `GET /api/logs?contactId={Vikram-id}&limit=5` (authed) → 200 with 2 log items (both "Owner sent manual message to contact ..." from earlier broadcast tests).
+    - `PATCH /api/contacts/{id}` {name:"Vikram Singh", language:"en", notes:"VIP customer — high priority CRM project"} → 200 with full ContactDetail.
+    - Auth edge cases verified: `GET /api/contacts/.../profile` (no cookie) → 401 in 117ms; `POST /api/contacts/.../memory` (no cookie) → 401 in 278ms; `GET /api/contacts/nonexistent-id/profile` (authed) → 404 in 65ms.
+  - Restored Vikram's score to 90 via the lead-score route after testing.
+  - Browser E2E via agent-browser: login → Chats nav button → click Vikram Singh conversation → DetailsPanel shows "View Full Profile" button (emerald-accented, ExternalLink icon) → click → navigates to contact-profile view → header shows "Vikram Singh" / customer status / 🔥90 / Pinned badge / phone / High Priority / en / "Open Chat" + "Take Over" buttons. Stats grid shows 6 Total Messages (2 in · 4 out) / 2/2 AI vs Owner (50% AI) / — Avg Response / 1 day Duration. Lead Score History AreaChart renders with 4 score events listed below. Tabs verified:
+    - Conversation: full 6-message timeline with Yesterday/Today date separators, AI/source badges, delivery icons, Export dropdown.
+    - AI Memory: 3 editable rows (Language=en, Last intent=high_priority, Name=Vikram Singh) each with Delete+Save; "Add new memory" form at bottom.
+    - Activity: 2 log entries from the whatsapp category (both "Owner sent manual message"), sorted desc.
+    - Details: Name/Phone/Language (English)/Status (Customer)/Notes ("VIP customer — high priority CRM project") editable fields + Save details button; read-only metadata grid (First seen Jul 17 11:01 AM, Last seen Jul 18 12:51 AM, Last message Jul 18 12:51 AM, Created at Jul 17 04:01 PM, Country code —, Contact ID cmrp4kt9b001jqby0600d3zfw).
+    - "Adjust Score" dialog opens with slider (current=90), category Select (High Priority Client selected), reason input, Cancel/Save score buttons.
+    - "Open Chat" button correctly navigates back to the Chats view.
+  - Dev server log shows all new routes compiling and responding: `GET /api/contacts/.../profile 200 in 952ms (compile: 912ms)` on first hit, then `200 in 227ms` cached. Memory POST/DELETE, lead-score POST (200 + 400s), profile 401 + 404, logs contactId filter, extended PATCH — all 200/4xx as expected. No compile errors.
+
+Stage Summary:
+- MODIFIED `src/lib/types.ts` — added `'contact-profile'` to `ViewKey` union (14 views total).
+- MODIFIED `src/app/api/logs/route.ts` — added optional `?contactId=X` filter (backwards-compatible).
+- MODIFIED `src/app/api/contacts/[id]/route.ts` — extended PATCH to accept name/phone/language (backwards-compatible).
+- MODIFIED `src/app/page.tsx` — imported ContactProfileView, added `profileContactId` state, added view-router case, passed `onViewProfile` to ChatsView.
+- MODIFIED `src/components/views/chats-view.tsx` — added `onViewProfile` prop + ExternalLink "View Full Profile" button in DetailsPanel header, threaded prop to both render sites (desktop aside + mobile Sheet).
+- CREATED `src/app/api/contacts/[id]/profile/route.ts` — GET, comprehensive profile payload (contact + messages + memories + leadScoreHistory + stats + notifications) with auth check + 404 handling.
+- CREATED `src/app/api/contacts/[id]/memory/route.ts` — POST (upsert) + DELETE (?key=X) with key cleaning + contact-existence check.
+- CREATED `src/app/api/contacts/[id]/lead-score/route.ts` — POST with score clamping (0-100) + category validation + transaction (create history record + update contact.leadScore/detectedService).
+- CREATED `src/components/views/contact-profile-view.tsx` — `ContactProfileView` with header bar + 4 stat cards + lead score history chart (AreaChart with reference line + events list + adjust dialog) + 4-tab panel (Conversation / AI Memory / Activity / Details) + Danger Zone (pin/unpin + block/unblock) + framer-motion staggered fade-in throughout.
+
+---
+Task ID: cron-review-20260718-1040
+Agent: Main (Z.ai Code) — scheduled dev review (round 2)
+Task: QA sweep + Contact Profile page + Theme toggle + Notification sound/desktop alerts + Backup/restore
+
+## Current Project Status Assessment
+Platform was stable at start: 13 views, 34 API routes, 16 Prisma models, lint clean. Quick agent-browser QA sweep across all views confirmed zero console/page errors. Continued with 4 high-impact features from the worklog's priority recommendations.
+
+## Work Completed This Round
+
+### 1. Contact Profile Page (Task T2 — via subagent)
+- 3 new API routes: `/api/contacts/[id]/profile` (GET — comprehensive payload with messages, memories, leadScoreHistory, stats, notifications), `/api/contacts/[id]/memory` (POST+DELETE — editable AI memory), `/api/contacts/[id]/lead-score` (POST — manual score adjustment).
+- New `contact-profile-view.tsx`: header with avatar/status/lead badge, 4-card stats grid (AnimatedCounter), lead score history AreaChart with ReferenceLine at threshold 70 + events list + adjust score dialog, 4-tab panel (Conversation with CSV/JSON export, AI Memory inline editor, Activity Log, Details form), Danger Zone (pin/unpin, block).
+- Added 'contact-profile' to ViewKey. Wired into page.tsx with profileContactId state. Added "View Full Profile" button to chats-view customer details panel.
+- Verified: opened Vikram Singh's profile from Chats → page renders with chart + 4 tabs.
+
+### 2. Dark/Light Theme Toggle (Task T1 — manual)
+- Created `theme-toggle.tsx` — dropdown with Light/Dark/System options, animated sun/moon icons.
+- Updated `layout.tsx`: removed hardcoded `className="dark"` on html, enabled `enableSystem` on ThemeProvider.
+- Added ThemeToggle to app-shell topbar (between Quick Search and NotificationsBell).
+- Verified: toggled to light mode (htmlClass="light"), back to dark. Both themes render correctly.
+
+### 3. Notification Sound + Desktop Alerts (Task T3 — manual)
+- Created `use-notification-alerts.ts` hook: polls /api/notifications every 12s, detects new high-priority notifications (owner_request, new_lead, ai_error, db_error, wa_disconnected), plays a Web Audio API "ding-ding" sound (no asset file needed — synthesized via oscillators), and shows desktop Notifications (with permission request).
+- Sound + desktop preferences persisted to localStorage. First-load deduplication (marks existing notifications as seen, no alert on mount).
+- Integrated into NotificationsBell: added sound toggle (Volume2/VolumeX) and desktop toggle (Monitor/MonitorOff) buttons in the notification dropdown header. Small green dot on bell when sound is enabled.
+- Verified: toggled sound on → "Sound on" title confirmed. Desktop toggle requests permission.
+
+### 4. Real SQLite Backup/Restore (Task T4 — via subagent)
+- 3 new API routes: `/api/system/backup` (GET list + POST create — copies SQLite DB file + exports settings JSON), `/api/system/backup/restore` (POST — restores from file with path traversal protection), `/api/system/backup/[filename]` (DELETE — removes backup).
+- Enhanced system-view Backup & Recovery card: Create Backup button (emerald gradient), Backup History list with restore/delete actions (confirmation dialogs), Database Info grid (path, size, counts).
+- Verified: created backup → file exists at db/backups/backup-2026-07-18-030747.db (253KB) + .json settings (2.7KB). History shows "1 BACKUP".
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200, realtime healthy
+- Browser E2E: theme toggle (light/dark), notification bell (sound + desktop toggles), contact profile (chart + 4 tabs), backup create (file on disk verified)
+- 14 views total (added Contact Profile), 37 API routes, 16 Prisma models
+
+## Unresolved Issues / Risks
+- WebSocket gateway: still using polling fallback (clients=0 on realtime health). Real-time updates work via polling.
+- Real WhatsApp Baileys integration still a simulation layer.
+- Single-user auth (admin/admin123).
+- Theme: light mode CSS hasn't been visually polished for every view (some views may have contrast issues in light mode — the dark theme is the primary/default).
+
+## Priority Recommendations for Next Phase
+1. Polish light-mode CSS for all views (test each view in light mode, fix contrast issues).
+2. Wire WebSocket gateway properly for true real-time push (eliminate polling).
+3. Add multi-user authentication with roles (admin, operator, viewer).
+4. Add a "Quick Replies" / canned responses feature in the chat composer (snippets library).
+5. Add conversation tagging/labels for organization (e.g. "urgent", "follow-up", "closed").
+6. Add a scheduled messages feature (send a message at a future time).
