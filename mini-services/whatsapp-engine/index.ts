@@ -289,6 +289,53 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return
     }
 
+    // POST /pair-phone — start connection + request pairing code
+    // This is WhatsApp's official alternative to QR scanning.
+    // User enters their phone number, receives a code via SMS,
+    // enters it on their phone's WhatsApp → Linked Devices.
+    if (path === '/pair-phone' && req.method === 'POST') {
+      const body = JSON.parse(await readBody())
+      const phone = (body.phone || '').trim()
+      if (!phone || phone.length < 7) {
+        sendJSON(400, { error: 'Valid phone number required' })
+        return
+      }
+
+      // Start the connection if not already started
+      if (!sock) {
+        await startConnection()
+        // Wait for socket to be ready (Baileys needs the connection open
+        // before we can request a pairing code)
+        await new Promise((resolve) => setTimeout(resolve, 3000))
+      }
+
+      if (!sock) {
+        sendJSON(500, { error: 'Engine not ready. Try again in a few seconds.' })
+        return
+      }
+
+      try {
+        // Request pairing code from WhatsApp
+        // Phone must be in format: country code + number, no + or spaces
+        const cleanPhone = phone.replace(/[^0-9]/g, '')
+        console.log(`[wa-engine] Requesting pairing code for ${cleanPhone}...`)
+
+        // Baileys requestPairingCode returns a string like "ABCD-EFGH"
+        const code = await sock.requestPairingCode(cleanPhone)
+        console.log(`[wa-engine] ✓ Pairing code generated: ${code}`)
+
+        state.connectionState = 'connecting'
+        state.phoneNumber = phone
+        saveState()
+
+        sendJSON(200, { ok: true, code, phone })
+      } catch (err) {
+        console.error('[wa-engine] Pairing code failed:', err)
+        sendJSON(500, { error: 'Failed to get pairing code: ' + (err as Error).message })
+      }
+      return
+    }
+
     // POST /disconnect — disconnect
     if (path === '/disconnect' && req.method === 'POST') {
       if (sock) {

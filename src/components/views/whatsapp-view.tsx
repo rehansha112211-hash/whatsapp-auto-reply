@@ -38,6 +38,8 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { apiGet, apiPost, ApiError } from '@/lib/api-client'
 import { formatDateTime, formatUptime, timeAgo } from '@/lib/format'
@@ -267,6 +269,7 @@ export function WhatsAppView() {
               busy={busy}
               onGenerate={handleGenerateQr}
               engineAvailable={engineAvailable}
+              onRefresh={refresh}
             />
           )}
         </div>
@@ -308,57 +311,101 @@ function DisconnectedCard({
   busy,
   onGenerate,
   engineAvailable,
+  onRefresh,
 }: {
   isLoggedOut: boolean
   busy: boolean
   onGenerate: () => void
   engineAvailable: boolean
+  onRefresh: () => void
 }) {
   const [howOpen, setHowOpen] = React.useState(false)
+  const [method, setMethod] = React.useState<'qr' | 'phone'>('phone')
+
   return (
     <Card className="overflow-hidden rounded-xl border bg-card/60 backdrop-blur card-hover">
       <CardContent className="flex flex-col items-center px-6 py-10 text-center sm:py-14">
         <div className="relative mb-6 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30">
           <MessageCircle className="h-10 w-10" />
           <span className="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full border-2 border-card bg-background">
-            <QrCode className="h-3.5 w-3.5 text-emerald-500" />
+            {method === 'qr' ? (
+              <QrCode className="h-3.5 w-3.5 text-emerald-500" />
+            ) : (
+              <Smartphone className="h-3.5 w-3.5 text-emerald-500" />
+            )}
           </span>
         </div>
 
         <h2 className="text-xl font-semibold tracking-tight">Connect WhatsApp</h2>
         <p className="mt-2 max-w-md text-sm text-muted-foreground">
           {engineAvailable
-            ? 'Click below to generate a real WhatsApp QR code. Scan it with your phone to connect via the Baileys multi-device protocol.'
-            : 'The real WhatsApp engine is not running. Start it first, then generate a QR code.'}
+            ? 'Choose a method below to connect your WhatsApp account via the Baileys multi-device protocol.'
+            : 'The real WhatsApp engine is not running. Start it first.'}
         </p>
 
         {isLoggedOut && (
           <div className="mt-4 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-300">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Previous session was logged out. Generate a new QR to reconnect.
+            Previous session was logged out. Reconnect to continue.
           </div>
         )}
 
-        <Button
-          onClick={onGenerate}
-          disabled={busy || !engineAvailable}
-          className="mt-6 h-11 gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 px-6 text-white hover:from-emerald-600 hover:to-teal-700"
-        >
-          {busy ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Connecting…
-            </>
-          ) : (
-            <>
-              <QrCode className="h-4 w-4" />
-              Generate QR Code
-            </>
-          )}
-        </Button>
+        {/* Method toggle */}
+        <div className="mt-6 inline-flex rounded-lg border bg-muted/40 p-1">
+          <button
+            onClick={() => setMethod('phone')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+              method === 'phone'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Smartphone className="h-3.5 w-3.5" />
+            Phone Number
+          </button>
+          <button
+            onClick={() => setMethod('qr')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+              method === 'qr'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <QrCode className="h-3.5 w-3.5" />
+            QR Code
+          </button>
+        </div>
 
-        <div className="mt-3 text-[11px] text-muted-foreground/70">
-          Open WhatsApp → Settings → Linked Devices → Scan QR
+        {/* Method content */}
+        <div className="mt-6 w-full max-w-sm">
+          {method === 'phone' ? (
+            <PhonePairMethod busy={busy} engineAvailable={engineAvailable} onConnected={onRefresh} />
+          ) : (
+            <div className="flex flex-col items-center gap-3">
+              <Button
+                onClick={onGenerate}
+                disabled={busy || !engineAvailable}
+                className="h-11 gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 px-6 text-white hover:from-emerald-600 hover:to-teal-700"
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Connecting…
+                  </>
+                ) : (
+                  <>
+                    <QrCode className="h-4 w-4" />
+                    Generate QR Code
+                  </>
+                )}
+              </Button>
+              <div className="text-[11px] text-muted-foreground/70">
+                Open WhatsApp → Settings → Linked Devices → Scan QR
+              </div>
+            </div>
+          )}
         </div>
 
         <Separator className="my-6" />
@@ -375,27 +422,150 @@ function DisconnectedCard({
           </CollapsibleTrigger>
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
             <ol className="mt-2 space-y-3 px-3 py-2">
-              {[
-                { step: '1', title: 'Generate QR', body: 'Click the button above. A real WhatsApp QR code will appear.' },
-                { step: '2', title: 'Open WhatsApp', body: 'Launch WhatsApp on your phone (Android or iPhone).' },
-                { step: '3', title: 'Linked Devices', body: 'Tap Settings → Linked Devices → Link a Device. Verify your identity.' },
-                { step: '4', title: 'Scan the QR', body: 'Point your phone at the QR shown here. Pairing completes in seconds.' },
-              ].map((s) => (
-                <li key={s.step} className="flex gap-3">
-                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-[11px] font-bold text-emerald-300">
-                    {s.step}
-                  </span>
-                  <div>
-                    <div className="text-sm font-medium">{s.title}</div>
-                    <div className="text-xs text-muted-foreground">{s.body}</div>
-                  </div>
-                </li>
-              ))}
+              <li className="flex gap-3">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-[11px] font-bold text-emerald-300">1</span>
+                <div>
+                  <div className="text-sm font-medium">Phone Number Method (Recommended)</div>
+                  <div className="text-xs text-muted-foreground">Enter your WhatsApp number → get a pairing code → enter it in WhatsApp → Linked Devices → "Link with phone number". No camera needed!</div>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-[11px] font-bold text-emerald-300">2</span>
+                <div>
+                  <div className="text-sm font-medium">QR Code Method</div>
+                  <div className="text-xs text-muted-foreground">Generate a QR → scan with your phone camera. Classic method.</div>
+                </div>
+              </li>
             </ol>
           </CollapsibleContent>
         </Collapsible>
       </CardContent>
     </Card>
+  )
+}
+
+// ============================================================
+// Phone Number Pairing — official WhatsApp alternative to QR
+// ============================================================
+function PhonePairMethod({
+  busy,
+  engineAvailable,
+  onConnected,
+}: {
+  busy: boolean
+  engineAvailable: boolean
+  onConnected: () => void
+}) {
+  const [phone, setPhone] = React.useState('')
+  const [loading, setLoading] = React.useState(false)
+  const [pairCode, setPairCode] = React.useState('')
+
+  const handlePair = async () => {
+    const cleanPhone = phone.replace(/[^0-9]/g, '')
+    if (cleanPhone.length < 7) {
+      toast.error('Please enter a valid phone number with country code')
+      return
+    }
+    setLoading(true)
+    setPairCode('')
+    try {
+      const data = await apiPost<{ ok: boolean; code: string; phone: string; error?: string }>(
+        '/api/whatsapp/pair-phone',
+        { phone: cleanPhone },
+      )
+      if (data.ok && data.code) {
+        setPairCode(data.code)
+        toast.success('Pairing code generated!', {
+          description: 'Enter this code in WhatsApp → Linked Devices → Link with phone number',
+        })
+      } else {
+        toast.error(data.error || 'Failed to get pairing code')
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to get pairing code')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (pairCode) {
+    return (
+      <div className="flex flex-col gap-4 text-left">
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-5 text-center">
+          <div className="text-xs font-medium uppercase tracking-wider text-emerald-300">
+            Your WhatsApp Pairing Code
+          </div>
+          <div className="mt-3 text-4xl font-bold tracking-[0.3em] text-emerald-300 font-mono">
+            {pairCode}
+          </div>
+        </div>
+        <div className="space-y-2 text-sm">
+          <div className="font-medium">Steps to connect:</div>
+          <ol className="ml-4 list-decimal space-y-1.5 text-muted-foreground">
+            <li>Open <strong className="text-foreground">WhatsApp</strong> on your phone</li>
+            <li>Go to <strong className="text-foreground">Settings → Linked Devices</strong></li>
+            <li>Tap <strong className="text-foreground">Link a Device</strong></li>
+            <li>Choose <strong className="text-foreground">"Link with phone number instead"</strong></li>
+            <li>Enter the code above: <strong className="text-emerald-300 font-mono">{pairCode}</strong></li>
+          </ol>
+        </div>
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <Clock className="h-3.5 w-3.5" />
+          Code expires soon. Enter it quickly in your phone's WhatsApp.
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { setPairCode(''); onConnected() }}
+          className="w-full"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Check Connection Status
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4 text-left">
+      <div className="space-y-2">
+        <Label htmlFor="pair-phone" className="text-xs font-medium">
+          WhatsApp Phone Number
+        </Label>
+        <div className="relative">
+          <Smartphone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="pair-phone"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="919876543210"
+            className="pl-9"
+            inputMode="numeric"
+          />
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Enter your number with country code (no +, no spaces).
+          Example: 91 for India, 1 for USA.
+        </p>
+      </div>
+      <Button
+        onClick={handlePair}
+        disabled={loading || busy || !engineAvailable}
+        className="h-10 gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+      >
+        {loading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Getting pairing code…
+          </>
+        ) : (
+          <>
+            <Smartphone className="h-4 w-4" />
+            Get Pairing Code
+          </>
+        )}
+      </Button>
+    </div>
   )
 }
 
