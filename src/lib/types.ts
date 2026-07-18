@@ -66,6 +66,7 @@ export type ViewKey =
   | 'logs'
   | 'system'
   | 'simulator'
+  | 'broadcast'
 
 export interface AuthUser {
   id: string

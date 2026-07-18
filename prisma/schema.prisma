@@ -227,3 +227,31 @@ model Metric {
 
   @@index([name, createdAt])
 }
+
+// ---------------- Broadcasts (mass messages) ----------------
+model Broadcast {
+  id        String   @id @default(cuid())
+  name      String
+  message   String
+  audience  String   @default("all") // all | leads | hot | active | customer | custom
+  sentCount Int      @default(0)
+  deliveredCount Int @default(0)
+  status    String   @default("draft") // draft | sent | scheduled
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------------- Message templates (reusable) ----------------
+model Template {
+  id        String   @id @default(cuid())
+  name      String
+  body      String
+  category  String   @default("general") // greeting | promotion | followup | support | general
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+}

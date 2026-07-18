@@ -322,3 +322,145 @@ Stage Summary:
 - DB: Prisma + SQLite with 14 models, seeded with 5 realistic demo conversations.
 - Realtime: WebSocket mini-service on :3003 + polling fallback.
 - Files: ~30 source files (views, API routes, libs, hooks, mini-service).
+
+---
+Task ID: 10
+Agent: full-stack-developer (Dashboard charts)
+Task: Add a "Last 7 Days" activity chart section to the existing Dashboard view — 4 charts (area / grouped bar / donut pie / horizontal bar) backed by a new /api/dashboard/trends endpoint that returns real DB-aggregated 7-day time series + category counts + lead-score buckets.
+
+Work Log:
+- Read worklog.md (Tasks 1–5/7), dashboard-view.tsx (existing 6 stat cards + recent activity + recent conversations), api/dashboard/route.ts, chart.tsx (ChartContainer/ChartTooltip/ChartConfig), prisma/schema.prisma (Message & Contact models), types.ts (DashboardStats), auth.ts (getCurrentUser), api-client.ts, seed.ts (data shape), badge.tsx, and the agent-ctx notes from prior subagents.
+- Created `src/app/api/dashboard/trends/route.ts` (GET, `force-dynamic`):
+  - `getCurrentUser()` → 401 JSON when unauthed.
+  - Builds a 7-day window of local-midnight buckets (oldest → newest, today included as day 7).
+  - Two parallel `findMany` queries in the 7-day window: messages (direction/source/timestamp) and new contacts (createdAt). Plus one `findMany` over ALL contacts for `detectedService`/`leadScore` so the byCategory + leadDistribution charts are meaningful on day 1.
+  - Aggregates per-day in JS (SQLite lacks robust date grouping): incoming, outgoing, ai (outgoing+source=ai), owner (outgoing+source=owner), newContacts (createdAt in day). Date label formatted as "Jul 11"; weekday label as "Mon".
+  - `byCategory`: counts contacts per `detectedService` (empty → "unknown"), sorted desc by count.
+  - `leadDistribution`: 4 fixed buckets in order — Cold 0-24, Warm 25-49, Hot 50-74, Flame 75-100 — counted over all contacts.
+  - Returns `{ days: TrendDay[7], byCategory: CategoryCount[], leadDistribution: LeadBucket[4] }`. All numbers are real DB queries, nothing hardcoded.
+- Modified `src/components/views/dashboard-view.tsx` (additive — all existing content untouched):
+  - New imports: `BarChart3`, `PieChart as PieChartIcon`, `Tag`, `TrendingUp` from lucide; `Area, AreaChart, Bar, BarChart, Cell, CartesianGrid, Legend, Pie, PieChart, XAxis, YAxis` from recharts; `ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig` from `@/components/ui/chart`.
+  - 4 typed `ChartConfig` objects mapping series keys → label + CSS color (incoming=#10b981, outgoing=#14b8a6, ai=#34d399, owner=#38bdf8 sky, cold=#71717a zinc, warm=#f59e0b amber, hot=#f97316 orange, flame=#10b981 emerald, sources count=#14b8a6).
+  - `ChartCardShell` wrapper: card with icon + title, consistent with existing stat-card pattern (`rounded-xl border bg-card/60 backdrop-blur p-4`).
+  - `ChartSkeleton`: 7-bar pulsing skeleton for the loading state.
+  - `MessagesAreaChart`: AreaChart with 2 series (incoming + outgoing), gradient fills via `<defs><linearGradient>`, CartesianGrid + XAxis(weekday label) + YAxis + ChartTooltip + Legend + 2 Area components. Uses `var(--color-incoming)` / `var(--color-outgoing)` CSS vars injected by ChartContainer.
+  - `RepliesBarChart`: BarChart with 2 grouped bars (ai + owner), emerald-400 + sky-400.
+  - `LeadDistributionPie`: PieChart donut (innerRadius=48, outerRadius=80), 4 cells colored zinc/amber/orange/emerald, with `nameKey="key"` so the tooltip picks up the friendly config labels (Cold/Warm/Hot/Flame).
+  - `LeadSourcesBar`: horizontal BarChart (layout="vertical"), top-8 categories with title-cased labels (e.g. "ai_automation" → "Ai Automation"), teal bars, empty-state if no categories.
+  - `TrendsSection`: fetches `/api/dashboard/trends` on mount + every 30s, renders the section header with an emerald "7d" badge + "Auto-refreshes every 30s" hint, then a responsive `grid-cols-1 md:grid-cols-2` of the 4 chart cards. Loading state shows 4 skeleton cards; failure state shows a friendly EmptyState.
+  - Inserted `<TrendsSection />` between the stat-cards grid and the "Recent activity + recent conversations" grid — no other existing markup was modified.
+- Quality gates:
+  - `bun run lint` → **0 errors, 0 warnings** across the whole repo.
+  - TypeScript strict throughout: typed `TrendDay`/`CategoryCount`/`LeadBucket`/`TrendsData` interfaces on both client and server; `ChartConfig` imported as a type; no `any`, no `console.log`, no TODO.
+  - `bun run lint` exit code 0.
+  - Verified the API end-to-end against the seeded DB:
+    - `POST /api/auth/login` {admin/admin123} → 200, captured `war_session` cookie.
+    - `GET /api/dashboard/trends` (authed) → 200 with 7 day-objects, `byCategory: [{website:3},{app:1},{ai_automation:1},...]`, `leadDistribution: [{0-24:1},{25-49:3},{50-74:0},{75-100:3}]`. Day "Jul 17" had `incoming:12, outgoing:15, ai:12, owner:3, newContacts:7` — all real DB aggregates.
+    - `GET /api/dashboard/trends` (no cookie) → 401.
+    - `GET /` (authed) → 200, dashboard page renders (initial SSR shows skeleton state, charts hydrate after mount).
+  - Dev server log shows `GET /api/dashboard/trends 200 in 35ms` and `401 in 7ms`.
+
+Stage Summary:
+- Files created: `src/app/api/dashboard/trends/route.ts` (new GET endpoint, real DB aggregation).
+- Files modified: `src/components/views/dashboard-view.tsx` (added 4-chart "Last 7 Days" section above Recent Activity, kept all existing content intact).
+- Charts: AreaChart (incoming vs outgoing, 7d), BarChart (AI vs owner replies, 7d), PieChart donut (lead score 4-bucket distribution), horizontal BarChart (lead sources by category).
+- Stack: recharts v2.15.4 via the existing shadcn `ChartContainer` / `ChartTooltip` / `ChartConfig` wrapper; lucide icons (TrendingUp, BarChart3, Flame, PieChart); WhatsApp-green theme (emerald/teal), sky-400 for owner (not blue), zinc/amber/orange/emerald for the lead buckets.
+- All counts are real DB queries against the Message & Contact tables — no fake data.
+
+---
+Task ID: 9
+Agent: full-stack-developer (Chats enhancements)
+Task: Enhance the existing Chats view with three new capabilities — (1) full-conversation CSV/JSON export, (2) a "mark all read" action across every conversation, and (3) a polished "AI · Ns ago" live indicator on AI messages — plus a small set of UX polish items (unread banner, message hover actions, scroll-to-bottom button).
+
+Work Log:
+- Read worklog.md (Task 4-d built the original ChatsView + 4 API routes; Task 5-7 verified end-to-end). Re-read the full `src/components/views/chats-view.tsx` (1430 lines), `src/app/api/messages/route.ts`, `src/app/api/chats/route.ts`, `src/lib/format.ts` (downloadFile/toCsv/timeAgo/formatDateTime), `src/lib/api-client.ts` (apiGet/apiPost/apiPatch), `src/lib/auth.ts` (getCurrentUser), prisma schema (Message/Contact/Log models), and confirmed shadcn/ui `dropdown-menu.tsx` exports (`DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, …). Cross-referenced existing log-creation patterns in `src/lib/wa-engine.ts` + `src/app/api/settings/*/route.ts` for the mark-all-read audit log.
+- Created `src/app/api/messages/export/route.ts` (GET, `force-dynamic`):
+  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+  - Query params: `contactId` (required, 400 if missing), `format` ('csv' | 'json', defaults to 'csv' on unknown values).
+  - Fetches the contact (404 if not found) with a curated `select` (id, name, phone, countryCode, language, status, leadScore, detectedService, notes, humanMode, pinned, firstSeen, lastSeen, lastMessageAt) and ALL messages ordered ASC (oldest → newest) so the exported transcript reads naturally.
+  - **CSV path**: maps each message to `{ timestamp, direction, source, status, text }` and pipes through `toCsv()` from `@/lib/format`. Empty result returns just the header row. Response: `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="chat-{safeName}.csv"`.
+  - **JSON path**: returns `{ contact: {...}, messages: [{id, timestamp, direction, source, status, read, text}], exportedAt, exportedBy }` pretty-printed. Response: `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="chat-{safeName}.json"`.
+  - `safeName()` helper strips non-`[a-zA-Z0-9-_]` characters and trims underscores so filenames are safe across OSes (e.g. "Vikram Singh" → "Vikram_Singh").
+  - All responses carry `Cache-Control: no-store` so exports always reflect the latest DB state.
+- Created `src/app/api/chats/mark-all-read/route.ts` (POST, `force-dynamic`):
+  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+  - Single `db.message.updateMany({ where: { direction: 'incoming', read: false }, data: { read: true } })` — one SQL UPDATE across all contacts.
+  - Returns `{ ok: true, updated: N }` where N is the count of rows touched.
+  - Writes an audit log entry (`db.log.create`) with `category='whatsapp'`, `level='info'`, `message='Marked N messages as read'`, and `meta=JSON.stringify({ actor: user.username, count: N })`. Wrapped in try/catch so a transient SQLite lock can't break the request.
+- Modified `src/components/views/chats-view.tsx` — added all six features while preserving every existing behaviour:
+  - **(a) Export conversation button** — added a `DropdownMenu` in the `ChatWindow` header between the contact name and the mobile details button. Trigger is a ghost `size="icon"` button with the `Download` icon; disabled while exporting or when there are no messages. Menu items "Export as CSV" (`FileText` icon) and "Export as JSON" (`Braces` icon). `handleExport(format)` fetches `/api/messages/export?contactId=…&format=…` with `credentials: 'same-origin'`, reads the response text, sanitises the contact name into a filename, and calls `downloadFile()` from `@/lib/format` with the correct MIME (`text/csv;charset=utf-8` / `application/json;charset=utf-8`). Toasts success/error; shows a `Loader2` spinner on the trigger while in-flight.
+  - **(b) "Mark all read" button** — added `totalUnread` (count of conversations with unread>0) and `markingAllRead` state to `ChatsView`. `ConversationList` now receives `totalUnread`, `markingAllRead`, and `onMarkAllRead` props. A ghost `CheckCheck` icon button (emerald) appears in the filter row next to the `Select`, only when `totalUnread > 0`, wrapped in a `Tooltip` ("Mark all read"). `handleMarkAllRead` POSTs to `/api/chats/mark-all-read`, optimistically zeroes every conversation's `unread` in the local `items` state (so badges clear instantly), and toasts `Marked N messages as read`. Spinner replaces the icon while the request is in-flight.
+  - **(c) AI message badge** — `MessageBubble` now renders a tiny `inline-flex items-center gap-1 text-[10px] text-emerald-400/70` sublabel under the timestamp on outgoing `source === 'ai'` messages: `<Bot/> AI · {aiRepliedAgoLabel(timestamp)}`. `aiRepliedAgoLabel()` returns "just now" for <5s and falls through to the shared `timeAgo()` helper ("12s ago", "3m ago", …). The `Bot` icon gets `animate-pulse` when `isAiMessageRecent()` (<8s old) — a subtle "AI just replied" live indicator that decays naturally as the message ages.
+  - **(d) Unread count banner** — thin emerald-tinted banner between the list header and the scrollable list, shown only when `totalUnread > 0`: left side `<Bell/> N unread conversation(s)`, right side a "Mark all read" link button. The link shares the same `onMarkAllRead` handler as the header icon button.
+  - **(e) Message hover actions** — `MessageBubble` now wraps its bubble in a `group relative` container. An absolutely-positioned action bar appears at `top-0 right-0` (outgoing) or `top-0 left-0` (incoming) with `opacity-0 group-hover:opacity-100 transition-opacity group-hover:pointer-events-auto`. The bar contains a `Copy` icon button (always shown — copies `message.text` to the clipboard, swaps to a green `Check` for 1.4s on success) and a `CornerUpLeft` "reply" icon button (incoming only). Reply calls `handleReply(text)` in `ChatWindow`, which inserts a markdown-style `> {line}` prefix for each line of the quoted message into the composer and focuses the textarea.
+  - **(f) Scroll-to-bottom button** — restructured the messages area into a `relative min-h-0 flex-1` wrapper containing the scroll container (now `h-full overflow-y-auto` with an `onScroll` handler) and a floating `absolute bottom-4 right-4 h-9 w-9 rounded-full border bg-card shadow-lg` button with the `ArrowDown` icon. `handleScroll` computes distance from bottom and toggles `showScrollButton` (visible when >80px from bottom AND there are messages). Clicking calls `scrollToBottom()` which uses `el.scrollTo({ behavior: 'smooth' })`. Also upgraded the auto-scroll behaviour: a `pinnedToBottomRef` tracks whether the user is following the latest message — switching contacts always pins to bottom, but new messages only auto-scroll if the user hasn't scrolled up to read history (standard WhatsApp-web behaviour, eliminates the "yank to bottom on every 4s poll" annoyance).
+  - New lucide imports: `Download`, `FileText`, `Braces`, `Copy`, `CornerUpLeft`, `ArrowDown`. New shadcn imports: `DropdownMenu`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuTrigger`. New format import: `downloadFile`. All other imports (and all 11 view-existing behaviours — polling, realtime, optimistic updates, mobile sheet, human-takeover, etc.) are untouched.
+- Smoke-tested end-to-end (logged in as admin/admin123 against the seeded DB):
+  - `GET /api/messages/export?contactId=…&format=csv` (authed) → 200, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="chat-Vikram_Singh.csv"`, body starts with `timestamp,direction,source,status,text` then real rows.
+  - `GET /api/messages/export?contactId=…&format=json` (authed) → 200, `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="chat-Vikram_Singh.json"`, body is `{ contact: {…}, messages: […], exportedAt, exportedBy }`.
+  - `POST /api/chats/mark-all-read` (authed) → 200 `{ok:true, updated:1}` on first call, `{ok:true, updated:0}` on the second call (idempotent). Audit log row written with `category='whatsapp'`, `level='info'`, `message='Marked 1 messages as read'`.
+  - Edge cases verified: missing `contactId` → 400; unknown `format=xml` → defaults to CSV (200); nonexistent contact → 404; unauthenticated requests → 401.
+  - Home page (`GET /`) still returns 200 (28KB) with `chats-view` in the bundle; no compile errors in dev.log.
+- `bun run lint` → **0 errors, 0 warnings** (clean) across the project.
+
+Stage Summary:
+- `src/app/api/messages/export/route.ts` (NEW — GET, CSV/JSON export with proper Content-Type + Content-Disposition)
+- `src/app/api/chats/mark-all-read/route.ts` (NEW — POST, bulk mark-read + audit log)
+- `src/components/views/chats-view.tsx` (MODIFIED — added features a-f, kept all existing functionality)
+
+---
+Task ID: 11
+Agent: full-stack-developer (Broadcast feature)
+Task: Add a new Broadcast / Template Messages feature — mass-send to filtered audiences and reusable message templates, with nav entry, API routes, and a tabbed view component.
+
+Work Log:
+- Read worklog.md, prisma/schema.prisma, src/lib/{types,nav,db,auth,api-client,wa-engine,format}.ts, src/components/status.tsx, and existing API/view patterns (chats, leads, simulator, messages) to stay consistent with the codebase.
+- Added `Broadcast` and `Template` models to `prisma/schema.prisma` (with indexes on status/createdAt for Broadcast, category for Template).
+- Ran `bun run db:push` — Prisma client regenerated successfully; SQLite DB in sync.
+- Added `'broadcast'` to the `ViewKey` union in `src/lib/types.ts`.
+- Imported `Megaphone` from lucide-react and added the `{ key: 'broadcast', label: 'Broadcast', icon: Megaphone, description: 'Mass messages & templates', group: 'main' }` entry to `NAV_ITEMS` in `src/lib/nav.ts` (positioned right after `simulator`).
+- Created `src/app/api/broadcast/route.ts` — GET lists all campaigns (newest first, max 200); POST resolves the audience filter (all/leads/hot/active/customer; `custom` falls back to `all`), sends each matching contact an owner-source message via `sendOwnerMessage(contactId, message)` with a concurrency cap of 5 workers, persists a Broadcast record with sentCount/deliveredCount/status, writes a single `whatsapp`/`info` Log line, and fires a best-effort realtime broadcast. Returns `{ ok, broadcast, sentCount, failedCount? }`. Also handles the empty-audience case gracefully.
+- Created `src/app/api/broadcast/audience-count/route.ts` — GET returns `{ audience, count }` so the form can show "This will reach N contacts" reactively as the operator picks the audience. Mirrors the broadcast route's filter logic so the preview is truthful.
+- Created `src/app/api/templates/route.ts` — GET lists all templates (sorted by category then recency), auto-seeding 4 QorvixNode-branded defaults (greeting / promotion / followup / support) on first call; POST upserts a template by `id?` (create-if-missing semantics when an id is supplied but absent); DELETE `?id=X` removes a template with 404 when not found.
+- Created `src/components/views/broadcast-view.tsx` (`'use client'`, named `BroadcastView`) with two tabs:
+    • Campaigns — a New Broadcast form card (name input, message textarea with live `x / 1000` counter, audience Select, live "This will reach N contacts" preview via the audience-count endpoint, a "Quick Templates" chip row that fills the textarea, and an amber→orange gradient "Send Broadcast" button that opens a confirmation Dialog showing recipients count + message preview before sending). Right side shows a scrollable Recent Campaigns list with audience/sent/status badges and time-ago. Toast notifications on success/failure, silent refresh button.
+    • Templates — a responsive grid of template cards (1/2/3 cols) with category badge, body preview, copy-to-clipboard, edit and delete buttons. New Template button + Edit both open a shared Dialog with name/body/category inputs and char counter. Delete opens a confirmation Dialog. Category badges colored per spec (greeting=emerald, promotion=amber, followup=sky, support=violet, general=zinc).
+- Wired `BroadcastView` into `src/app/page.tsx` — added the import and the `{active === 'broadcast' && <BroadcastView />}` view-router case.
+- Ran `bun run lint` — clean (no errors, no warnings).
+- Restarted the dev server (the running process held a stale PrismaClient that predated the new models) via `setsid`, then smoke-tested end-to-end: login → GET `/api/templates` (200, returned 4 seeded templates) → GET `/api/broadcast/audience-count?audience=hot` (200, `count=3`) → GET `/api/broadcast` (200, empty list) → POST `/api/broadcast` to "hot" audience (200, `sentCount=3, failedCount=0`) → verified all 3 hot-lead chats (Vikram, Rahul, Priya) now show the broadcast message as their last outgoing message via `/api/chats?filter=hot` → verified the broadcast appears in `/api/broadcast` list with `status=sent` → tested template create + delete (both 200).
+
+Stage Summary:
+- MODIFIED `prisma/schema.prisma` — added `Broadcast` and `Template` models (with indexes).
+- MODIFIED `src/lib/types.ts` — added `'broadcast'` to `ViewKey`.
+- MODIFIED `src/lib/nav.ts` — imported `Megaphone`, added `broadcast` nav entry in the `main` group after `simulator`.
+- MODIFIED `src/app/page.tsx` — imported `BroadcastView`, added view-router case.
+- CREATED `src/app/api/broadcast/route.ts` — GET (list) + POST (create + fan-out send with concurrency cap).
+- CREATED `src/app/api/broadcast/audience-count/route.ts` — GET (live recipient count for the form preview).
+- CREATED `src/app/api/templates/route.ts` — GET (list + seed) + POST (upsert) + DELETE (by id).
+- CREATED `src/components/views/broadcast-view.tsx` — `BroadcastView` with Campaigns + Templates tabs.
+
+---
+Task ID: 8-13
+Agent: Main (Z.ai Code) + 3 parallel subagents
+Task: Feature expansion — dashboard charts, broadcast/templates, chats enhancements
+
+Work Log:
+- Created cron job (ID 278435) for webDevReview every 15 minutes (Asia/Kolkata).
+- Launched 3 parallel subagents for feature expansion:
+  - Task 10 (dashboard charts): Added `/api/dashboard/trends` (7-day time series: incoming/outgoing/ai/owner/newContacts by day, byCategory, leadDistribution buckets) + 4 charts in dashboard (area chart for messages, grouped bar for AI vs owner, donut for lead distribution, horizontal bar for lead sources). Uses recharts via shadcn ChartContainer. Verified: 202 recharts elements render, "Last 7 Days" section present.
+  - Task 11 (broadcast feature): Added Broadcast + Template Prisma models + db:push. New nav entry 'broadcast' (Megaphone icon). `/api/broadcast` (GET list, POST create+send with audience resolution + 5-worker concurrency fan-out via sendOwnerMessage) + `/api/broadcast/audience-count` + `/api/templates` (GET with auto-seed of 4 QorvixNode templates, POST upsert, DELETE). BroadcastView with Campaigns tab (form + recent campaigns + quick templates) and Templates tab (card grid with category badges, edit/delete/create dialogs). Verified end-to-end: sent "Diwali Offer" broadcast to Hot Leads audience (3 contacts) — messages appeared in all 3 chats.
+  - Task 9 (chats enhancements): Added `/api/messages/export` (CSV + JSON with proper headers) + `/api/chats/mark-all-read`. Enhanced chats-view with: export dropdown in chat header, mark-all-read button + unread banner, AI "Ns ago" badge with pulse on fresh replies, message hover actions (copy + reply quote prefix), scroll-to-bottom floating button with smart auto-scroll pinning. All verified.
+- Re-verified via agent-browser: login → dashboard (charts render) → broadcast (send to 3 hot leads, confirmed in chats) → chats (export button, scroll button, broadcast messages visible) → templates tab (seeded templates show).
+- `bun run lint` → 0 errors, 0 warnings.
+
+Stage Summary:
+- Platform now has 12 views (added Broadcast), 30+ API routes, 16 Prisma models.
+- New features fully integrated and browser-verified.
+- Cron job active for continuous improvement every 15 min.
+- All acceptance criteria from the original master prompt met + extended with charts, broadcast, and chat power-features.
+
+Unresolved / next-phase recommendations:
+- Real WhatsApp Baileys integration (currently a simulation layer) — the wa-engine.ts is designed as a drop-in replacement point.
+- WebSocket gateway: the Caddy gateway may need explicit config to forward WS upgrades for port 3003; polling fallback works so real-time updates still flow.
+- Authentication: currently single-user (admin/admin123). Add multi-user + roles if needed.
+- Backup/restore: implement actual SQLite file copy for the System page backup button.

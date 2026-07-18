@@ -10,6 +10,7 @@ import {
   ScrollText,
   Activity,
   FlaskConical,
+  Megaphone,
   type LucideIcon,
 } from 'lucide-react'
 import type { ViewKey } from '@/lib/types'
@@ -28,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'chats', label: 'Chats', icon: MessagesSquare, description: 'Live conversations', group: 'main' },
   { key: 'leads', label: 'Leads', icon: Flame, description: 'Lead pipeline', group: 'main' },
   { key: 'simulator', label: 'Simulator', icon: FlaskConical, description: 'Test AI replies', group: 'main' },
+  { key: 'broadcast', label: 'Broadcast', icon: Megaphone, description: 'Mass messages & templates', group: 'main' },
   { key: 'ai-settings', label: 'AI Settings', icon: Bot, description: 'Provider & model', group: 'settings' },
   { key: 'company-settings', label: 'Company', icon: Building2, description: 'Company profile', group: 'settings' },
   { key: 'owner-settings', label: 'Owner', icon: UserCog, description: 'Owner & takeover', group: 'settings' },

@@ -40,6 +40,12 @@ import {
   Inbox,
   X,
   Sparkles,
+  Download,
+  FileText,
+  Braces,
+  Copy,
+  CornerUpLeft,
+  ArrowDown,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -50,6 +56,7 @@ import {
   timeAgo,
   formatTime,
   formatDateTime,
+  downloadFile,
 } from '@/lib/format'
 import { useRealtime } from '@/hooks/use-realtime'
 import { LeadBadge } from '@/components/status'
@@ -88,6 +95,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 // ------------------------------------------------------------
 // Types
@@ -176,6 +189,19 @@ function formatDayHeader(day: string): string {
 
 function memoryLabel(key: string): string {
   return MEMORY_KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/** Compact "Ns ago" / "just now" label for the AI replied badge. */
+function aiRepliedAgoLabel(timestamp: string): string {
+  const d = new Date(timestamp)
+  const diff = Date.now() - d.getTime()
+  if (diff < 5000) return 'just now'
+  return timeAgo(timestamp)
+}
+
+/** True when an AI message is recent enough to show a live pulse on the icon. */
+function isAiMessageRecent(timestamp: string): boolean {
+  return Date.now() - new Date(timestamp).getTime() < 8000
 }
 
 function categoryLabel(svc: string): string {
@@ -273,10 +299,29 @@ function SourceBadge({ source }: { source: ChatMessage['source'] }) {
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onReply,
+}: {
+  message: ChatMessage
+  onReply?: (text: string) => void
+}) {
   const isOutgoing = message.direction === 'outgoing'
+  const isAi = message.source === 'ai'
+  const [copied, setCopied] = React.useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      /* clipboard may be unavailable in insecure contexts — ignore */
+    }
+  }
+
   return (
-    <div className={cn('flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
+    <div className={cn('group relative flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
           'shadow-sm max-w-[78%] sm:max-w-[68%] rounded-2xl px-3 py-2 text-sm break-words',
@@ -301,6 +346,50 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <span>{formatTime(message.timestamp)}</span>
           {isOutgoing && <DeliveryIcon status={message.status} />}
         </div>
+        {/* AI "replied Ns ago" subtle sublabel */}
+        {isAi && (
+          <div className="mt-0.5 flex items-center justify-end">
+            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400/70">
+              <Bot
+                className={cn(
+                  'h-2.5 w-2.5',
+                  isAiMessageRecent(message.timestamp) && 'animate-pulse',
+                )}
+              />
+              AI · {aiRepliedAgoLabel(message.timestamp)}
+            </span>
+          </div>
+        )}
+      </div>
+      {/* Hover actions: copy + reply (incoming only) */}
+      <div
+        className={cn(
+          'pointer-events-none absolute top-0 flex items-center gap-0.5 rounded-md border bg-card/95 p-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:pointer-events-auto group-hover:opacity-100',
+          isOutgoing ? 'right-0' : 'left-0',
+        )}
+      >
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label="Copy message text"
+        >
+          {copied ? (
+            <Check className="h-3 w-3 text-emerald-400" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+        </button>
+        {!isOutgoing && (
+          <button
+            type="button"
+            onClick={() => onReply?.(message.text)}
+            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Quote message in reply"
+          >
+            <CornerUpLeft className="h-3 w-3" />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -325,9 +414,12 @@ interface ConversationListProps {
   selectedId: string | null
   search: string
   filter: FilterKey
+  totalUnread: number
+  markingAllRead: boolean
   onSelect: (id: string) => void
   onSearchChange: (v: string) => void
   onFilterChange: (v: FilterKey) => void
+  onMarkAllRead: () => void
 }
 
 function ConversationList({
@@ -336,9 +428,12 @@ function ConversationList({
   selectedId,
   search,
   filter,
+  totalUnread,
+  markingAllRead,
   onSelect,
   onSearchChange,
   onFilterChange,
+  onMarkAllRead,
 }: ConversationListProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -374,11 +469,11 @@ function ConversationList({
             </button>
           )}
         </div>
-        {/* Filter */}
+        {/* Filter + Mark all read */}
         <div className="mt-2 flex items-center gap-1.5">
-          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+          <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
-            <SelectTrigger size="sm" className="h-8 w-full text-xs">
+            <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -389,8 +484,47 @@ function ConversationList({
               ))}
             </SelectContent>
           </Select>
+          {totalUnread > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={onMarkAllRead}
+                  disabled={markingAllRead}
+                  aria-label="Mark all conversations as read"
+                >
+                  {markingAllRead ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CheckCheck className="h-3.5 w-3.5 text-emerald-400" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Mark all read</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
+
+      {/* Unread banner */}
+      {totalUnread > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b bg-emerald-500/5 px-3 py-1.5 text-[11px]">
+          <span className="flex items-center gap-1.5 font-medium text-emerald-300">
+            <Bell className="h-3 w-3" />
+            {totalUnread} unread conversation{totalUnread === 1 ? '' : 's'}
+          </span>
+          <button
+            type="button"
+            onClick={onMarkAllRead}
+            disabled={markingAllRead}
+            className="font-semibold text-emerald-300 transition-colors hover:text-emerald-200 disabled:opacity-50"
+          >
+            {markingAllRead ? 'Marking…' : 'Mark all read'}
+          </button>
+        </div>
+      )}
 
       {/* List */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
@@ -502,15 +636,29 @@ function ChatWindow({
   sending,
 }: ChatWindowProps) {
   const [text, setText] = React.useState('')
+  const [exporting, setExporting] = React.useState(false)
+  const [showScrollButton, setShowScrollButton] = React.useState(false)
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  const pinnedToBottomRef = React.useRef(true)
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll: always jump to bottom when switching contacts; only follow
+  // new messages when the user hasn't scrolled up to read history.
   React.useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-  }, [messages, contact?.contactId])
+    pinnedToBottomRef.current = true
+    setShowScrollButton(false)
+  }, [contact?.contactId])
+
+  React.useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (pinnedToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages])
 
   // Auto-grow the textarea up to ~4 lines
   React.useEffect(() => {
@@ -519,6 +667,70 @@ function ChatWindow({
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
   }, [text])
+
+  const handleScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const atBottom = distanceFromBottom < 80
+    pinnedToBottomRef.current = atBottom
+    setShowScrollButton(!atBottom && messages.length > 0)
+  }
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    pinnedToBottomRef.current = true
+    setShowScrollButton(false)
+  }
+
+  const handleExport = async (format: 'csv' | 'json') => {
+    if (!contact) return
+    setExporting(true)
+    try {
+      const res = await fetch(
+        `/api/messages/export?contactId=${encodeURIComponent(contact.contactId)}&format=${format}`,
+        { credentials: 'same-origin' },
+      )
+      if (!res.ok) {
+        throw new Error(`Export failed (${res.status})`)
+      }
+      const content = await res.text()
+      const safeName =
+        (contact.name || contact.phone)
+          .trim()
+          .replace(/[^a-zA-Z0-9-_]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'conversation'
+      const ext = format === 'csv' ? 'csv' : 'json'
+      const mime =
+        format === 'csv'
+          ? 'text/csv;charset=utf-8'
+          : 'application/json;charset=utf-8'
+      downloadFile(`chat-${safeName}.${ext}`, content, mime)
+      toast.success(`Exported as ${format.toUpperCase()}`)
+    } catch (err) {
+      toast.error('Failed to export conversation', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // Quote-reply: insert `> {line}` for each line of the quoted message
+  // so it reads as a markdown block-quote prefix in the composer.
+  const handleReply = (quotedText: string) => {
+    const prefix = quotedText
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    setText((prev) => {
+      const merged = prev && !prev.endsWith('\n') ? prev + '\n' : prev
+      return `${merged}${prefix}\n`
+    })
+    textareaRef.current?.focus()
+  }
 
   if (!contact) {
     return (
@@ -586,6 +798,40 @@ function ChatWindow({
           </div>
           <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
         </div>
+        {/* Export conversation */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              disabled={exporting || messages.length === 0}
+              aria-label="Export conversation"
+            >
+              {exporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => void handleExport('csv')}
+              className="gap-2 text-xs"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Export as CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => void handleExport('json')}
+              className="gap-2 text-xs"
+            >
+              <Braces className="h-3.5 w-3.5" />
+              Export as JSON
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
           variant="ghost"
           size="icon"
@@ -621,32 +867,49 @@ function ChatWindow({
       )}
 
       {/* Messages area */}
-      <div
-        ref={scrollRef}
-        className="relative min-h-0 flex-1 overflow-y-auto scrollbar-thin bg-background px-3 py-4"
-      >
-        <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
-        <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
-          {loadingMessages && messages.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-              <MessageCircle className="h-6 w-6" />
-              <span className="text-xs">No messages yet. Say hello!</span>
-            </div>
-          ) : (
-            grouped.map((group) => (
-              <div key={group.day} className="flex flex-col gap-2">
-                <DateSeparator day={group.day} />
-                {group.items.map((m) => (
-                  <MessageBubble key={m.id} message={m} />
-                ))}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="relative h-full overflow-y-auto scrollbar-thin bg-background px-3 py-4"
+        >
+          <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+          <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
+            {loadingMessages && messages.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
               </div>
-            ))
-          )}
+            ) : messages.length === 0 ? (
+              <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+                <MessageCircle className="h-6 w-6" />
+                <span className="text-xs">No messages yet. Say hello!</span>
+              </div>
+            ) : (
+              grouped.map((group) => (
+                <div key={group.day} className="flex flex-col gap-2">
+                  <DateSeparator day={group.day} />
+                  {group.items.map((m) => (
+                    <MessageBubble key={m.id} message={m} onReply={handleReply} />
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
         </div>
+        {/* Scroll-to-bottom floating button */}
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className={cn(
+            'absolute bottom-4 right-4 grid h-9 w-9 place-items-center rounded-full border bg-card shadow-lg transition-opacity hover:bg-muted',
+            showScrollButton
+              ? 'opacity-100'
+              : 'pointer-events-none opacity-0',
+          )}
+          aria-label="Scroll to latest message"
+        >
+          <ArrowDown className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Composer */}
@@ -1035,6 +1298,7 @@ export function ChatsView() {
   const [loadingMessages, setLoadingMessages] = React.useState(false)
   const [loadingDetail, setLoadingDetail] = React.useState(false)
   const [sending, setSending] = React.useState(false)
+  const [markingAllRead, setMarkingAllRead] = React.useState(false)
 
   // --- Debounced search (300ms) ---
   React.useEffect(() => {
@@ -1207,6 +1471,11 @@ export function ChatsView() {
     [items, selectedId],
   )
 
+  const totalUnread = React.useMemo(
+    () => items.filter((c) => c.unread > 0).length,
+    [items],
+  )
+
   const handleSelect = (id: string) => {
     setSelectedId(id)
     setMobilePane('chat')
@@ -1343,6 +1612,27 @@ export function ChatsView() {
     }
   }
 
+  const handleMarkAllRead = async () => {
+    setMarkingAllRead(true)
+    try {
+      const res = await apiPost<{ ok: boolean; updated: number }>(
+        '/api/chats/mark-all-read',
+      )
+      // Optimistically clear unread counts on all visible conversations so
+      // the list updates instantly (the next poll will confirm).
+      setItems((prev) => prev.map((c) => (c.unread > 0 ? { ...c, unread: 0 } : c)))
+      toast.success(
+        `Marked ${res.updated} message${res.updated === 1 ? '' : 's'} as read`,
+      )
+    } catch (err) {
+      toast.error('Failed to mark all as read', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
+      setMarkingAllRead(false)
+    }
+  }
+
   // --- Render ---
   return (
     <TooltipProvider delayDuration={300}>
@@ -1360,9 +1650,12 @@ export function ChatsView() {
             selectedId={selectedId}
             search={search}
             filter={filter}
+            totalUnread={totalUnread}
+            markingAllRead={markingAllRead}
             onSelect={handleSelect}
             onSearchChange={setSearch}
             onFilterChange={setFilter}
+            onMarkAllRead={() => void handleMarkAllRead()}
           />
         </aside>
 

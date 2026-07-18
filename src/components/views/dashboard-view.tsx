@@ -4,18 +4,40 @@ import * as React from 'react'
 import {
   Activity,
   ArrowRight,
+  BarChart3,
   Bell,
   Bot,
   Clock,
   Flame,
   MessageCircle,
   MessagesSquare,
+  PieChart as PieChartIcon,
+  Tag,
   TrendingUp,
   Users,
 } from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  Cell,
+  CartesianGrid,
+  Legend,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart'
 import { LeadBadge, StatusDot, WhatsAppStatusBadge } from '@/components/status'
 import { apiGet } from '@/lib/api-client'
 import {
@@ -105,6 +127,322 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
       <span className="opacity-40">{icon}</span>
       <p className="text-xs">{text}</p>
     </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// Last 7 Days — trends section (4 charts)
+// ----------------------------------------------------------------
+interface TrendDay {
+  date: string
+  label: string
+  incoming: number
+  outgoing: number
+  ai: number
+  owner: number
+  newContacts: number
+}
+interface CategoryCount {
+  category: string
+  count: number
+}
+interface LeadBucket {
+  range: string
+  count: number
+}
+interface TrendsData {
+  days: TrendDay[]
+  byCategory: CategoryCount[]
+  leadDistribution: LeadBucket[]
+}
+
+// Chart configs — map each series key to a label + CSS color.
+// ChartContainer injects `--color-<key>` CSS vars for use in strokes/fills.
+const AREA_CONFIG: ChartConfig = {
+  incoming: { label: 'Incoming', color: '#10b981' }, // emerald-500
+  outgoing: { label: 'Outgoing', color: '#14b8a6' }, // teal-500
+}
+const BAR_CONFIG: ChartConfig = {
+  ai: { label: 'AI Replies', color: '#34d399' }, // emerald-400
+  owner: { label: 'Owner Replies', color: '#38bdf8' }, // sky-400
+}
+const LEAD_PIE_CONFIG: ChartConfig = {
+  cold: { label: 'Cold (0-24)', color: '#71717a' }, // zinc-500
+  warm: { label: 'Warm (25-49)', color: '#f59e0b' }, // amber-500
+  hot: { label: 'Hot (50-74)', color: '#f97316' }, // orange-500
+  flame: { label: 'Flame (75-100)', color: '#10b981' }, // emerald-500
+}
+const SOURCES_CONFIG: ChartConfig = {
+  count: { label: 'Contacts', color: '#14b8a6' }, // teal-500
+}
+
+const LEAD_PIE_COLORS = ['#71717a', '#f59e0b', '#f97316', '#10b981']
+const LEAD_PIE_KEYS = ['cold', 'warm', 'hot', 'flame'] as const
+
+function ChartCardShell({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+          {icon}
+        </span>
+        <span className="truncate">{title}</span>
+      </div>
+      <div className="mt-2 flex-1">{children}</div>
+    </Card>
+  )
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="flex h-[220px] w-full items-end justify-around gap-2 px-2">
+      {Array.from({ length: 7 }).map((_, i) => (
+        <Skeleton
+          key={i}
+          className="w-full rounded-md"
+          style={{ height: `${30 + ((i * 13) % 70)}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function MessagesAreaChart({ data }: { data: TrendDay[] }) {
+  return (
+    <ChartContainer config={AREA_CONFIG} className="h-[220px] w-full">
+      <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+        <defs>
+          <linearGradient id="fillIncoming" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="var(--color-incoming)" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="var(--color-incoming)" stopOpacity={0.05} />
+          </linearGradient>
+          <linearGradient id="fillOutgoing" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="var(--color-outgoing)" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="var(--color-outgoing)" stopOpacity={0.05} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+        <XAxis
+          dataKey="label"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+        />
+        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+        <Legend />
+        <Area
+          dataKey="incoming"
+          type="monotone"
+          stroke="var(--color-incoming)"
+          fill="url(#fillIncoming)"
+          strokeWidth={2}
+          dot={false}
+        />
+        <Area
+          dataKey="outgoing"
+          type="monotone"
+          stroke="var(--color-outgoing)"
+          fill="url(#fillOutgoing)"
+          strokeWidth={2}
+          dot={false}
+        />
+      </AreaChart>
+    </ChartContainer>
+  )
+}
+
+function RepliesBarChart({ data }: { data: TrendDay[] }) {
+  return (
+    <ChartContainer config={BAR_CONFIG} className="h-[220px] w-full">
+      <BarChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+        <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+        <Legend />
+        <Bar dataKey="ai" fill="var(--color-ai)" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="owner" fill="var(--color-owner)" radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ChartContainer>
+  )
+}
+
+function LeadDistributionPie({ data }: { data: LeadBucket[] }) {
+  // The API returns buckets in fixed order: 0-24, 25-49, 50-74, 75-100.
+  // Re-map to friendly keys so the legend + tooltip pick up our config.
+  const chartData = data.map((b, i) => ({
+    range: b.range,
+    count: b.count,
+    key: LEAD_PIE_KEYS[i] ?? 'cold',
+  }))
+
+  return (
+    <ChartContainer config={LEAD_PIE_CONFIG} className="h-[220px] w-full">
+      <PieChart>
+        <ChartTooltip content={<ChartTooltipContent nameKey="key" indicator="dot" />} />
+        <Pie
+          data={chartData}
+          dataKey="count"
+          nameKey="key"
+          innerRadius={48}
+          outerRadius={80}
+          paddingAngle={2}
+          stroke="none"
+        >
+          {chartData.map((entry, i) => (
+            <Cell key={entry.range} fill={LEAD_PIE_COLORS[i] ?? LEAD_PIE_COLORS[0]} />
+          ))}
+        </Pie>
+        <Legend />
+      </PieChart>
+    </ChartContainer>
+  )
+}
+
+function LeadSourcesBar({ data }: { data: CategoryCount[] }) {
+  // Horizontal bar — show up to 8 categories so the chart stays legible.
+  const rows = data.slice(0, 8)
+  // Friendly labels: title-case the snake_case category names.
+  const labelled = rows.map((r) => ({
+    ...r,
+    label: r.category
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase()),
+  }))
+
+  if (labelled.length === 0) {
+    return (
+      <div className="flex h-[220px] w-full items-center justify-center text-xs text-muted-foreground">
+        No categories detected yet
+      </div>
+    )
+  }
+
+  return (
+    <ChartContainer config={SOURCES_CONFIG} className="h-[220px] w-full">
+      <BarChart
+        data={labelled}
+        layout="vertical"
+        margin={{ left: 8, right: 16, top: 8, bottom: 0 }}
+      >
+        <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-muted" />
+        <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} />
+        <YAxis
+          type="category"
+          dataKey="label"
+          tickLine={false}
+          axisLine={false}
+          width={92}
+          tick={{ fontSize: 11 }}
+        />
+        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+        <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} />
+      </BarChart>
+    </ChartContainer>
+  )
+}
+
+function TrendsSection() {
+  const [trends, setTrends] = React.useState<TrendsData | null>(null)
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        const data = await apiGet<TrendsData>('/api/dashboard/trends')
+        if (active) {
+          setTrends(data)
+          setLoading(false)
+        }
+      } catch {
+        if (active) setLoading(false)
+      }
+    }
+    void load()
+    const id = setInterval(() => void load(), 30_000)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [])
+
+  return (
+    <section aria-label="Last 7 days trends" className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">Last 7 Days</h2>
+          <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+            7d
+          </span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          Auto-refreshes every 30s
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {loading && !trends ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className={cn(CARD_CLS, 'flex flex-col')}>
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-8 w-8 rounded-lg" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+              <div className="mt-3">
+                <ChartSkeleton />
+              </div>
+            </Card>
+          ))
+        ) : trends ? (
+          <>
+            <ChartCardShell
+              icon={<TrendingUp className="h-4 w-4" />}
+              title="Messages — Incoming vs Outgoing"
+            >
+              <MessagesAreaChart data={trends.days} />
+            </ChartCardShell>
+
+            <ChartCardShell
+              icon={<BarChart3 className="h-4 w-4" />}
+              title="Replies — AI vs Owner"
+            >
+              <RepliesBarChart data={trends.days} />
+            </ChartCardShell>
+
+            <ChartCardShell
+              icon={<Flame className="h-4 w-4" />}
+              title="Lead Score Distribution"
+            >
+              <LeadDistributionPie data={trends.leadDistribution} />
+            </ChartCardShell>
+
+            <ChartCardShell
+              icon={<PieChartIcon className="h-4 w-4" />}
+              title="Lead Sources by Category"
+            >
+              <LeadSourcesBar data={trends.byCategory} />
+            </ChartCardShell>
+          </>
+        ) : (
+          <Card className={cn(CARD_CLS, 'col-span-full')}>
+            <EmptyState
+              icon={<Tag className="h-5 w-5" />}
+              text="Trends unavailable — try again in a moment."
+            />
+          </Card>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -515,6 +853,9 @@ export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
           </>
         ) : null}
       </section>
+
+      {/* Last 7 days — 4 charts (area + bar + pie + horizontal bar) */}
+      <TrendsSection />
 
       {/* Recent activity + recent conversations */}
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">

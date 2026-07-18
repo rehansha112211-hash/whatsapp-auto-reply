@@ -1,0 +1,1431 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// ChatsView — WhatsApp-Web-style 3-pane chat interface
+     5→//
+     6→//  · Left   → conversation list (search + filter, pinned-first sort)
+     7→//  · Center → chat window (bubbles, date separators, composer)
+     8→//  · Right  → customer details panel (lead info, memory, actions)
+     9→//
+    10→// On mobile, the layout collapses to a single pane with a back
+    11→// button to swap between list and chat, and the details panel
+    12→// becomes a Sheet triggered from the chat header.
+    13→//
+    14→// Polling: chats list every 8s, messages every 4s. Realtime:
+    15→// listens for `dashboard:tick` and `simulator:message` events
+    16→// from the war-realtime websocket mini-service for instant refresh.
+    17→// ============================================================
+    18→import * as React from 'react'
+    19→import { toast } from 'sonner'
+    20→import {
+    21→  MessageCircle,
+    22→  Search,
+    23→  Filter,
+    24→  Pin,
+    25→  Send,
+    26→  ArrowLeft,
+    27→  Info,
+    28→  Bot,
+    29→  User,
+    30→  UserCog,
+    31→  Flame,
+    32→  Clock,
+    33→  Check,
+    34→  CheckCheck,
+    35→  AlertTriangle,
+    36→  MoreVertical,
+    37→  Shield,
+    38→  Bell,
+    39→  Loader2,
+    40→  Inbox,
+    41→  X,
+    42→  Sparkles,
+    43→} from 'lucide-react'
+    44→
+    45→import { cn } from '@/lib/utils'
+    46→import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
+    47→import {
+    48→  colorFromString,
+    49→  initials,
+    50→  timeAgo,
+    51→  formatTime,
+    52→  formatDateTime,
+    53→} from '@/lib/format'
+    54→import { useRealtime } from '@/hooks/use-realtime'
+    55→import { LeadBadge } from '@/components/status'
+    56→import type {
+    57→  ChatListItem,
+    58→  ChatMessage,
+    59→  ContactDetail,
+    60→  ContactStatus,
+    61→  MessageStatus,
+    62→  WhatsAppState,
+    63→} from '@/lib/types'
+    64→
+    65→import { Button } from '@/components/ui/button'
+    66→import { Input } from '@/components/ui/input'
+    67→import { Badge } from '@/components/ui/badge'
+    68→import { Textarea } from '@/components/ui/textarea'
+    69→import { Separator } from '@/components/ui/separator'
+    70→import { Switch } from '@/components/ui/switch'
+    71→import { Progress } from '@/components/ui/progress'
+    72→import {
+    73→  Select,
+    74→  SelectContent,
+    75→  SelectItem,
+    76→  SelectTrigger,
+    77→  SelectValue,
+    78→} from '@/components/ui/select'
+    79→import {
+    80→  Sheet,
+    81→  SheetContent,
+    82→  SheetHeader,
+    83→  SheetTitle,
+    84→} from '@/components/ui/sheet'
+    85→import {
+    86→  Tooltip,
+    87→  TooltipContent,
+    88→  TooltipProvider,
+    89→  TooltipTrigger,
+    90→} from '@/components/ui/tooltip'
+    91→
+    92→// ------------------------------------------------------------
+    93→// Types
+    94→// ------------------------------------------------------------
+    95→type FilterKey = 'all' | 'unread' | 'lead' | 'hot' | 'ai' | 'human' | 'pinned'
+    96→
+    97→interface WaStateResponse {
+    98→  state: WhatsAppState
+    99→  connectedNumber: string
+   100→  connectedName: string
+   101→}
+   102→
+   103→interface SendMessageResponse {
+   104→  ok: boolean
+   105→  message: ChatMessage
+   106→}
+   107→
+   108→interface HumanModeResponse {
+   109→  ok: boolean
+   110→  humanMode: boolean
+   111→}
+   112→
+   113→const FILTER_OPTIONS: { value: FilterKey; label: string }[] = [
+   114→  { value: 'all', label: 'All conversations' },
+   115→  { value: 'unread', label: 'Unread only' },
+   116→  { value: 'lead', label: 'Leads' },
+   117→  { value: 'hot', label: 'Hot leads (≥70)' },
+   118→  { value: 'ai', label: 'AI active' },
+   119→  { value: 'human', label: 'Human mode' },
+   120→  { value: 'pinned', label: 'Pinned' },
+   121→]
+   122→
+   123→const STATUS_BADGE: Record<ContactStatus, string> = {
+   124→  new: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+   125→  active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   126→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   127→  customer: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   128→  blocked: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   129→}
+   130→
+   131→const MEMORY_KEY_LABELS: Record<string, string> = {
+   132→  name: 'Name',
+   133→  business: 'Business',
+   134→  requirements: 'Requirements',
+   135→  budget: 'Budget',
+   136→  language: 'Language',
+   137→  last_intent: 'Last intent',
+   138→  intent: 'Intent',
+   139→  project_status: 'Project status',
+   140→  timeline: 'Timeline',
+   141→  location: 'Location',
+   142→  service: 'Service',
+   143→  contact_method: 'Contact method',
+   144→}
+   145→
+   146→// ------------------------------------------------------------
+   147→// Helpers
+   148→// ------------------------------------------------------------
+   149→
+   150→/** Group messages into buckets keyed by YYYY-MM-DD so we can render date separators. */
+   151→function groupByDay(messages: ChatMessage[]): { day: string; items: ChatMessage[] }[] {
+   152→  const out: { day: string; items: ChatMessage[] }[] = []
+   153→  for (const m of messages) {
+   154→    const d = new Date(m.timestamp)
+   155→    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+   156→    const last = out[out.length - 1]
+   157→    if (last && last.day === key) last.items.push(m)
+   158→    else out.push({ day: key, items: [m] })
+   159→  }
+   160→  return out
+   161→}
+   162→
+   163→function formatDayHeader(day: string): string {
+   164→  const d = new Date(day + 'T00:00:00')
+   165→  const today = new Date()
+   166→  const yesterday = new Date()
+   167→  yesterday.setDate(today.getDate() - 1)
+   168→  const sameDay = (a: Date, b: Date) =>
+   169→    a.getFullYear() === b.getFullYear() &&
+   170→    a.getMonth() === b.getMonth() &&
+   171→    a.getDate() === b.getDate()
+   172→  if (sameDay(d, today)) return 'Today'
+   173→  if (sameDay(d, yesterday)) return 'Yesterday'
+   174→  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+   175→}
+   176→
+   177→function memoryLabel(key: string): string {
+   178→  return MEMORY_KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+   179→}
+   180→
+   181→function categoryLabel(svc: string): string {
+   182→  const map: Record<string, string> = {
+   183→    website: 'Website Development',
+   184→    app: 'Android App Development',
+   185→    crm: 'CRM Development',
+   186→    software: 'Business Software',
+   187→    ai_automation: 'AI Automation',
+   188→    maintenance: 'Maintenance',
+   189→    general: 'General Inquiry',
+   190→    support: 'Support Request',
+   191→    high_priority: 'High Priority',
+   192→  }
+   193→  return map[svc] ?? (svc ? svc : '—')
+   194→}
+   195→
+   196→// ------------------------------------------------------------
+   197→// Small presentational components
+   198→// ------------------------------------------------------------
+   199→
+   200→function Avatar({ name, phone, size = 'md' }: { name: string; phone: string; size?: 'sm' | 'md' | 'lg' }) {
+   201→  const cls = colorFromString(name || phone)
+   202→  const dim =
+   203→    size === 'sm' ? 'h-8 w-8 text-[10px]' : size === 'lg' ? 'h-14 w-14 text-base' : 'h-10 w-10 text-xs'
+   204→  return (
+   205→    <div
+   206→      className={cn(
+   207→        'grid shrink-0 place-items-center rounded-full font-bold',
+   208→        dim,
+   209→        cls,
+   210→      )}
+   211→      aria-hidden
+   212→    >
+   213→      {initials(name || phone)}
+   214→    </div>
+   215→  )
+   216→}
+   217→
+   218→function DeliveryIcon({ status }: { status: MessageStatus }) {
+   219→  if (status === 'failed') {
+   220→    return (
+   221→      <Tooltip>
+   222→        <TooltipTrigger asChild>
+   223→          <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+   224→        </TooltipTrigger>
+   225→        <TooltipContent side="top">Failed to send</TooltipContent>
+   226→      </Tooltip>
+   227→    )
+   228→  }
+   229→  if (status === 'pending') {
+   230→    return <Clock className="h-3.5 w-3.5 opacity-70" />
+   231→  }
+   232→  if (status === 'sent') {
+   233→    return <Check className="h-3.5 w-3.5 opacity-70" />
+   234→  }
+   235→  if (status === 'delivered') {
+   236→    return <CheckCheck className="h-3.5 w-3.5 opacity-70" />
+   237→  }
+   238→  // read
+   239→  return <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+   240→}
+   241→
+   242→function SourceBadge({ source }: { source: ChatMessage['source'] }) {
+   243→  if (source === 'customer') return null
+   244→  const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+   245→    ai: {
+   246→      label: 'AI',
+   247→      cls: 'bg-emerald-500/20 text-emerald-200',
+   248→      icon: <Bot className="h-3 w-3" />,
+   249→    },
+   250→    owner: {
+   251→      label: 'You',
+   252→      cls: 'bg-primary/30 text-primary-foreground',
+   253→      icon: <User className="h-3 w-3" />,
+   254→    },
+   255→    system: {
+   256→      label: 'System',
+   257→      cls: 'bg-zinc-500/20 text-zinc-300',
+   258→      icon: <Shield className="h-3 w-3" />,
+   259→    },
+   260→  }
+   261→  const cfg = map[source]
+   262→  if (!cfg) return null
+   263→  return (
+   264→    <span
+   265→      className={cn(
+   266→        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider',
+   267→        cfg.cls,
+   268→      )}
+   269→    >
+   270→      {cfg.icon}
+   271→      {cfg.label}
+   272→    </span>
+   273→  )
+   274→}
+   275→
+   276→function MessageBubble({ message }: { message: ChatMessage }) {
+   277→  const isOutgoing = message.direction === 'outgoing'
+   278→  return (
+   279→    <div className={cn('flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
+   280→      <div
+   281→        className={cn(
+   282→          'shadow-sm max-w-[78%] sm:max-w-[68%] rounded-2xl px-3 py-2 text-sm break-words',
+   283→          isOutgoing
+   284→            ? 'chat-bubble-out rounded-tr-sm'
+   285→            : 'chat-bubble-in rounded-tl-sm',
+   286→        )}
+   287→      >
+   288→        {/* Source badge row (for AI / Owner / System outgoing, none for customer) */}
+   289→        {isOutgoing && message.source !== 'owner' && (
+   290→          <div className="mb-1">
+   291→            <SourceBadge source={message.source} />
+   292→          </div>
+   293→        )}
+   294→        <div className="whitespace-pre-wrap leading-relaxed">{message.text}</div>
+   295→        <div
+   296→          className={cn(
+   297→            'mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums',
+   298→            isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+   299→          )}
+   300→        >
+   301→          <span>{formatTime(message.timestamp)}</span>
+   302→          {isOutgoing && <DeliveryIcon status={message.status} />}
+   303→        </div>
+   304→      </div>
+   305→    </div>
+   306→  )
+   307→}
+   308→
+   309→function DateSeparator({ day }: { day: string }) {
+   310→  return (
+   311→    <div className="flex justify-center py-2">
+   312→      <span className="rounded-full bg-muted/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+   313→        {formatDayHeader(day)}
+   314→      </span>
+   315→    </div>
+   316→  )
+   317→}
+   318→
+   319→// ------------------------------------------------------------
+   320→// ConversationList — left pane
+   321→// ------------------------------------------------------------
+   322→interface ConversationListProps {
+   323→  items: ChatListItem[]
+   324→  loading: boolean
+   325→  selectedId: string | null
+   326→  search: string
+   327→  filter: FilterKey
+   328→  onSelect: (id: string) => void
+   329→  onSearchChange: (v: string) => void
+   330→  onFilterChange: (v: FilterKey) => void
+   331→}
+   332→
+   333→function ConversationList({
+   334→  items,
+   335→  loading,
+   336→  selectedId,
+   337→  search,
+   338→  filter,
+   339→  onSelect,
+   340→  onSearchChange,
+   341→  onFilterChange,
+   342→}: ConversationListProps) {
+   343→  return (
+   344→    <div className="flex h-full min-h-0 flex-col">
+   345→      {/* Header */}
+   346→      <div className="border-b p-3">
+   347→        <div className="flex items-center justify-between">
+   348→          <h2 className="flex items-center gap-2 text-sm font-semibold">
+   349→            <MessageCircle className="h-4 w-4 text-primary" />
+   350→            Chats
+   351→          </h2>
+   352→          <Badge variant="outline" className="text-[10px] tabular-nums">
+   353→            {items.length}
+   354→          </Badge>
+   355→        </div>
+   356→        {/* Search */}
+   357→        <div className="relative mt-2">
+   358→          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   359→          <Input
+   360→            value={search}
+   361→            onChange={(e) => onSearchChange(e.target.value)}
+   362→            placeholder="Search name, phone or message…"
+   363→            className="h-9 pl-8 pr-7 text-sm"
+   364→            aria-label="Search conversations"
+   365→          />
+   366→          {search && (
+   367→            <button
+   368→              type="button"
+   369→              onClick={() => onSearchChange('')}
+   370→              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+   371→              aria-label="Clear search"
+   372→            >
+   373→              <X className="h-3.5 w-3.5" />
+   374→            </button>
+   375→          )}
+   376→        </div>
+   377→        {/* Filter */}
+   378→        <div className="mt-2 flex items-center gap-1.5">
+   379→          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+   380→          <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
+   381→            <SelectTrigger size="sm" className="h-8 w-full text-xs">
+   382→              <SelectValue />
+   383→            </SelectTrigger>
+   384→            <SelectContent>
+   385→              {FILTER_OPTIONS.map((opt) => (
+   386→                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+   387→                  {opt.label}
+   388→                </SelectItem>
+   389→              ))}
+   390→            </SelectContent>
+   391→          </Select>
+   392→        </div>
+   393→      </div>
+   394→
+   395→      {/* List */}
+   396→      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+   397→        {loading && items.length === 0 ? (
+   398→          <div className="flex h-32 items-center justify-center text-muted-foreground">
+   399→            <Loader2 className="h-4 w-4 animate-spin" />
+   400→          </div>
+   401→        ) : items.length === 0 ? (
+   402→          <div className="flex h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+   403→            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-muted/60 text-muted-foreground">
+   404→              <Inbox className="h-6 w-6" />
+   405→            </div>
+   406→            <div>
+   407→              <div className="text-sm font-medium">No conversations yet</div>
+   408→              <div className="mt-0.5 text-[11px] text-muted-foreground">
+   409→                Use the Simulator to test the AI.
+   410→              </div>
+   411→            </div>
+   412→          </div>
+   413→        ) : (
+   414→          <ul className="divide-y divide-border/60">
+   415→            {items.map((c) => {
+   416→              const active = c.contactId === selectedId
+   417→              const previewPrefix =
+   418→                c.lastDirection === 'outgoing'
+   419→                  ? c.lastMessage.startsWith('AI:') || c.lastMessage.startsWith('You:')
+   420→                    ? ''
+   421→                    : 'You: '
+   422→                  : ''
+   423→              return (
+   424→                <li key={c.contactId}>
+   425→                  <button
+   426→                    type="button"
+   427→                    onClick={() => onSelect(c.contactId)}
+   428→                    className={cn(
+   429→                      'group relative flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
+   430→                      active ? 'bg-primary/10' : 'hover:bg-muted/40',
+   431→                    )}
+   432→                  >
+   433→                    {/* active left accent */}
+   434→                    {active && (
+   435→                      <span className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+   436→                    )}
+   437→                    <Avatar name={c.name} phone={c.phone} />
+   438→                    <div className="min-w-0 flex-1">
+   439→                      <div className="flex items-center justify-between gap-2">
+   440→                        <span className="truncate text-sm font-semibold">{c.name}</span>
+   441→                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+   442→                          {timeAgo(c.lastMessageAt)}
+   443→                        </span>
+   444→                      </div>
+   445→                      <div className="flex items-center justify-between gap-2">
+   446→                        <span className="line-clamp-1 text-xs text-muted-foreground">
+   447→                          {previewPrefix}
+   448→                          {c.lastMessage || '—'}
+   449→                        </span>
+   450→                        <div className="flex shrink-0 items-center gap-1">
+   451→                          {c.humanMode && (
+   452→                            <Badge className="border-amber-500/30 bg-amber-500/15 px-1 py-0 text-[9px] font-semibold text-amber-300">
+   453→                              Human
+   454→                            </Badge>
+   455→                          )}
+   456→                          {c.pinned && <Pin className="h-3 w-3 text-muted-foreground" />}
+   457→                          {c.unread > 0 && (
+   458→                            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-white">
+   459→                              {c.unread > 99 ? '99+' : c.unread}
+   460→                            </span>
+   461→                          )}
+   462→                        </div>
+   463→                      </div>
+   464→                      <div className="mt-1 flex items-center gap-1.5">
+   465→                        <span className="text-[10px] text-muted-foreground">{c.phone}</span>
+   466→                        {c.leadScore >= 25 && <LeadBadge score={c.leadScore} className="text-[9px]" />}
+   467→                      </div>
+   468→                    </div>
+   469→                  </button>
+   470→                </li>
+   471→              )
+   472→            })}
+   473→          </ul>
+   474→        )}
+   475→      </div>
+   476→    </div>
+   477→  )
+   478→}
+   479→
+   480→// ------------------------------------------------------------
+   481→// ChatWindow — center pane
+   482→// ------------------------------------------------------------
+   483→interface ChatWindowProps {
+   484→  contact: ChatListItem | null
+   485→  messages: ChatMessage[]
+   486→  loadingMessages: boolean
+   487→  waState: WhatsAppState
+   488→  onBack: () => void
+   489→  onOpenDetails: () => void
+   490→  onSend: (text: string) => Promise<void>
+   491→  sending: boolean
+   492→}
+   493→
+   494→function ChatWindow({
+   495→  contact,
+   496→  messages,
+   497→  loadingMessages,
+   498→  waState,
+   499→  onBack,
+   500→  onOpenDetails,
+   501→  onSend,
+   502→  sending,
+   503→}: ChatWindowProps) {
+   504→  const [text, setText] = React.useState('')
+   505→  const scrollRef = React.useRef<HTMLDivElement>(null)
+   506→  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+   507→
+   508→  // Auto-scroll to bottom when messages change
+   509→  React.useEffect(() => {
+   510→    const el = scrollRef.current
+   511→    if (!el) return
+   512→    el.scrollTop = el.scrollHeight
+   513→  }, [messages, contact?.contactId])
+   514→
+   515→  // Auto-grow the textarea up to ~4 lines
+   516→  React.useEffect(() => {
+   517→    const ta = textareaRef.current
+   518→    if (!ta) return
+   519→    ta.style.height = 'auto'
+   520→    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
+   521→  }, [text])
+   522→
+   523→  if (!contact) {
+   524→    return (
+   525→      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+   526→        <div className="grid h-16 w-16 place-items-center rounded-3xl bg-muted/60 text-muted-foreground">
+   527→          <MessageCircle className="h-8 w-8" />
+   528→        </div>
+   529→        <div>
+   530→          <div className="text-base font-semibold">Select a conversation</div>
+   531→          <div className="mt-1 text-sm text-muted-foreground">
+   532→            Pick a chat from the list to view messages and details.
+   533→          </div>
+   534→        </div>
+   535→      </div>
+   536→    )
+   537→  }
+   538→
+   539→  const grouped = groupByDay(messages)
+   540→  const aiActive = !contact.humanMode
+   541→  const waConnected = waState === 'connected'
+   542→
+   543→  const handleSubmit = async () => {
+   544→    const trimmed = text.trim()
+   545→    if (!trimmed || sending) return
+   546→    setText('')
+   547→    await onSend(trimmed)
+   548→  }
+   549→
+   550→  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+   551→    if (e.key === 'Enter' && !e.shiftKey) {
+   552→      e.preventDefault()
+   553→      void handleSubmit()
+   554→    }
+   555→  }
+   556→
+   557→  const statusLine = contact.humanMode
+   558→    ? 'Human mode active — AI paused'
+   559→    : waConnected
+   560→      ? 'AI auto-reply is handling this chat'
+   561→      : 'AI auto-reply is handling this chat (simulated)'
+   562→
+   563→  return (
+   564→    <div className="flex h-full min-h-0 flex-col">
+   565→      {/* Header */}
+   566→      <header className="flex items-center gap-2 border-b p-3">
+   567→        <Button
+   568→          variant="ghost"
+   569→          size="icon"
+   570→          className="lg:hidden"
+   571→          onClick={onBack}
+   572→          aria-label="Back to list"
+   573→        >
+   574→          <ArrowLeft className="h-5 w-5" />
+   575→        </Button>
+   576→        <Avatar name={contact.name} phone={contact.phone} size="sm" />
+   577→        <div className="min-w-0 flex-1">
+   578→          <div className="flex items-center gap-2">
+   579→            <span className="truncate text-sm font-semibold">{contact.name}</span>
+   580→            {contact.leadScore >= 25 && <LeadBadge score={contact.leadScore} />}
+   581→            {contact.humanMode && (
+   582→              <Badge className="border-amber-500/30 bg-amber-500/15 px-1.5 py-0 text-[10px] font-semibold text-amber-300">
+   583→                Human
+   584→              </Badge>
+   585→            )}
+   586→          </div>
+   587→          <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
+   588→        </div>
+   589→        <Button
+   590→          variant="ghost"
+   591→          size="icon"
+   592→          className="lg:hidden"
+   593→          onClick={onOpenDetails}
+   594→          aria-label="View details"
+   595→        >
+   596→          <Info className="h-5 w-5" />
+   597→        </Button>
+   598→      </header>
+   599→
+   600→      {/* Status banner */}
+   601→      <div
+   602→        className={cn(
+   603→          'flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium',
+   604→          contact.humanMode
+   605→            ? 'bg-amber-500/15 text-amber-300'
+   606→            : 'bg-emerald-500/10 text-emerald-300',
+   607→        )}
+   608→      >
+   609→        {contact.humanMode ? <UserCog className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+   610→        <span>
+   611→          {contact.humanMode
+   612→            ? 'Human mode — AI paused. You reply manually.'
+   613→            : 'AI auto-reply is ON. Take over to reply manually.'}
+   614→        </span>
+   615→      </div>
+   616→      {!waConnected && (
+   617→        <div className="flex items-center gap-2 bg-zinc-500/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300">
+   618→          <AlertTriangle className="h-3.5 w-3.5" />
+   619→          <span>WhatsApp not connected — messages are simulated.</span>
+   620→        </div>
+   621→      )}
+   622→
+   623→      {/* Messages area */}
+   624→      <div
+   625→        ref={scrollRef}
+   626→        className="relative min-h-0 flex-1 overflow-y-auto scrollbar-thin bg-background px-3 py-4"
+   627→      >
+   628→        <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+   629→        <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
+   630→          {loadingMessages && messages.length === 0 ? (
+   631→            <div className="flex h-32 items-center justify-center text-muted-foreground">
+   632→              <Loader2 className="h-4 w-4 animate-spin" />
+   633→            </div>
+   634→          ) : messages.length === 0 ? (
+   635→            <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+   636→              <MessageCircle className="h-6 w-6" />
+   637→              <span className="text-xs">No messages yet. Say hello!</span>
+   638→            </div>
+   639→          ) : (
+   640→            grouped.map((group) => (
+   641→              <div key={group.day} className="flex flex-col gap-2">
+   642→                <DateSeparator day={group.day} />
+   643→                {group.items.map((m) => (
+   644→                  <MessageBubble key={m.id} message={m} />
+   645→                ))}
+   646→              </div>
+   647→            ))
+   648→          )}
+   649→        </div>
+   650→      </div>
+   651→
+   652→      {/* Composer */}
+   653→      <div className="border-t bg-background/95 p-3 backdrop-blur">
+   654→        {aiActive && (
+   655→          <div className="mb-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+   656→            <Sparkles className="h-3 w-3 text-primary" />
+   657→            <span>AI is handling this conversation. Take over to reply manually.</span>
+   658→          </div>
+   659→        )}
+   660→        <div className="flex items-end gap-2">
+   661→          <Textarea
+   662→            ref={textareaRef}
+   663→            value={text}
+   664→            onChange={(e) => setText(e.target.value)}
+   665→            onKeyDown={handleKeyDown}
+   666→            placeholder={aiActive ? 'Type to take over & send…' : 'Type a message…'}
+   667→            className="min-h-10 max-h-30 resize-none text-sm"
+   668→            rows={1}
+   669→            aria-label="Message composer"
+   670→          />
+   671→          <Button
+   672→            onClick={handleSubmit}
+   673→            disabled={!text.trim() || sending}
+   674→            className={cn(
+   675→              'h-10 shrink-0 gap-1.5 px-3',
+   676→              aiActive
+   677→                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
+   678→                : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+   679→            )}
+   680→            aria-label={aiActive ? 'Take over and send' : 'Send message'}
+   681→          >
+   682→            {sending ? (
+   683→              <Loader2 className="h-4 w-4 animate-spin" />
+   684→            ) : (
+   685→              <Send className="h-4 w-4" />
+   686→            )}
+   687→            <span className="hidden text-xs font-semibold sm:inline">
+   688→              {aiActive ? 'Take over & send' : 'Send'}
+   689→            </span>
+   690→          </Button>
+   691→        </div>
+   692→        <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+   693→          <span>Enter to send · Shift+Enter for newline</span>
+   694→          <span className="tabular-nums">{text.length}/4000</span>
+   695→        </div>
+   696→      </div>
+   697→    </div>
+   698→  )
+   699→}
+   700→
+   701→// ------------------------------------------------------------
+   702→// DetailsPanel — right pane (also rendered inside the mobile Sheet)
+   703→// ------------------------------------------------------------
+   704→interface DetailsPanelProps {
+   705→  detail: ContactDetail | null
+   706→  loading: boolean
+   707→  waConnected: boolean
+   708→  pinned: boolean
+   709→  onToggleHumanMode: (enabled: boolean) => Promise<void>
+   710→  onPin: (pinned: boolean) => Promise<void>
+   711→  onStatusChange: (status: ContactStatus) => Promise<void>
+   712→  onNotesSave: (notes: string) => Promise<void>
+   713→}
+   714→
+   715→function DetailsPanel({
+   716→  detail,
+   717→  loading,
+   718→  pinned,
+   719→  onToggleHumanMode,
+   720→  onPin,
+   721→  onStatusChange,
+   722→  onNotesSave,
+   723→}: DetailsPanelProps) {
+   724→  const [notesDraft, setNotesDraft] = React.useState('')
+   725→  const [savingNotes, setSavingNotes] = React.useState(false)
+   726→  const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+   727→
+   728→  // Keep a local draft synced with server-loaded notes
+   729→  React.useEffect(() => {
+   730→    setNotesDraft(detail?.notes ?? '')
+   731→  }, [detail?.id, detail?.notes])
+   732→
+   733→  if (loading && !detail) {
+   734→    return (
+   735→      <div className="flex h-full items-center justify-center text-muted-foreground">
+   736→        <Loader2 className="h-5 w-5 animate-spin" />
+   737→      </div>
+   738→    )
+   739→  }
+   740→  if (!detail) {
+   741→    return (
+   742→      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
+   743→        <User className="h-8 w-8" />
+   744→        <span className="text-xs">Select a conversation to see customer details.</span>
+   745→      </div>
+   746→    )
+   747→  }
+   748→
+   749→  const scoreColor =
+   750→    detail.leadScore >= 70
+   751→      ? 'bg-emerald-500'
+   752→      : detail.leadScore >= 50
+   753→        ? 'bg-amber-500'
+   754→        : detail.leadScore >= 25
+   755→          ? 'bg-orange-500'
+   756→          : 'bg-muted-foreground/40'
+   757→
+   758→  const run = async (key: string, fn: () => Promise<void>) => {
+   759→    setActionLoading(key)
+   760→    try {
+   761→      await fn()
+   762→    } finally {
+   763→      setActionLoading(null)
+   764→    }
+   765→  }
+   766→
+   767→  return (
+   768→    <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
+   769→      {/* Header */}
+   770→      <div className="border-b p-4">
+   771→        <div className="flex items-center gap-3">
+   772→          <Avatar name={detail.name} phone={detail.phone} size="lg" />
+   773→          <div className="min-w-0 flex-1">
+   774→            <div className="truncate text-sm font-semibold">{detail.name}</div>
+   775→            <div className="truncate text-xs text-muted-foreground">{detail.phone}</div>
+   776→            <Badge
+   777→              variant="outline"
+   778→              className={cn(
+   779→                'mt-1 px-1.5 py-0 text-[10px] font-medium capitalize',
+   780→                STATUS_BADGE[detail.status],
+   781→              )}
+   782→            >
+   783→              {detail.status}
+   784→            </Badge>
+   785→          </div>
+   786→        </div>
+   787→        {detail.summary && (
+   788→          <p className="mt-3 rounded-lg bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+   789→            {detail.summary}
+   790→          </p>
+   791→        )}
+   792→      </div>
+   793→
+   794→      {/* Status section */}
+   795→      <Section icon={<UserCog className="h-3.5 w-3.5" />} title="Status">
+   796→        <div className="flex items-center justify-between rounded-md border bg-background/40 px-3 py-2">
+   797→          <div className="flex flex-col">
+   798→            <span className="text-xs font-medium">
+   799→              {detail.humanMode ? 'Human mode' : 'AI auto-reply'}
+   800→            </span>
+   801→            <span className="text-[10px] text-muted-foreground">
+   802→              {detail.humanMode ? 'AI paused · you reply' : 'AI handling replies'}
+   803→            </span>
+   804→          </div>
+   805→          <Switch
+   806→            checked={detail.humanMode}
+   807→            onCheckedChange={(v) => void run('human', () => onToggleHumanMode(v))}
+   808→            disabled={actionLoading === 'human'}
+   809→            aria-label="Toggle human mode"
+   810→          />
+   811→        </div>
+   812→        <Button
+   813→          variant={detail.humanMode ? 'default' : 'outline'}
+   814→          size="sm"
+   815→          className="mt-2 w-full gap-1.5"
+   816→          disabled={actionLoading === 'human'}
+   817→          onClick={() =>
+   818→            void run('human', () => onToggleHumanMode(!detail.humanMode))
+   819→          }
+   820→        >
+   821→          {actionLoading === 'human' ? (
+   822→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   823→          ) : detail.humanMode ? (
+   824→            <Bot className="h-3.5 w-3.5" />
+   825→          ) : (
+   826→            <UserCog className="h-3.5 w-3.5" />
+   827→          )}
+   828→          {detail.humanMode ? 'Resume AI' : 'Take over chat'}
+   829→        </Button>
+   830→      </Section>
+   831→
+   832→      {/* Lead info */}
+   833→      <Section icon={<Flame className="h-3.5 w-3.5" />} title="Lead info">
+   834→        <div className="flex items-center justify-between">
+   835→          <span className="text-xs text-muted-foreground">Lead score</span>
+   836→          <LeadBadge score={detail.leadScore} />
+   837→        </div>
+   838→        <Progress
+   839→          value={detail.leadScore}
+   840→          className={cn('mt-1 h-1.5', scoreColor)}
+   841→        />
+   842→        <div className="mt-2 flex items-center justify-between text-xs">
+   843→          <span className="text-muted-foreground">Detected service</span>
+   844→          <span className="text-right font-medium">{categoryLabel(detail.detectedService)}</span>
+   845→        </div>
+   846→        <div className="mt-1 flex items-center justify-between text-xs">
+   847→          <span className="text-muted-foreground">Language</span>
+   848→          <span className="font-medium">{detail.language || '—'}</span>
+   849→        </div>
+   850→      </Section>
+   851→
+   852→      {/* Customer info */}
+   853→      <Section icon={<User className="h-3.5 w-3.5" />} title="Customer info">
+   854→        <InfoRow label="First seen" value={formatDateTime(detail.firstSeen)} />
+   855→        <InfoRow label="Last active" value={timeAgo(detail.lastSeen)} />
+   856→        <InfoRow
+   857→          label="Last message"
+   858→          value={detail.lastMessageAt ? timeAgo(detail.lastMessageAt) : '—'}
+   859→        />
+   860→        <InfoRow label="Status" value={detail.status} />
+   861→        <InfoRow label="Country code" value={detail.countryCode || '—'} />
+   862→      </Section>
+   863→
+   864→      {/* AI Memory */}
+   865→      <Section icon={<Bot className="h-3.5 w-3.5" />} title="AI memory">
+   866→        {detail.memories.length === 0 ? (
+   867→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+   868→            No memory extracted yet. Send a message via the simulator to populate.
+   869→          </div>
+   870→        ) : (
+   871→          <dl className="overflow-hidden rounded-md border">
+   872→            {detail.memories.map((m, idx) => (
+   873→              <div
+   874→                key={m.key}
+   875→                className={cn(
+   876→                  'flex items-start gap-2 px-2.5 py-1.5',
+   877→                  idx % 2 === 0 ? 'bg-background/40' : 'bg-transparent',
+   878→                )}
+   879→              >
+   880→                <dt className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+   881→                  {memoryLabel(m.key)}
+   882→                </dt>
+   883→                <dd className="flex-1 break-words text-xs">{m.value || '—'}</dd>
+   884→              </div>
+   885→            ))}
+   886→          </dl>
+   887→        )}
+   888→      </Section>
+   889→
+   890→      {/* Notes */}
+   891→      <Section icon={<MoreVertical className="h-3.5 w-3.5" />} title="Notes">
+   892→        <Textarea
+   893→          value={notesDraft}
+   894→          onChange={(e) => setNotesDraft(e.target.value)}
+   895→          placeholder="Add private notes about this customer…"
+   896→          className="min-h-16 text-xs"
+   897→        />
+   898→        <Button
+   899→          size="sm"
+   900→          variant="outline"
+   901→          className="mt-2 w-full gap-1.5"
+   902→          disabled={savingNotes || notesDraft === (detail.notes ?? '')}
+   903→          onClick={async () => {
+   904→            setSavingNotes(true)
+   905→            try {
+   906→              await onNotesSave(notesDraft)
+   907→            } finally {
+   908→              setSavingNotes(false)
+   909→            }
+   910→          }}
+   911→        >
+   912→          {savingNotes ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+   913→          Save notes
+   914→        </Button>
+   915→      </Section>
+   916→
+   917→      {/* Actions */}
+   918→      <Section icon={<Shield className="h-3.5 w-3.5" />} title="Actions">
+   919→        <Button
+   920→          variant="outline"
+   921→          size="sm"
+   922→          className="w-full gap-1.5"
+   923→          disabled={actionLoading === 'pin'}
+   924→          onClick={() => void run('pin', () => onPin(!pinned))}
+   925→        >
+   926→          {actionLoading === 'pin' ? (
+   927→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   928→          ) : (
+   929→            <Pin className="h-3.5 w-3.5" />
+   930→          )}
+   931→          {pinned ? 'Unpin conversation' : 'Pin conversation'}
+   932→        </Button>
+   933→        {detail.status !== 'customer' && (
+   934→          <Button
+   935→            variant="outline"
+   936→            size="sm"
+   937→            className="mt-2 w-full gap-1.5"
+   938→            disabled={actionLoading === 'customer'}
+   939→            onClick={() => void run('customer', () => onStatusChange('customer'))}
+   940→          >
+   941→            {actionLoading === 'customer' ? (
+   942→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   943→            ) : (
+   944→              <Check className="h-3.5 w-3.5" />
+   945→            )}
+   946→            Mark as customer
+   947→          </Button>
+   948→        )}
+   949→        {detail.status !== 'blocked' ? (
+   950→          <Button
+   951→            variant="destructive"
+   952→            size="sm"
+   953→            className="mt-2 w-full gap-1.5"
+   954→            disabled={actionLoading === 'block'}
+   955→            onClick={() => void run('block', () => onStatusChange('blocked'))}
+   956→          >
+   957→            {actionLoading === 'block' ? (
+   958→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   959→            ) : (
+   960→              <AlertTriangle className="h-3.5 w-3.5" />
+   961→            )}
+   962→            Block contact
+   963→          </Button>
+   964→        ) : (
+   965→          <Button
+   966→            variant="outline"
+   967→            size="sm"
+   968→            className="mt-2 w-full gap-1.5"
+   969→            disabled={actionLoading === 'unblock'}
+   970→            onClick={() => void run('unblock', () => onStatusChange('active'))}
+   971→          >
+   972→            {actionLoading === 'unblock' ? (
+   973→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   974→            ) : (
+   975→              <Shield className="h-3.5 w-3.5" />
+   976→            )}
+   977→            Unblock contact
+   978→          </Button>
+   979→        )}
+   980→      </Section>
+   981→      <div className="mt-auto p-3 text-center text-[10px] text-muted-foreground">
+   982→        Contact ID: <span className="font-mono">{detail.id.slice(-8)}</span>
+   983→      </div>
+   984→    </div>
+   985→  )
+   986→}
+   987→
+   988→function Section({
+   989→  icon,
+   990→  title,
+   991→  children,
+   992→}: {
+   993→  icon: React.ReactNode
+   994→  title: string
+   995→  children: React.ReactNode
+   996→}) {
+   997→  return (
+   998→    <div className="border-b p-4">
+   999→      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1000→        {icon}
+  1001→        <span>{title}</span>
+  1002→      </div>
+  1003→      <div className="flex flex-col gap-1.5">{children}</div>
+  1004→    </div>
+  1005→  )
+  1006→}
+  1007→
+  1008→function InfoRow({ label, value }: { label: string; value: string }) {
+  1009→  return (
+  1010→    <div className="flex items-center justify-between text-xs">
+  1011→      <span className="text-muted-foreground">{label}</span>
+  1012→      <span className="font-medium capitalize">{value}</span>
+  1013→    </div>
+  1014→  )
+  1015→}
+  1016→
+  1017→// ------------------------------------------------------------
+  1018→// Main ChatsView
+  1019→// ------------------------------------------------------------
+  1020→export function ChatsView() {
+  1021→  // --- Data state ---
+  1022→  const [items, setItems] = React.useState<ChatListItem[]>([])
+  1023→  const [messages, setMessages] = React.useState<ChatMessage[]>([])
+  1024→  const [detail, setDetail] = React.useState<ContactDetail | null>(null)
+  1025→  const [waState, setWaState] = React.useState<WhatsAppState>('disconnected')
+  1026→
+  1027→  // --- UI state ---
+  1028→  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  1029→  const [mobilePane, setMobilePane] = React.useState<'list' | 'chat'>('list')
+  1030→  const [detailsSheetOpen, setDetailsSheetOpen] = React.useState(false)
+  1031→  const [search, setSearch] = React.useState('')
+  1032→  const [debouncedSearch, setDebouncedSearch] = React.useState('')
+  1033→  const [filter, setFilter] = React.useState<FilterKey>('all')
+  1034→  const [loadingChats, setLoadingChats] = React.useState(true)
+  1035→  const [loadingMessages, setLoadingMessages] = React.useState(false)
+  1036→  const [loadingDetail, setLoadingDetail] = React.useState(false)
+  1037→  const [sending, setSending] = React.useState(false)
+  1038→
+  1039→  // --- Debounced search (300ms) ---
+  1040→  React.useEffect(() => {
+  1041→    const t = setTimeout(() => setDebouncedSearch(search), 300)
+  1042→    return () => clearTimeout(t)
+  1043→  }, [search])
+  1044→
+  1045→  // --- Build query params for chats list ---
+  1046→  const chatsQuery = React.useMemo(() => {
+  1047→    const p = new URLSearchParams()
+  1048→    if (debouncedSearch.trim()) p.set('search', debouncedSearch.trim())
+  1049→    if (filter !== 'all') p.set('filter', filter)
+  1050→    p.set('sort', 'recent')
+  1051→    p.set('limit', '100')
+  1052→    return p.toString()
+  1053→  }, [debouncedSearch, filter])
+  1054→
+  1055→  // --- Fetch chats list ---
+  1056→  const fetchChats = React.useCallback(
+  1057→    async (opts: { silent?: boolean } = {}) => {
+  1058→      if (!opts.silent) setLoadingChats(true)
+  1059→      try {
+  1060→        const data = await apiGet<{ items: ChatListItem[] }>(`/api/chats?${chatsQuery}`)
+  1061→        setItems(data.items ?? [])
+  1062→      } catch {
+  1063→        /* silent — polls will retry */
+  1064→      } finally {
+  1065→        setLoadingChats(false)
+  1066→      }
+  1067→    },
+  1068→    [chatsQuery],
+  1069→  )
+  1070→
+  1071→  // --- Fetch WA state (cheap, polled less frequently) ---
+  1072→  const fetchWaState = React.useCallback(async () => {
+  1073→    try {
+  1074→      const data = await apiGet<WaStateResponse>('/api/whatsapp')
+  1075→      setWaState(data.state)
+  1076→    } catch {
+  1077→      /* non-fatal */
+  1078→    }
+  1079→  }, [])
+  1080→
+  1081→  // --- Fetch messages for the selected contact ---
+  1082→  const fetchMessages = React.useCallback(
+  1083→    async (opts: { silent?: boolean } = {}) => {
+  1084→      if (!selectedId) {
+  1085→        setMessages([])
+  1086→        return
+  1087→      }
+  1088→      if (!opts.silent) setLoadingMessages(true)
+  1089→      try {
+  1090→        const data = await apiGet<{ items: ChatMessage[] }>(
+  1091→          `/api/messages?contactId=${encodeURIComponent(selectedId)}&limit=200`,
+  1092→        )
+  1093→        setMessages(data.items ?? [])
+  1094→      } catch {
+  1095→        /* silent */
+  1096→      } finally {
+  1097→        setLoadingMessages(false)
+  1098→      }
+  1099→    },
+  1100→    [selectedId],
+  1101→  )
+  1102→
+  1103→  // --- Fetch detail for the selected contact ---
+  1104→  const fetchDetail = React.useCallback(
+  1105→    async (opts: { silent?: boolean } = {}) => {
+  1106→      if (!selectedId) {
+  1107→        setDetail(null)
+  1108→        return
+  1109→      }
+  1110→      if (!opts.silent) setLoadingDetail(true)
+  1111→      try {
+  1112→        const data = await apiGet<ContactDetail>(
+  1113→          `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1114→        )
+  1115→        setDetail(data)
+  1116→      } catch {
+  1117→        /* silent */
+  1118→      } finally {
+  1119→        setLoadingDetail(false)
+  1120→      }
+  1121→    },
+  1122→    [selectedId],
+  1123→  )
+  1124→
+  1125→  // --- Initial load + refetch on filter/search change ---
+  1126→  React.useEffect(() => {
+  1127→    void fetchChats()
+  1128→  }, [fetchChats])
+  1129→
+  1130→  // --- Initial WA state fetch ---
+  1131→  React.useEffect(() => {
+  1132→    void fetchWaState()
+  1133→  }, [fetchWaState])
+  1134→
+  1135→  // --- Auto-select first conversation on first load ---
+  1136→  const autoSelected = React.useRef(false)
+  1137→  React.useEffect(() => {
+  1138→    if (autoSelected.current) return
+  1139→    if (items.length > 0 && !selectedId) {
+  1140→      autoSelected.current = true
+  1141→      setSelectedId(items[0].contactId)
+  1142→    }
+  1143→  }, [items, selectedId])
+  1144→
+  1145→  // --- Fetch messages + detail when selection changes ---
+  1146→  React.useEffect(() => {
+  1147→    if (!selectedId) {
+  1148→      setMessages([])
+  1149→      setDetail(null)
+  1150→      return
+  1151→    }
+  1152→    void fetchMessages()
+  1153→    void fetchDetail()
+  1154→    setMobilePane('chat')
+  1155→  }, [selectedId, fetchMessages, fetchDetail])
+  1156→
+  1157→  // --- Polling: chats every 8s, messages every 4s ---
+  1158→  React.useEffect(() => {
+  1159→    const t = setInterval(() => {
+  1160→      void fetchChats({ silent: true })
+  1161→    }, 8000)
+  1162→    return () => clearInterval(t)
+  1163→  }, [fetchChats])
+  1164→
+  1165→  React.useEffect(() => {
+  1166→    if (!selectedId) return
+  1167→    const t = setInterval(() => {
+  1168→      void fetchMessages({ silent: true })
+  1169→    }, 4000)
+  1170→    return () => clearInterval(t)
+  1171→  }, [selectedId, fetchMessages])
+  1172→
+  1173→  // --- WA state poll every 30s (cheap, slow-changing) ---
+  1174→  React.useEffect(() => {
+  1175→    const t = setInterval(() => {
+  1176→      void fetchWaState()
+  1177→    }, 30000)
+  1178→    return () => clearInterval(t)
+  1179→  }, [fetchWaState])
+  1180→
+  1181→  // --- Realtime: refresh on dashboard tick + simulator message ---
+  1182→  const refreshOnTick = React.useCallback(() => {
+  1183→    void fetchChats({ silent: true })
+  1184→    if (selectedId) void fetchMessages({ silent: true })
+  1185→  }, [fetchChats, fetchMessages, selectedId])
+  1186→
+  1187→  const onSimulatorMessage = React.useCallback(
+  1188→    (payload: unknown) => {
+  1189→      const p = (payload ?? {}) as { contactId?: string }
+  1190→      void fetchChats({ silent: true })
+  1191→      if (p.contactId && p.contactId === selectedId) {
+  1192→        void fetchMessages({ silent: true })
+  1193→        void fetchDetail({ silent: true })
+  1194→      }
+  1195→    },
+  1196→    [fetchChats, fetchMessages, fetchDetail, selectedId],
+  1197→  )
+  1198→
+  1199→  useRealtime([
+  1200→    { event: 'dashboard:tick', handler: refreshOnTick },
+  1201→    { event: 'simulator:message', handler: onSimulatorMessage },
+  1202→  ])
+  1203→
+  1204→  // --- Handlers ---
+  1205→  const selectedContact = React.useMemo(
+  1206→    () => items.find((c) => c.contactId === selectedId) ?? null,
+  1207→    [items, selectedId],
+  1208→  )
+  1209→
+  1210→  const handleSelect = (id: string) => {
+  1211→    setSelectedId(id)
+  1212→    setMobilePane('chat')
+  1213→  }
+  1214→
+  1215→  const handleBack = () => setMobilePane('list')
+  1216→
+  1217→  const handleSend = async (text: string) => {
+  1218→    if (!selectedId) return
+  1219→    setSending(true)
+  1220→    try {
+  1221→      // If AI is still active, take over first so the manual send makes sense.
+  1222→      const current = items.find((c) => c.contactId === selectedId)
+  1223→      if (current && !current.humanMode) {
+  1224→        try {
+  1225→          await apiPost<HumanModeResponse>(
+  1226→            `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1227→            { enabled: true },
+  1228→          )
+  1229→          // Optimistically reflect the toggle
+  1230→          setItems((prev) =>
+  1231→            prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: true } : c)),
+  1232→          )
+  1233→          setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: true } : d))
+  1234→          toast.success('Human mode enabled', {
+  1235→            description: 'AI auto-reply is paused for this chat.',
+  1236→          })
+  1237→        } catch (err) {
+  1238→          toast.error('Failed to take over chat', {
+  1239→            description: err instanceof Error ? err.message : undefined,
+  1240→          })
+  1241→          setSending(false)
+  1242→          return
+  1243→        }
+  1244→      }
+  1245→
+  1246→      // Send the manual message
+  1247→      const res = await apiPost<SendMessageResponse>('/api/messages', {
+  1248→        contactId: selectedId,
+  1249→        text,
+  1250→      })
+  1251→      setMessages((prev) => [...prev, res.message])
+  1252→      // Refresh the chats list so the last-message preview updates
+  1253→      void fetchChats({ silent: true })
+  1254→      void fetchDetail({ silent: true })
+  1255→      toast.success('Message sent')
+  1256→    } catch (err) {
+  1257→      toast.error('Failed to send message', {
+  1258→        description: err instanceof Error ? err.message : undefined,
+  1259→      })
+  1260→    } finally {
+  1261→      setSending(false)
+  1262→    }
+  1263→  }
+  1264→
+  1265→  const handleToggleHumanMode = async (enabled: boolean) => {
+  1266→    if (!selectedId) return
+  1267→    try {
+  1268→      await apiPost<HumanModeResponse>(
+  1269→        `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1270→        { enabled },
+  1271→      )
+  1272→      setItems((prev) =>
+  1273→        prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: enabled } : c)),
+  1274→      )
+  1275→      setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: enabled } : d))
+  1276→      toast.success(enabled ? 'Human mode enabled' : 'AI auto-reply resumed')
+  1277→    } catch (err) {
+  1278→      toast.error('Failed to toggle human mode', {
+  1279→        description: err instanceof Error ? err.message : undefined,
+  1280→      })
+  1281→    }
+  1282→  }
+  1283→
+  1284→  const handlePin = async (pinned: boolean) => {
+  1285→    if (!selectedId) return
+  1286→    try {
+  1287→      await apiPatch<ContactDetail>(
+  1288→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1289→        { pinned },
+  1290→      )
+  1291→      // ContactDetail doesn't carry pinned, so update items list locally
+  1292→      // and refetch the chats list to re-sort (pinned float to top).
+  1293→      setItems((prev) =>
+  1294→        prev.map((c) => (c.contactId === selectedId ? { ...c, pinned } : c)),
+  1295→      )
+  1296→      void fetchChats({ silent: true })
+  1297→      toast.success(pinned ? 'Conversation pinned' : 'Conversation unpinned')
+  1298→    } catch (err) {
+  1299→      toast.error('Failed to update pin', {
+  1300→        description: err instanceof Error ? err.message : undefined,
+  1301→      })
+  1302→    }
+  1303→  }
+  1304→
+  1305→  const handleStatusChange = async (status: ContactStatus) => {
+  1306→    if (!selectedId) return
+  1307→    try {
+  1308→      const updated = await apiPatch<ContactDetail>(
+  1309→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1310→        { status },
+  1311→      )
+  1312→      setDetail(updated)
+  1313→      setItems((prev) =>
+  1314→        prev.map((c) => (c.contactId === selectedId ? { ...c, status: updated.status } : c)),
+  1315→      )
+  1316→      if (status === 'blocked') {
+  1317→        toast.warning('Contact blocked')
+  1318→      } else if (status === 'customer') {
+  1319→        toast.success('Marked as customer')
+  1320→      } else {
+  1321→        toast.success(`Status updated: ${status}`)
+  1322→      }
+  1323→    } catch (err) {
+  1324→      toast.error('Failed to update status', {
+  1325→        description: err instanceof Error ? err.message : undefined,
+  1326→      })
+  1327→    }
+  1328→  }
+  1329→
+  1330→  const handleNotesSave = async (notes: string) => {
+  1331→    if (!selectedId) return
+  1332→    try {
+  1333→      const updated = await apiPatch<ContactDetail>(
+  1334→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1335→        { notes },
+  1336→      )
+  1337→      setDetail(updated)
+  1338→      toast.success('Notes saved')
+  1339→    } catch (err) {
+  1340→      toast.error('Failed to save notes', {
+  1341→        description: err instanceof Error ? err.message : undefined,
+  1342→      })
+  1343→    }
+  1344→  }
+  1345→
+  1346→  // --- Render ---
+  1347→  return (
+  1348→    <TooltipProvider delayDuration={300}>
+  1349→      <div className="flex h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-xl border bg-card/30 backdrop-blur lg:grid lg:grid-cols-[320px_1fr_288px]">
+  1350→        {/* LEFT — conversation list */}
+  1351→        <aside
+  1352→          className={cn(
+  1353→            'min-h-0 flex flex-col border-r',
+  1354→            mobilePane === 'chat' && 'hidden lg:flex',
+  1355→          )}
+  1356→        >
+  1357→          <ConversationList
+  1358→            items={items}
+  1359→            loading={loadingChats}
+  1360→            selectedId={selectedId}
+  1361→            search={search}
+  1362→            filter={filter}
+  1363→            onSelect={handleSelect}
+  1364→            onSearchChange={setSearch}
+  1365→            onFilterChange={setFilter}
+  1366→          />
+  1367→        </aside>
+  1368→
+  1369→        {/* CENTER — chat window */}
+  1370→        <section
+  1371→          className={cn(
+  1372→            'min-h-0 flex flex-col',
+  1373→            mobilePane === 'list' && 'hidden lg:flex',
+  1374→          )}
+  1375→        >
+  1376→          <ChatWindow
+  1377→            contact={selectedContact}
+  1378→            messages={messages}
+  1379→            loadingMessages={loadingMessages}
+  1380→            waState={waState}
+  1381→            onBack={handleBack}
+  1382→            onOpenDetails={() => setDetailsSheetOpen(true)}
+  1383→            onSend={handleSend}
+  1384→            sending={sending}
+  1385→          />
+  1386→        </section>
+  1387→
+  1388→        {/* RIGHT — details panel (desktop) */}
+  1389→        <aside className="hidden min-h-0 flex-col border-l lg:flex">
+  1390→          <DetailsPanel
+  1391→            detail={detail}
+  1392→            loading={loadingDetail}
+  1393→            waConnected={waState === 'connected'}
+  1394→            pinned={selectedContact?.pinned ?? false}
+  1395→            onToggleHumanMode={handleToggleHumanMode}
+  1396→            onPin={handlePin}
+  1397→            onStatusChange={handleStatusChange}
+  1398→            onNotesSave={handleNotesSave}
+  1399→          />
+  1400→        </aside>
+  1401→
+  1402→        {/* MOBILE — details sheet */}
+  1403→        <Sheet open={detailsSheetOpen} onOpenChange={setDetailsSheetOpen}>
+  1404→          <SheetContent side="right" className="w-full max-w-sm p-0 sm:max-w-md">
+  1405→            <SheetHeader className="border-b">
+  1406→              <SheetTitle className="flex items-center gap-2 text-sm">
+  1407→                <Info className="h-4 w-4 text-primary" />
+  1408→                Customer details
+  1409→              </SheetTitle>
+  1410→            </SheetHeader>
+  1411→            <div className="min-h-0 flex-1 overflow-hidden">
+  1412→              <DetailsPanel
+  1413→                detail={detail}
+  1414→                loading={loadingDetail}
+  1415→                waConnected={waState === 'connected'}
+  1416→                pinned={selectedContact?.pinned ?? false}
+  1417→                onToggleHumanMode={async (v) => {
+  1418→                  await handleToggleHumanMode(v)
+  1419→                }}
+  1420→                onPin={handlePin}
+  1421→                onStatusChange={handleStatusChange}
+  1422→                onNotesSave={handleNotesSave}
+  1423→              />
+  1424→            </div>
+  1425→          </SheetContent>
+  1426→        </Sheet>
+  1427→      </div>
+  1428→    </TooltipProvider>
+  1429→  )
+  1430→}
+  1431→

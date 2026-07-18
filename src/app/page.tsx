@@ -14,6 +14,7 @@ import { AutoReplySettingsView } from '@/components/views/autoreply-settings-vie
 import { LogsView } from '@/components/views/logs-view'
 import { SystemView } from '@/components/views/system-view'
 import { SimulatorView } from '@/components/views/simulator-view'
+import { BroadcastView } from '@/components/views/broadcast-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
@@ -102,6 +103,7 @@ export default function Home() {
       {active === 'chats' && <ChatsView />}
       {active === 'leads' && <LeadsView onNavigate={setActive} />}
       {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
+      {active === 'broadcast' && <BroadcastView />}
       {active === 'ai-settings' && <AISettingsView />}
       {active === 'company-settings' && <CompanySettingsView />}
       {active === 'owner-settings' && <OwnerSettingsView />}

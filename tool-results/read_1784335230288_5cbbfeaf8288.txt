@@ -1,0 +1,1431 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→// ============================================================
+     4→     4→// ChatsView — WhatsApp-Web-style 3-pane chat interface
+     5→     5→//
+     6→     6→//  · Left   → conversation list (search + filter, pinned-first sort)
+     7→     7→//  · Center → chat window (bubbles, date separators, composer)
+     8→     8→//  · Right  → customer details panel (lead info, memory, actions)
+     9→     9→//
+    10→    10→// On mobile, the layout collapses to a single pane with a back
+    11→    11→// button to swap between list and chat, and the details panel
+    12→    12→// becomes a Sheet triggered from the chat header.
+    13→    13→//
+    14→    14→// Polling: chats list every 8s, messages every 4s. Realtime:
+    15→    15→// listens for `dashboard:tick` and `simulator:message` events
+    16→    16→// from the war-realtime websocket mini-service for instant refresh.
+    17→    17→// ============================================================
+    18→    18→import * as React from 'react'
+    19→    19→import { toast } from 'sonner'
+    20→    20→import {
+    21→    21→  MessageCircle,
+    22→    22→  Search,
+    23→    23→  Filter,
+    24→    24→  Pin,
+    25→    25→  Send,
+    26→    26→  ArrowLeft,
+    27→    27→  Info,
+    28→    28→  Bot,
+    29→    29→  User,
+    30→    30→  UserCog,
+    31→    31→  Flame,
+    32→    32→  Clock,
+    33→    33→  Check,
+    34→    34→  CheckCheck,
+    35→    35→  AlertTriangle,
+    36→    36→  MoreVertical,
+    37→    37→  Shield,
+    38→    38→  Bell,
+    39→    39→  Loader2,
+    40→    40→  Inbox,
+    41→    41→  X,
+    42→    42→  Sparkles,
+    43→    43→} from 'lucide-react'
+    44→    44→
+    45→    45→import { cn } from '@/lib/utils'
+    46→    46→import { apiGet, apiPost, apiPatch } from '@/lib/api-client'
+    47→    47→import {
+    48→    48→  colorFromString,
+    49→    49→  initials,
+    50→    50→  timeAgo,
+    51→    51→  formatTime,
+    52→    52→  formatDateTime,
+    53→    53→} from '@/lib/format'
+    54→    54→import { useRealtime } from '@/hooks/use-realtime'
+    55→    55→import { LeadBadge } from '@/components/status'
+    56→    56→import type {
+    57→    57→  ChatListItem,
+    58→    58→  ChatMessage,
+    59→    59→  ContactDetail,
+    60→    60→  ContactStatus,
+    61→    61→  MessageStatus,
+    62→    62→  WhatsAppState,
+    63→    63→} from '@/lib/types'
+    64→    64→
+    65→    65→import { Button } from '@/components/ui/button'
+    66→    66→import { Input } from '@/components/ui/input'
+    67→    67→import { Badge } from '@/components/ui/badge'
+    68→    68→import { Textarea } from '@/components/ui/textarea'
+    69→    69→import { Separator } from '@/components/ui/separator'
+    70→    70→import { Switch } from '@/components/ui/switch'
+    71→    71→import { Progress } from '@/components/ui/progress'
+    72→    72→import {
+    73→    73→  Select,
+    74→    74→  SelectContent,
+    75→    75→  SelectItem,
+    76→    76→  SelectTrigger,
+    77→    77→  SelectValue,
+    78→    78→} from '@/components/ui/select'
+    79→    79→import {
+    80→    80→  Sheet,
+    81→    81→  SheetContent,
+    82→    82→  SheetHeader,
+    83→    83→  SheetTitle,
+    84→    84→} from '@/components/ui/sheet'
+    85→    85→import {
+    86→    86→  Tooltip,
+    87→    87→  TooltipContent,
+    88→    88→  TooltipProvider,
+    89→    89→  TooltipTrigger,
+    90→    90→} from '@/components/ui/tooltip'
+    91→    91→
+    92→    92→// ------------------------------------------------------------
+    93→    93→// Types
+    94→    94→// ------------------------------------------------------------
+    95→    95→type FilterKey = 'all' | 'unread' | 'lead' | 'hot' | 'ai' | 'human' | 'pinned'
+    96→    96→
+    97→    97→interface WaStateResponse {
+    98→    98→  state: WhatsAppState
+    99→    99→  connectedNumber: string
+   100→   100→  connectedName: string
+   101→   101→}
+   102→   102→
+   103→   103→interface SendMessageResponse {
+   104→   104→  ok: boolean
+   105→   105→  message: ChatMessage
+   106→   106→}
+   107→   107→
+   108→   108→interface HumanModeResponse {
+   109→   109→  ok: boolean
+   110→   110→  humanMode: boolean
+   111→   111→}
+   112→   112→
+   113→   113→const FILTER_OPTIONS: { value: FilterKey; label: string }[] = [
+   114→   114→  { value: 'all', label: 'All conversations' },
+   115→   115→  { value: 'unread', label: 'Unread only' },
+   116→   116→  { value: 'lead', label: 'Leads' },
+   117→   117→  { value: 'hot', label: 'Hot leads (≥70)' },
+   118→   118→  { value: 'ai', label: 'AI active' },
+   119→   119→  { value: 'human', label: 'Human mode' },
+   120→   120→  { value: 'pinned', label: 'Pinned' },
+   121→   121→]
+   122→   122→
+   123→   123→const STATUS_BADGE: Record<ContactStatus, string> = {
+   124→   124→  new: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+   125→   125→  active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   126→   126→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   127→   127→  customer: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   128→   128→  blocked: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   129→   129→}
+   130→   130→
+   131→   131→const MEMORY_KEY_LABELS: Record<string, string> = {
+   132→   132→  name: 'Name',
+   133→   133→  business: 'Business',
+   134→   134→  requirements: 'Requirements',
+   135→   135→  budget: 'Budget',
+   136→   136→  language: 'Language',
+   137→   137→  last_intent: 'Last intent',
+   138→   138→  intent: 'Intent',
+   139→   139→  project_status: 'Project status',
+   140→   140→  timeline: 'Timeline',
+   141→   141→  location: 'Location',
+   142→   142→  service: 'Service',
+   143→   143→  contact_method: 'Contact method',
+   144→   144→}
+   145→   145→
+   146→   146→// ------------------------------------------------------------
+   147→   147→// Helpers
+   148→   148→// ------------------------------------------------------------
+   149→   149→
+   150→   150→/** Group messages into buckets keyed by YYYY-MM-DD so we can render date separators. */
+   151→   151→function groupByDay(messages: ChatMessage[]): { day: string; items: ChatMessage[] }[] {
+   152→   152→  const out: { day: string; items: ChatMessage[] }[] = []
+   153→   153→  for (const m of messages) {
+   154→   154→    const d = new Date(m.timestamp)
+   155→   155→    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+   156→   156→    const last = out[out.length - 1]
+   157→   157→    if (last && last.day === key) last.items.push(m)
+   158→   158→    else out.push({ day: key, items: [m] })
+   159→   159→  }
+   160→   160→  return out
+   161→   161→}
+   162→   162→
+   163→   163→function formatDayHeader(day: string): string {
+   164→   164→  const d = new Date(day + 'T00:00:00')
+   165→   165→  const today = new Date()
+   166→   166→  const yesterday = new Date()
+   167→   167→  yesterday.setDate(today.getDate() - 1)
+   168→   168→  const sameDay = (a: Date, b: Date) =>
+   169→   169→    a.getFullYear() === b.getFullYear() &&
+   170→   170→    a.getMonth() === b.getMonth() &&
+   171→   171→    a.getDate() === b.getDate()
+   172→   172→  if (sameDay(d, today)) return 'Today'
+   173→   173→  if (sameDay(d, yesterday)) return 'Yesterday'
+   174→   174→  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+   175→   175→}
+   176→   176→
+   177→   177→function memoryLabel(key: string): string {
+   178→   178→  return MEMORY_KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+   179→   179→}
+   180→   180→
+   181→   181→function categoryLabel(svc: string): string {
+   182→   182→  const map: Record<string, string> = {
+   183→   183→    website: 'Website Development',
+   184→   184→    app: 'Android App Development',
+   185→   185→    crm: 'CRM Development',
+   186→   186→    software: 'Business Software',
+   187→   187→    ai_automation: 'AI Automation',
+   188→   188→    maintenance: 'Maintenance',
+   189→   189→    general: 'General Inquiry',
+   190→   190→    support: 'Support Request',
+   191→   191→    high_priority: 'High Priority',
+   192→   192→  }
+   193→   193→  return map[svc] ?? (svc ? svc : '—')
+   194→   194→}
+   195→   195→
+   196→   196→// ------------------------------------------------------------
+   197→   197→// Small presentational components
+   198→   198→// ------------------------------------------------------------
+   199→   199→
+   200→   200→function Avatar({ name, phone, size = 'md' }: { name: string; phone: string; size?: 'sm' | 'md' | 'lg' }) {
+   201→   201→  const cls = colorFromString(name || phone)
+   202→   202→  const dim =
+   203→   203→    size === 'sm' ? 'h-8 w-8 text-[10px]' : size === 'lg' ? 'h-14 w-14 text-base' : 'h-10 w-10 text-xs'
+   204→   204→  return (
+   205→   205→    <div
+   206→   206→      className={cn(
+   207→   207→        'grid shrink-0 place-items-center rounded-full font-bold',
+   208→   208→        dim,
+   209→   209→        cls,
+   210→   210→      )}
+   211→   211→      aria-hidden
+   212→   212→    >
+   213→   213→      {initials(name || phone)}
+   214→   214→    </div>
+   215→   215→  )
+   216→   216→}
+   217→   217→
+   218→   218→function DeliveryIcon({ status }: { status: MessageStatus }) {
+   219→   219→  if (status === 'failed') {
+   220→   220→    return (
+   221→   221→      <Tooltip>
+   222→   222→        <TooltipTrigger asChild>
+   223→   223→          <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+   224→   224→        </TooltipTrigger>
+   225→   225→        <TooltipContent side="top">Failed to send</TooltipContent>
+   226→   226→      </Tooltip>
+   227→   227→    )
+   228→   228→  }
+   229→   229→  if (status === 'pending') {
+   230→   230→    return <Clock className="h-3.5 w-3.5 opacity-70" />
+   231→   231→  }
+   232→   232→  if (status === 'sent') {
+   233→   233→    return <Check className="h-3.5 w-3.5 opacity-70" />
+   234→   234→  }
+   235→   235→  if (status === 'delivered') {
+   236→   236→    return <CheckCheck className="h-3.5 w-3.5 opacity-70" />
+   237→   237→  }
+   238→   238→  // read
+   239→   239→  return <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+   240→   240→}
+   241→   241→
+   242→   242→function SourceBadge({ source }: { source: ChatMessage['source'] }) {
+   243→   243→  if (source === 'customer') return null
+   244→   244→  const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+   245→   245→    ai: {
+   246→   246→      label: 'AI',
+   247→   247→      cls: 'bg-emerald-500/20 text-emerald-200',
+   248→   248→      icon: <Bot className="h-3 w-3" />,
+   249→   249→    },
+   250→   250→    owner: {
+   251→   251→      label: 'You',
+   252→   252→      cls: 'bg-primary/30 text-primary-foreground',
+   253→   253→      icon: <User className="h-3 w-3" />,
+   254→   254→    },
+   255→   255→    system: {
+   256→   256→      label: 'System',
+   257→   257→      cls: 'bg-zinc-500/20 text-zinc-300',
+   258→   258→      icon: <Shield className="h-3 w-3" />,
+   259→   259→    },
+   260→   260→  }
+   261→   261→  const cfg = map[source]
+   262→   262→  if (!cfg) return null
+   263→   263→  return (
+   264→   264→    <span
+   265→   265→      className={cn(
+   266→   266→        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider',
+   267→   267→        cfg.cls,
+   268→   268→      )}
+   269→   269→    >
+   270→   270→      {cfg.icon}
+   271→   271→      {cfg.label}
+   272→   272→    </span>
+   273→   273→  )
+   274→   274→}
+   275→   275→
+   276→   276→function MessageBubble({ message }: { message: ChatMessage }) {
+   277→   277→  const isOutgoing = message.direction === 'outgoing'
+   278→   278→  return (
+   279→   279→    <div className={cn('flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
+   280→   280→      <div
+   281→   281→        className={cn(
+   282→   282→          'shadow-sm max-w-[78%] sm:max-w-[68%] rounded-2xl px-3 py-2 text-sm break-words',
+   283→   283→          isOutgoing
+   284→   284→            ? 'chat-bubble-out rounded-tr-sm'
+   285→   285→            : 'chat-bubble-in rounded-tl-sm',
+   286→   286→        )}
+   287→   287→      >
+   288→   288→        {/* Source badge row (for AI / Owner / System outgoing, none for customer) */}
+   289→   289→        {isOutgoing && message.source !== 'owner' && (
+   290→   290→          <div className="mb-1">
+   291→   291→            <SourceBadge source={message.source} />
+   292→   292→          </div>
+   293→   293→        )}
+   294→   294→        <div className="whitespace-pre-wrap leading-relaxed">{message.text}</div>
+   295→   295→        <div
+   296→   296→          className={cn(
+   297→   297→            'mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums',
+   298→   298→            isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+   299→   299→          )}
+   300→   300→        >
+   301→   301→          <span>{formatTime(message.timestamp)}</span>
+   302→   302→          {isOutgoing && <DeliveryIcon status={message.status} />}
+   303→   303→        </div>
+   304→   304→      </div>
+   305→   305→    </div>
+   306→   306→  )
+   307→   307→}
+   308→   308→
+   309→   309→function DateSeparator({ day }: { day: string }) {
+   310→   310→  return (
+   311→   311→    <div className="flex justify-center py-2">
+   312→   312→      <span className="rounded-full bg-muted/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+   313→   313→        {formatDayHeader(day)}
+   314→   314→      </span>
+   315→   315→    </div>
+   316→   316→  )
+   317→   317→}
+   318→   318→
+   319→   319→// ------------------------------------------------------------
+   320→   320→// ConversationList — left pane
+   321→   321→// ------------------------------------------------------------
+   322→   322→interface ConversationListProps {
+   323→   323→  items: ChatListItem[]
+   324→   324→  loading: boolean
+   325→   325→  selectedId: string | null
+   326→   326→  search: string
+   327→   327→  filter: FilterKey
+   328→   328→  onSelect: (id: string) => void
+   329→   329→  onSearchChange: (v: string) => void
+   330→   330→  onFilterChange: (v: FilterKey) => void
+   331→   331→}
+   332→   332→
+   333→   333→function ConversationList({
+   334→   334→  items,
+   335→   335→  loading,
+   336→   336→  selectedId,
+   337→   337→  search,
+   338→   338→  filter,
+   339→   339→  onSelect,
+   340→   340→  onSearchChange,
+   341→   341→  onFilterChange,
+   342→   342→}: ConversationListProps) {
+   343→   343→  return (
+   344→   344→    <div className="flex h-full min-h-0 flex-col">
+   345→   345→      {/* Header */}
+   346→   346→      <div className="border-b p-3">
+   347→   347→        <div className="flex items-center justify-between">
+   348→   348→          <h2 className="flex items-center gap-2 text-sm font-semibold">
+   349→   349→            <MessageCircle className="h-4 w-4 text-primary" />
+   350→   350→            Chats
+   351→   351→          </h2>
+   352→   352→          <Badge variant="outline" className="text-[10px] tabular-nums">
+   353→   353→            {items.length}
+   354→   354→          </Badge>
+   355→   355→        </div>
+   356→   356→        {/* Search */}
+   357→   357→        <div className="relative mt-2">
+   358→   358→          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   359→   359→          <Input
+   360→   360→            value={search}
+   361→   361→            onChange={(e) => onSearchChange(e.target.value)}
+   362→   362→            placeholder="Search name, phone or message…"
+   363→   363→            className="h-9 pl-8 pr-7 text-sm"
+   364→   364→            aria-label="Search conversations"
+   365→   365→          />
+   366→   366→          {search && (
+   367→   367→            <button
+   368→   368→              type="button"
+   369→   369→              onClick={() => onSearchChange('')}
+   370→   370→              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+   371→   371→              aria-label="Clear search"
+   372→   372→            >
+   373→   373→              <X className="h-3.5 w-3.5" />
+   374→   374→            </button>
+   375→   375→          )}
+   376→   376→        </div>
+   377→   377→        {/* Filter */}
+   378→   378→        <div className="mt-2 flex items-center gap-1.5">
+   379→   379→          <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+   380→   380→          <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
+   381→   381→            <SelectTrigger size="sm" className="h-8 w-full text-xs">
+   382→   382→              <SelectValue />
+   383→   383→            </SelectTrigger>
+   384→   384→            <SelectContent>
+   385→   385→              {FILTER_OPTIONS.map((opt) => (
+   386→   386→                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+   387→   387→                  {opt.label}
+   388→   388→                </SelectItem>
+   389→   389→              ))}
+   390→   390→            </SelectContent>
+   391→   391→          </Select>
+   392→   392→        </div>
+   393→   393→      </div>
+   394→   394→
+   395→   395→      {/* List */}
+   396→   396→      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+   397→   397→        {loading && items.length === 0 ? (
+   398→   398→          <div className="flex h-32 items-center justify-center text-muted-foreground">
+   399→   399→            <Loader2 className="h-4 w-4 animate-spin" />
+   400→   400→          </div>
+   401→   401→        ) : items.length === 0 ? (
+   402→   402→          <div className="flex h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+   403→   403→            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-muted/60 text-muted-foreground">
+   404→   404→              <Inbox className="h-6 w-6" />
+   405→   405→            </div>
+   406→   406→            <div>
+   407→   407→              <div className="text-sm font-medium">No conversations yet</div>
+   408→   408→              <div className="mt-0.5 text-[11px] text-muted-foreground">
+   409→   409→                Use the Simulator to test the AI.
+   410→   410→              </div>
+   411→   411→            </div>
+   412→   412→          </div>
+   413→   413→        ) : (
+   414→   414→          <ul className="divide-y divide-border/60">
+   415→   415→            {items.map((c) => {
+   416→   416→              const active = c.contactId === selectedId
+   417→   417→              const previewPrefix =
+   418→   418→                c.lastDirection === 'outgoing'
+   419→   419→                  ? c.lastMessage.startsWith('AI:') || c.lastMessage.startsWith('You:')
+   420→   420→                    ? ''
+   421→   421→                    : 'You: '
+   422→   422→                  : ''
+   423→   423→              return (
+   424→   424→                <li key={c.contactId}>
+   425→   425→                  <button
+   426→   426→                    type="button"
+   427→   427→                    onClick={() => onSelect(c.contactId)}
+   428→   428→                    className={cn(
+   429→   429→                      'group relative flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
+   430→   430→                      active ? 'bg-primary/10' : 'hover:bg-muted/40',
+   431→   431→                    )}
+   432→   432→                  >
+   433→   433→                    {/* active left accent */}
+   434→   434→                    {active && (
+   435→   435→                      <span className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+   436→   436→                    )}
+   437→   437→                    <Avatar name={c.name} phone={c.phone} />
+   438→   438→                    <div className="min-w-0 flex-1">
+   439→   439→                      <div className="flex items-center justify-between gap-2">
+   440→   440→                        <span className="truncate text-sm font-semibold">{c.name}</span>
+   441→   441→                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+   442→   442→                          {timeAgo(c.lastMessageAt)}
+   443→   443→                        </span>
+   444→   444→                      </div>
+   445→   445→                      <div className="flex items-center justify-between gap-2">
+   446→   446→                        <span className="line-clamp-1 text-xs text-muted-foreground">
+   447→   447→                          {previewPrefix}
+   448→   448→                          {c.lastMessage || '—'}
+   449→   449→                        </span>
+   450→   450→                        <div className="flex shrink-0 items-center gap-1">
+   451→   451→                          {c.humanMode && (
+   452→   452→                            <Badge className="border-amber-500/30 bg-amber-500/15 px-1 py-0 text-[9px] font-semibold text-amber-300">
+   453→   453→                              Human
+   454→   454→                            </Badge>
+   455→   455→                          )}
+   456→   456→                          {c.pinned && <Pin className="h-3 w-3 text-muted-foreground" />}
+   457→   457→                          {c.unread > 0 && (
+   458→   458→                            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-white">
+   459→   459→                              {c.unread > 99 ? '99+' : c.unread}
+   460→   460→                            </span>
+   461→   461→                          )}
+   462→   462→                        </div>
+   463→   463→                      </div>
+   464→   464→                      <div className="mt-1 flex items-center gap-1.5">
+   465→   465→                        <span className="text-[10px] text-muted-foreground">{c.phone}</span>
+   466→   466→                        {c.leadScore >= 25 && <LeadBadge score={c.leadScore} className="text-[9px]" />}
+   467→   467→                      </div>
+   468→   468→                    </div>
+   469→   469→                  </button>
+   470→   470→                </li>
+   471→   471→              )
+   472→   472→            })}
+   473→   473→          </ul>
+   474→   474→        )}
+   475→   475→      </div>
+   476→   476→    </div>
+   477→   477→  )
+   478→   478→}
+   479→   479→
+   480→   480→// ------------------------------------------------------------
+   481→   481→// ChatWindow — center pane
+   482→   482→// ------------------------------------------------------------
+   483→   483→interface ChatWindowProps {
+   484→   484→  contact: ChatListItem | null
+   485→   485→  messages: ChatMessage[]
+   486→   486→  loadingMessages: boolean
+   487→   487→  waState: WhatsAppState
+   488→   488→  onBack: () => void
+   489→   489→  onOpenDetails: () => void
+   490→   490→  onSend: (text: string) => Promise<void>
+   491→   491→  sending: boolean
+   492→   492→}
+   493→   493→
+   494→   494→function ChatWindow({
+   495→   495→  contact,
+   496→   496→  messages,
+   497→   497→  loadingMessages,
+   498→   498→  waState,
+   499→   499→  onBack,
+   500→   500→  onOpenDetails,
+   501→   501→  onSend,
+   502→   502→  sending,
+   503→   503→}: ChatWindowProps) {
+   504→   504→  const [text, setText] = React.useState('')
+   505→   505→  const scrollRef = React.useRef<HTMLDivElement>(null)
+   506→   506→  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+   507→   507→
+   508→   508→  // Auto-scroll to bottom when messages change
+   509→   509→  React.useEffect(() => {
+   510→   510→    const el = scrollRef.current
+   511→   511→    if (!el) return
+   512→   512→    el.scrollTop = el.scrollHeight
+   513→   513→  }, [messages, contact?.contactId])
+   514→   514→
+   515→   515→  // Auto-grow the textarea up to ~4 lines
+   516→   516→  React.useEffect(() => {
+   517→   517→    const ta = textareaRef.current
+   518→   518→    if (!ta) return
+   519→   519→    ta.style.height = 'auto'
+   520→   520→    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
+   521→   521→  }, [text])
+   522→   522→
+   523→   523→  if (!contact) {
+   524→   524→    return (
+   525→   525→      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+   526→   526→        <div className="grid h-16 w-16 place-items-center rounded-3xl bg-muted/60 text-muted-foreground">
+   527→   527→          <MessageCircle className="h-8 w-8" />
+   528→   528→        </div>
+   529→   529→        <div>
+   530→   530→          <div className="text-base font-semibold">Select a conversation</div>
+   531→   531→          <div className="mt-1 text-sm text-muted-foreground">
+   532→   532→            Pick a chat from the list to view messages and details.
+   533→   533→          </div>
+   534→   534→        </div>
+   535→   535→      </div>
+   536→   536→    )
+   537→   537→  }
+   538→   538→
+   539→   539→  const grouped = groupByDay(messages)
+   540→   540→  const aiActive = !contact.humanMode
+   541→   541→  const waConnected = waState === 'connected'
+   542→   542→
+   543→   543→  const handleSubmit = async () => {
+   544→   544→    const trimmed = text.trim()
+   545→   545→    if (!trimmed || sending) return
+   546→   546→    setText('')
+   547→   547→    await onSend(trimmed)
+   548→   548→  }
+   549→   549→
+   550→   550→  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+   551→   551→    if (e.key === 'Enter' && !e.shiftKey) {
+   552→   552→      e.preventDefault()
+   553→   553→      void handleSubmit()
+   554→   554→    }
+   555→   555→  }
+   556→   556→
+   557→   557→  const statusLine = contact.humanMode
+   558→   558→    ? 'Human mode active — AI paused'
+   559→   559→    : waConnected
+   560→   560→      ? 'AI auto-reply is handling this chat'
+   561→   561→      : 'AI auto-reply is handling this chat (simulated)'
+   562→   562→
+   563→   563→  return (
+   564→   564→    <div className="flex h-full min-h-0 flex-col">
+   565→   565→      {/* Header */}
+   566→   566→      <header className="flex items-center gap-2 border-b p-3">
+   567→   567→        <Button
+   568→   568→          variant="ghost"
+   569→   569→          size="icon"
+   570→   570→          className="lg:hidden"
+   571→   571→          onClick={onBack}
+   572→   572→          aria-label="Back to list"
+   573→   573→        >
+   574→   574→          <ArrowLeft className="h-5 w-5" />
+   575→   575→        </Button>
+   576→   576→        <Avatar name={contact.name} phone={contact.phone} size="sm" />
+   577→   577→        <div className="min-w-0 flex-1">
+   578→   578→          <div className="flex items-center gap-2">
+   579→   579→            <span className="truncate text-sm font-semibold">{contact.name}</span>
+   580→   580→            {contact.leadScore >= 25 && <LeadBadge score={contact.leadScore} />}
+   581→   581→            {contact.humanMode && (
+   582→   582→              <Badge className="border-amber-500/30 bg-amber-500/15 px-1.5 py-0 text-[10px] font-semibold text-amber-300">
+   583→   583→                Human
+   584→   584→              </Badge>
+   585→   585→            )}
+   586→   586→          </div>
+   587→   587→          <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
+   588→   588→        </div>
+   589→   589→        <Button
+   590→   590→          variant="ghost"
+   591→   591→          size="icon"
+   592→   592→          className="lg:hidden"
+   593→   593→          onClick={onOpenDetails}
+   594→   594→          aria-label="View details"
+   595→   595→        >
+   596→   596→          <Info className="h-5 w-5" />
+   597→   597→        </Button>
+   598→   598→      </header>
+   599→   599→
+   600→   600→      {/* Status banner */}
+   601→   601→      <div
+   602→   602→        className={cn(
+   603→   603→          'flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium',
+   604→   604→          contact.humanMode
+   605→   605→            ? 'bg-amber-500/15 text-amber-300'
+   606→   606→            : 'bg-emerald-500/10 text-emerald-300',
+   607→   607→        )}
+   608→   608→      >
+   609→   609→        {contact.humanMode ? <UserCog className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+   610→   610→        <span>
+   611→   611→          {contact.humanMode
+   612→   612→            ? 'Human mode — AI paused. You reply manually.'
+   613→   613→            : 'AI auto-reply is ON. Take over to reply manually.'}
+   614→   614→        </span>
+   615→   615→      </div>
+   616→   616→      {!waConnected && (
+   617→   617→        <div className="flex items-center gap-2 bg-zinc-500/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300">
+   618→   618→          <AlertTriangle className="h-3.5 w-3.5" />
+   619→   619→          <span>WhatsApp not connected — messages are simulated.</span>
+   620→   620→        </div>
+   621→   621→      )}
+   622→   622→
+   623→   623→      {/* Messages area */}
+   624→   624→      <div
+   625→   625→        ref={scrollRef}
+   626→   626→        className="relative min-h-0 flex-1 overflow-y-auto scrollbar-thin bg-background px-3 py-4"
+   627→   627→      >
+   628→   628→        <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+   629→   629→        <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
+   630→   630→          {loadingMessages && messages.length === 0 ? (
+   631→   631→            <div className="flex h-32 items-center justify-center text-muted-foreground">
+   632→   632→              <Loader2 className="h-4 w-4 animate-spin" />
+   633→   633→            </div>
+   634→   634→          ) : messages.length === 0 ? (
+   635→   635→            <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+   636→   636→              <MessageCircle className="h-6 w-6" />
+   637→   637→              <span className="text-xs">No messages yet. Say hello!</span>
+   638→   638→            </div>
+   639→   639→          ) : (
+   640→   640→            grouped.map((group) => (
+   641→   641→              <div key={group.day} className="flex flex-col gap-2">
+   642→   642→                <DateSeparator day={group.day} />
+   643→   643→                {group.items.map((m) => (
+   644→   644→                  <MessageBubble key={m.id} message={m} />
+   645→   645→                ))}
+   646→   646→              </div>
+   647→   647→            ))
+   648→   648→          )}
+   649→   649→        </div>
+   650→   650→      </div>
+   651→   651→
+   652→   652→      {/* Composer */}
+   653→   653→      <div className="border-t bg-background/95 p-3 backdrop-blur">
+   654→   654→        {aiActive && (
+   655→   655→          <div className="mb-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+   656→   656→            <Sparkles className="h-3 w-3 text-primary" />
+   657→   657→            <span>AI is handling this conversation. Take over to reply manually.</span>
+   658→   658→          </div>
+   659→   659→        )}
+   660→   660→        <div className="flex items-end gap-2">
+   661→   661→          <Textarea
+   662→   662→            ref={textareaRef}
+   663→   663→            value={text}
+   664→   664→            onChange={(e) => setText(e.target.value)}
+   665→   665→            onKeyDown={handleKeyDown}
+   666→   666→            placeholder={aiActive ? 'Type to take over & send…' : 'Type a message…'}
+   667→   667→            className="min-h-10 max-h-30 resize-none text-sm"
+   668→   668→            rows={1}
+   669→   669→            aria-label="Message composer"
+   670→   670→          />
+   671→   671→          <Button
+   672→   672→            onClick={handleSubmit}
+   673→   673→            disabled={!text.trim() || sending}
+   674→   674→            className={cn(
+   675→   675→              'h-10 shrink-0 gap-1.5 px-3',
+   676→   676→              aiActive
+   677→   677→                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
+   678→   678→                : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+   679→   679→            )}
+   680→   680→            aria-label={aiActive ? 'Take over and send' : 'Send message'}
+   681→   681→          >
+   682→   682→            {sending ? (
+   683→   683→              <Loader2 className="h-4 w-4 animate-spin" />
+   684→   684→            ) : (
+   685→   685→              <Send className="h-4 w-4" />
+   686→   686→            )}
+   687→   687→            <span className="hidden text-xs font-semibold sm:inline">
+   688→   688→              {aiActive ? 'Take over & send' : 'Send'}
+   689→   689→            </span>
+   690→   690→          </Button>
+   691→   691→        </div>
+   692→   692→        <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+   693→   693→          <span>Enter to send · Shift+Enter for newline</span>
+   694→   694→          <span className="tabular-nums">{text.length}/4000</span>
+   695→   695→        </div>
+   696→   696→      </div>
+   697→   697→    </div>
+   698→   698→  )
+   699→   699→}
+   700→   700→
+   701→   701→// ------------------------------------------------------------
+   702→   702→// DetailsPanel — right pane (also rendered inside the mobile Sheet)
+   703→   703→// ------------------------------------------------------------
+   704→   704→interface DetailsPanelProps {
+   705→   705→  detail: ContactDetail | null
+   706→   706→  loading: boolean
+   707→   707→  waConnected: boolean
+   708→   708→  pinned: boolean
+   709→   709→  onToggleHumanMode: (enabled: boolean) => Promise<void>
+   710→   710→  onPin: (pinned: boolean) => Promise<void>
+   711→   711→  onStatusChange: (status: ContactStatus) => Promise<void>
+   712→   712→  onNotesSave: (notes: string) => Promise<void>
+   713→   713→}
+   714→   714→
+   715→   715→function DetailsPanel({
+   716→   716→  detail,
+   717→   717→  loading,
+   718→   718→  pinned,
+   719→   719→  onToggleHumanMode,
+   720→   720→  onPin,
+   721→   721→  onStatusChange,
+   722→   722→  onNotesSave,
+   723→   723→}: DetailsPanelProps) {
+   724→   724→  const [notesDraft, setNotesDraft] = React.useState('')
+   725→   725→  const [savingNotes, setSavingNotes] = React.useState(false)
+   726→   726→  const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+   727→   727→
+   728→   728→  // Keep a local draft synced with server-loaded notes
+   729→   729→  React.useEffect(() => {
+   730→   730→    setNotesDraft(detail?.notes ?? '')
+   731→   731→  }, [detail?.id, detail?.notes])
+   732→   732→
+   733→   733→  if (loading && !detail) {
+   734→   734→    return (
+   735→   735→      <div className="flex h-full items-center justify-center text-muted-foreground">
+   736→   736→        <Loader2 className="h-5 w-5 animate-spin" />
+   737→   737→      </div>
+   738→   738→    )
+   739→   739→  }
+   740→   740→  if (!detail) {
+   741→   741→    return (
+   742→   742→      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
+   743→   743→        <User className="h-8 w-8" />
+   744→   744→        <span className="text-xs">Select a conversation to see customer details.</span>
+   745→   745→      </div>
+   746→   746→    )
+   747→   747→  }
+   748→   748→
+   749→   749→  const scoreColor =
+   750→   750→    detail.leadScore >= 70
+   751→   751→      ? 'bg-emerald-500'
+   752→   752→      : detail.leadScore >= 50
+   753→   753→        ? 'bg-amber-500'
+   754→   754→        : detail.leadScore >= 25
+   755→   755→          ? 'bg-orange-500'
+   756→   756→          : 'bg-muted-foreground/40'
+   757→   757→
+   758→   758→  const run = async (key: string, fn: () => Promise<void>) => {
+   759→   759→    setActionLoading(key)
+   760→   760→    try {
+   761→   761→      await fn()
+   762→   762→    } finally {
+   763→   763→      setActionLoading(null)
+   764→   764→    }
+   765→   765→  }
+   766→   766→
+   767→   767→  return (
+   768→   768→    <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
+   769→   769→      {/* Header */}
+   770→   770→      <div className="border-b p-4">
+   771→   771→        <div className="flex items-center gap-3">
+   772→   772→          <Avatar name={detail.name} phone={detail.phone} size="lg" />
+   773→   773→          <div className="min-w-0 flex-1">
+   774→   774→            <div className="truncate text-sm font-semibold">{detail.name}</div>
+   775→   775→            <div className="truncate text-xs text-muted-foreground">{detail.phone}</div>
+   776→   776→            <Badge
+   777→   777→              variant="outline"
+   778→   778→              className={cn(
+   779→   779→                'mt-1 px-1.5 py-0 text-[10px] font-medium capitalize',
+   780→   780→                STATUS_BADGE[detail.status],
+   781→   781→              )}
+   782→   782→            >
+   783→   783→              {detail.status}
+   784→   784→            </Badge>
+   785→   785→          </div>
+   786→   786→        </div>
+   787→   787→        {detail.summary && (
+   788→   788→          <p className="mt-3 rounded-lg bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+   789→   789→            {detail.summary}
+   790→   790→          </p>
+   791→   791→        )}
+   792→   792→      </div>
+   793→   793→
+   794→   794→      {/* Status section */}
+   795→   795→      <Section icon={<UserCog className="h-3.5 w-3.5" />} title="Status">
+   796→   796→        <div className="flex items-center justify-between rounded-md border bg-background/40 px-3 py-2">
+   797→   797→          <div className="flex flex-col">
+   798→   798→            <span className="text-xs font-medium">
+   799→   799→              {detail.humanMode ? 'Human mode' : 'AI auto-reply'}
+   800→   800→            </span>
+   801→   801→            <span className="text-[10px] text-muted-foreground">
+   802→   802→              {detail.humanMode ? 'AI paused · you reply' : 'AI handling replies'}
+   803→   803→            </span>
+   804→   804→          </div>
+   805→   805→          <Switch
+   806→   806→            checked={detail.humanMode}
+   807→   807→            onCheckedChange={(v) => void run('human', () => onToggleHumanMode(v))}
+   808→   808→            disabled={actionLoading === 'human'}
+   809→   809→            aria-label="Toggle human mode"
+   810→   810→          />
+   811→   811→        </div>
+   812→   812→        <Button
+   813→   813→          variant={detail.humanMode ? 'default' : 'outline'}
+   814→   814→          size="sm"
+   815→   815→          className="mt-2 w-full gap-1.5"
+   816→   816→          disabled={actionLoading === 'human'}
+   817→   817→          onClick={() =>
+   818→   818→            void run('human', () => onToggleHumanMode(!detail.humanMode))
+   819→   819→          }
+   820→   820→        >
+   821→   821→          {actionLoading === 'human' ? (
+   822→   822→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   823→   823→          ) : detail.humanMode ? (
+   824→   824→            <Bot className="h-3.5 w-3.5" />
+   825→   825→          ) : (
+   826→   826→            <UserCog className="h-3.5 w-3.5" />
+   827→   827→          )}
+   828→   828→          {detail.humanMode ? 'Resume AI' : 'Take over chat'}
+   829→   829→        </Button>
+   830→   830→      </Section>
+   831→   831→
+   832→   832→      {/* Lead info */}
+   833→   833→      <Section icon={<Flame className="h-3.5 w-3.5" />} title="Lead info">
+   834→   834→        <div className="flex items-center justify-between">
+   835→   835→          <span className="text-xs text-muted-foreground">Lead score</span>
+   836→   836→          <LeadBadge score={detail.leadScore} />
+   837→   837→        </div>
+   838→   838→        <Progress
+   839→   839→          value={detail.leadScore}
+   840→   840→          className={cn('mt-1 h-1.5', scoreColor)}
+   841→   841→        />
+   842→   842→        <div className="mt-2 flex items-center justify-between text-xs">
+   843→   843→          <span className="text-muted-foreground">Detected service</span>
+   844→   844→          <span className="text-right font-medium">{categoryLabel(detail.detectedService)}</span>
+   845→   845→        </div>
+   846→   846→        <div className="mt-1 flex items-center justify-between text-xs">
+   847→   847→          <span className="text-muted-foreground">Language</span>
+   848→   848→          <span className="font-medium">{detail.language || '—'}</span>
+   849→   849→        </div>
+   850→   850→      </Section>
+   851→   851→
+   852→   852→      {/* Customer info */}
+   853→   853→      <Section icon={<User className="h-3.5 w-3.5" />} title="Customer info">
+   854→   854→        <InfoRow label="First seen" value={formatDateTime(detail.firstSeen)} />
+   855→   855→        <InfoRow label="Last active" value={timeAgo(detail.lastSeen)} />
+   856→   856→        <InfoRow
+   857→   857→          label="Last message"
+   858→   858→          value={detail.lastMessageAt ? timeAgo(detail.lastMessageAt) : '—'}
+   859→   859→        />
+   860→   860→        <InfoRow label="Status" value={detail.status} />
+   861→   861→        <InfoRow label="Country code" value={detail.countryCode || '—'} />
+   862→   862→      </Section>
+   863→   863→
+   864→   864→      {/* AI Memory */}
+   865→   865→      <Section icon={<Bot className="h-3.5 w-3.5" />} title="AI memory">
+   866→   866→        {detail.memories.length === 0 ? (
+   867→   867→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+   868→   868→            No memory extracted yet. Send a message via the simulator to populate.
+   869→   869→          </div>
+   870→   870→        ) : (
+   871→   871→          <dl className="overflow-hidden rounded-md border">
+   872→   872→            {detail.memories.map((m, idx) => (
+   873→   873→              <div
+   874→   874→                key={m.key}
+   875→   875→                className={cn(
+   876→   876→                  'flex items-start gap-2 px-2.5 py-1.5',
+   877→   877→                  idx % 2 === 0 ? 'bg-background/40' : 'bg-transparent',
+   878→   878→                )}
+   879→   879→              >
+   880→   880→                <dt className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+   881→   881→                  {memoryLabel(m.key)}
+   882→   882→                </dt>
+   883→   883→                <dd className="flex-1 break-words text-xs">{m.value || '—'}</dd>
+   884→   884→              </div>
+   885→   885→            ))}
+   886→   886→          </dl>
+   887→   887→        )}
+   888→   888→      </Section>
+   889→   889→
+   890→   890→      {/* Notes */}
+   891→   891→      <Section icon={<MoreVertical className="h-3.5 w-3.5" />} title="Notes">
+   892→   892→        <Textarea
+   893→   893→          value={notesDraft}
+   894→   894→          onChange={(e) => setNotesDraft(e.target.value)}
+   895→   895→          placeholder="Add private notes about this customer…"
+   896→   896→          className="min-h-16 text-xs"
+   897→   897→        />
+   898→   898→        <Button
+   899→   899→          size="sm"
+   900→   900→          variant="outline"
+   901→   901→          className="mt-2 w-full gap-1.5"
+   902→   902→          disabled={savingNotes || notesDraft === (detail.notes ?? '')}
+   903→   903→          onClick={async () => {
+   904→   904→            setSavingNotes(true)
+   905→   905→            try {
+   906→   906→              await onNotesSave(notesDraft)
+   907→   907→            } finally {
+   908→   908→              setSavingNotes(false)
+   909→   909→            }
+   910→   910→          }}
+   911→   911→        >
+   912→   912→          {savingNotes ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+   913→   913→          Save notes
+   914→   914→        </Button>
+   915→   915→      </Section>
+   916→   916→
+   917→   917→      {/* Actions */}
+   918→   918→      <Section icon={<Shield className="h-3.5 w-3.5" />} title="Actions">
+   919→   919→        <Button
+   920→   920→          variant="outline"
+   921→   921→          size="sm"
+   922→   922→          className="w-full gap-1.5"
+   923→   923→          disabled={actionLoading === 'pin'}
+   924→   924→          onClick={() => void run('pin', () => onPin(!pinned))}
+   925→   925→        >
+   926→   926→          {actionLoading === 'pin' ? (
+   927→   927→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   928→   928→          ) : (
+   929→   929→            <Pin className="h-3.5 w-3.5" />
+   930→   930→          )}
+   931→   931→          {pinned ? 'Unpin conversation' : 'Pin conversation'}
+   932→   932→        </Button>
+   933→   933→        {detail.status !== 'customer' && (
+   934→   934→          <Button
+   935→   935→            variant="outline"
+   936→   936→            size="sm"
+   937→   937→            className="mt-2 w-full gap-1.5"
+   938→   938→            disabled={actionLoading === 'customer'}
+   939→   939→            onClick={() => void run('customer', () => onStatusChange('customer'))}
+   940→   940→          >
+   941→   941→            {actionLoading === 'customer' ? (
+   942→   942→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   943→   943→            ) : (
+   944→   944→              <Check className="h-3.5 w-3.5" />
+   945→   945→            )}
+   946→   946→            Mark as customer
+   947→   947→          </Button>
+   948→   948→        )}
+   949→   949→        {detail.status !== 'blocked' ? (
+   950→   950→          <Button
+   951→   951→            variant="destructive"
+   952→   952→            size="sm"
+   953→   953→            className="mt-2 w-full gap-1.5"
+   954→   954→            disabled={actionLoading === 'block'}
+   955→   955→            onClick={() => void run('block', () => onStatusChange('blocked'))}
+   956→   956→          >
+   957→   957→            {actionLoading === 'block' ? (
+   958→   958→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   959→   959→            ) : (
+   960→   960→              <AlertTriangle className="h-3.5 w-3.5" />
+   961→   961→            )}
+   962→   962→            Block contact
+   963→   963→          </Button>
+   964→   964→        ) : (
+   965→   965→          <Button
+   966→   966→            variant="outline"
+   967→   967→            size="sm"
+   968→   968→            className="mt-2 w-full gap-1.5"
+   969→   969→            disabled={actionLoading === 'unblock'}
+   970→   970→            onClick={() => void run('unblock', () => onStatusChange('active'))}
+   971→   971→          >
+   972→   972→            {actionLoading === 'unblock' ? (
+   973→   973→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   974→   974→            ) : (
+   975→   975→              <Shield className="h-3.5 w-3.5" />
+   976→   976→            )}
+   977→   977→            Unblock contact
+   978→   978→          </Button>
+   979→   979→        )}
+   980→   980→      </Section>
+   981→   981→      <div className="mt-auto p-3 text-center text-[10px] text-muted-foreground">
+   982→   982→        Contact ID: <span className="font-mono">{detail.id.slice(-8)}</span>
+   983→   983→      </div>
+   984→   984→    </div>
+   985→   985→  )
+   986→   986→}
+   987→   987→
+   988→   988→function Section({
+   989→   989→  icon,
+   990→   990→  title,
+   991→   991→  children,
+   992→   992→}: {
+   993→   993→  icon: React.ReactNode
+   994→   994→  title: string
+   995→   995→  children: React.ReactNode
+   996→   996→}) {
+   997→   997→  return (
+   998→   998→    <div className="border-b p-4">
+   999→   999→      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1000→  1000→        {icon}
+  1001→  1001→        <span>{title}</span>
+  1002→  1002→      </div>
+  1003→  1003→      <div className="flex flex-col gap-1.5">{children}</div>
+  1004→  1004→    </div>
+  1005→  1005→  )
+  1006→  1006→}
+  1007→  1007→
+  1008→  1008→function InfoRow({ label, value }: { label: string; value: string }) {
+  1009→  1009→  return (
+  1010→  1010→    <div className="flex items-center justify-between text-xs">
+  1011→  1011→      <span className="text-muted-foreground">{label}</span>
+  1012→  1012→      <span className="font-medium capitalize">{value}</span>
+  1013→  1013→    </div>
+  1014→  1014→  )
+  1015→  1015→}
+  1016→  1016→
+  1017→  1017→// ------------------------------------------------------------
+  1018→  1018→// Main ChatsView
+  1019→  1019→// ------------------------------------------------------------
+  1020→  1020→export function ChatsView() {
+  1021→  1021→  // --- Data state ---
+  1022→  1022→  const [items, setItems] = React.useState<ChatListItem[]>([])
+  1023→  1023→  const [messages, setMessages] = React.useState<ChatMessage[]>([])
+  1024→  1024→  const [detail, setDetail] = React.useState<ContactDetail | null>(null)
+  1025→  1025→  const [waState, setWaState] = React.useState<WhatsAppState>('disconnected')
+  1026→  1026→
+  1027→  1027→  // --- UI state ---
+  1028→  1028→  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  1029→  1029→  const [mobilePane, setMobilePane] = React.useState<'list' | 'chat'>('list')
+  1030→  1030→  const [detailsSheetOpen, setDetailsSheetOpen] = React.useState(false)
+  1031→  1031→  const [search, setSearch] = React.useState('')
+  1032→  1032→  const [debouncedSearch, setDebouncedSearch] = React.useState('')
+  1033→  1033→  const [filter, setFilter] = React.useState<FilterKey>('all')
+  1034→  1034→  const [loadingChats, setLoadingChats] = React.useState(true)
+  1035→  1035→  const [loadingMessages, setLoadingMessages] = React.useState(false)
+  1036→  1036→  const [loadingDetail, setLoadingDetail] = React.useState(false)
+  1037→  1037→  const [sending, setSending] = React.useState(false)
+  1038→  1038→
+  1039→  1039→  // --- Debounced search (300ms) ---
+  1040→  1040→  React.useEffect(() => {
+  1041→  1041→    const t = setTimeout(() => setDebouncedSearch(search), 300)
+  1042→  1042→    return () => clearTimeout(t)
+  1043→  1043→  }, [search])
+  1044→  1044→
+  1045→  1045→  // --- Build query params for chats list ---
+  1046→  1046→  const chatsQuery = React.useMemo(() => {
+  1047→  1047→    const p = new URLSearchParams()
+  1048→  1048→    if (debouncedSearch.trim()) p.set('search', debouncedSearch.trim())
+  1049→  1049→    if (filter !== 'all') p.set('filter', filter)
+  1050→  1050→    p.set('sort', 'recent')
+  1051→  1051→    p.set('limit', '100')
+  1052→  1052→    return p.toString()
+  1053→  1053→  }, [debouncedSearch, filter])
+  1054→  1054→
+  1055→  1055→  // --- Fetch chats list ---
+  1056→  1056→  const fetchChats = React.useCallback(
+  1057→  1057→    async (opts: { silent?: boolean } = {}) => {
+  1058→  1058→      if (!opts.silent) setLoadingChats(true)
+  1059→  1059→      try {
+  1060→  1060→        const data = await apiGet<{ items: ChatListItem[] }>(`/api/chats?${chatsQuery}`)
+  1061→  1061→        setItems(data.items ?? [])
+  1062→  1062→      } catch {
+  1063→  1063→        /* silent — polls will retry */
+  1064→  1064→      } finally {
+  1065→  1065→        setLoadingChats(false)
+  1066→  1066→      }
+  1067→  1067→    },
+  1068→  1068→    [chatsQuery],
+  1069→  1069→  )
+  1070→  1070→
+  1071→  1071→  // --- Fetch WA state (cheap, polled less frequently) ---
+  1072→  1072→  const fetchWaState = React.useCallback(async () => {
+  1073→  1073→    try {
+  1074→  1074→      const data = await apiGet<WaStateResponse>('/api/whatsapp')
+  1075→  1075→      setWaState(data.state)
+  1076→  1076→    } catch {
+  1077→  1077→      /* non-fatal */
+  1078→  1078→    }
+  1079→  1079→  }, [])
+  1080→  1080→
+  1081→  1081→  // --- Fetch messages for the selected contact ---
+  1082→  1082→  const fetchMessages = React.useCallback(
+  1083→  1083→    async (opts: { silent?: boolean } = {}) => {
+  1084→  1084→      if (!selectedId) {
+  1085→  1085→        setMessages([])
+  1086→  1086→        return
+  1087→  1087→      }
+  1088→  1088→      if (!opts.silent) setLoadingMessages(true)
+  1089→  1089→      try {
+  1090→  1090→        const data = await apiGet<{ items: ChatMessage[] }>(
+  1091→  1091→          `/api/messages?contactId=${encodeURIComponent(selectedId)}&limit=200`,
+  1092→  1092→        )
+  1093→  1093→        setMessages(data.items ?? [])
+  1094→  1094→      } catch {
+  1095→  1095→        /* silent */
+  1096→  1096→      } finally {
+  1097→  1097→        setLoadingMessages(false)
+  1098→  1098→      }
+  1099→  1099→    },
+  1100→  1100→    [selectedId],
+  1101→  1101→  )
+  1102→  1102→
+  1103→  1103→  // --- Fetch detail for the selected contact ---
+  1104→  1104→  const fetchDetail = React.useCallback(
+  1105→  1105→    async (opts: { silent?: boolean } = {}) => {
+  1106→  1106→      if (!selectedId) {
+  1107→  1107→        setDetail(null)
+  1108→  1108→        return
+  1109→  1109→      }
+  1110→  1110→      if (!opts.silent) setLoadingDetail(true)
+  1111→  1111→      try {
+  1112→  1112→        const data = await apiGet<ContactDetail>(
+  1113→  1113→          `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1114→  1114→        )
+  1115→  1115→        setDetail(data)
+  1116→  1116→      } catch {
+  1117→  1117→        /* silent */
+  1118→  1118→      } finally {
+  1119→  1119→        setLoadingDetail(false)
+  1120→  1120→      }
+  1121→  1121→    },
+  1122→  1122→    [selectedId],
+  1123→  1123→  )
+  1124→  1124→
+  1125→  1125→  // --- Initial load + refetch on filter/search change ---
+  1126→  1126→  React.useEffect(() => {
+  1127→  1127→    void fetchChats()
+  1128→  1128→  }, [fetchChats])
+  1129→  1129→
+  1130→  1130→  // --- Initial WA state fetch ---
+  1131→  1131→  React.useEffect(() => {
+  1132→  1132→    void fetchWaState()
+  1133→  1133→  }, [fetchWaState])
+  1134→  1134→
+  1135→  1135→  // --- Auto-select first conversation on first load ---
+  1136→  1136→  const autoSelected = React.useRef(false)
+  1137→  1137→  React.useEffect(() => {
+  1138→  1138→    if (autoSelected.current) return
+  1139→  1139→    if (items.length > 0 && !selectedId) {
+  1140→  1140→      autoSelected.current = true
+  1141→  1141→      setSelectedId(items[0].contactId)
+  1142→  1142→    }
+  1143→  1143→  }, [items, selectedId])
+  1144→  1144→
+  1145→  1145→  // --- Fetch messages + detail when selection changes ---
+  1146→  1146→  React.useEffect(() => {
+  1147→  1147→    if (!selectedId) {
+  1148→  1148→      setMessages([])
+  1149→  1149→      setDetail(null)
+  1150→  1150→      return
+  1151→  1151→    }
+  1152→  1152→    void fetchMessages()
+  1153→  1153→    void fetchDetail()
+  1154→  1154→    setMobilePane('chat')
+  1155→  1155→  }, [selectedId, fetchMessages, fetchDetail])
+  1156→  1156→
+  1157→  1157→  // --- Polling: chats every 8s, messages every 4s ---
+  1158→  1158→  React.useEffect(() => {
+  1159→  1159→    const t = setInterval(() => {
+  1160→  1160→      void fetchChats({ silent: true })
+  1161→  1161→    }, 8000)
+  1162→  1162→    return () => clearInterval(t)
+  1163→  1163→  }, [fetchChats])
+  1164→  1164→
+  1165→  1165→  React.useEffect(() => {
+  1166→  1166→    if (!selectedId) return
+  1167→  1167→    const t = setInterval(() => {
+  1168→  1168→      void fetchMessages({ silent: true })
+  1169→  1169→    }, 4000)
+  1170→  1170→    return () => clearInterval(t)
+  1171→  1171→  }, [selectedId, fetchMessages])
+  1172→  1172→
+  1173→  1173→  // --- WA state poll every 30s (cheap, slow-changing) ---
+  1174→  1174→  React.useEffect(() => {
+  1175→  1175→    const t = setInterval(() => {
+  1176→  1176→      void fetchWaState()
+  1177→  1177→    }, 30000)
+  1178→  1178→    return () => clearInterval(t)
+  1179→  1179→  }, [fetchWaState])
+  1180→  1180→
+  1181→  1181→  // --- Realtime: refresh on dashboard tick + simulator message ---
+  1182→  1182→  const refreshOnTick = React.useCallback(() => {
+  1183→  1183→    void fetchChats({ silent: true })
+  1184→  1184→    if (selectedId) void fetchMessages({ silent: true })
+  1185→  1185→  }, [fetchChats, fetchMessages, selectedId])
+  1186→  1186→
+  1187→  1187→  const onSimulatorMessage = React.useCallback(
+  1188→  1188→    (payload: unknown) => {
+  1189→  1189→      const p = (payload ?? {}) as { contactId?: string }
+  1190→  1190→      void fetchChats({ silent: true })
+  1191→  1191→      if (p.contactId && p.contactId === selectedId) {
+  1192→  1192→        void fetchMessages({ silent: true })
+  1193→  1193→        void fetchDetail({ silent: true })
+  1194→  1194→      }
+  1195→  1195→    },
+  1196→  1196→    [fetchChats, fetchMessages, fetchDetail, selectedId],
+  1197→  1197→  )
+  1198→  1198→
+  1199→  1199→  useRealtime([
+  1200→  1200→    { event: 'dashboard:tick', handler: refreshOnTick },
+  1201→  1201→    { event: 'simulator:message', handler: onSimulatorMessage },
+  1202→  1202→  ])
+  1203→  1203→
+  1204→  1204→  // --- Handlers ---
+  1205→  1205→  const selectedContact = React.useMemo(
+  1206→  1206→    () => items.find((c) => c.contactId === selectedId) ?? null,
+  1207→  1207→    [items, selectedId],
+  1208→  1208→  )
+  1209→  1209→
+  1210→  1210→  const handleSelect = (id: string) => {
+  1211→  1211→    setSelectedId(id)
+  1212→  1212→    setMobilePane('chat')
+  1213→  1213→  }
+  1214→  1214→
+  1215→  1215→  const handleBack = () => setMobilePane('list')
+  1216→  1216→
+  1217→  1217→  const handleSend = async (text: string) => {
+  1218→  1218→    if (!selectedId) return
+  1219→  1219→    setSending(true)
+  1220→  1220→    try {
+  1221→  1221→      // If AI is still active, take over first so the manual send makes sense.
+  1222→  1222→      const current = items.find((c) => c.contactId === selectedId)
+  1223→  1223→      if (current && !current.humanMode) {
+  1224→  1224→        try {
+  1225→  1225→          await apiPost<HumanModeResponse>(
+  1226→  1226→            `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1227→  1227→            { enabled: true },
+  1228→  1228→          )
+  1229→  1229→          // Optimistically reflect the toggle
+  1230→  1230→          setItems((prev) =>
+  1231→  1231→            prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: true } : c)),
+  1232→  1232→          )
+  1233→  1233→          setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: true } : d))
+  1234→  1234→          toast.success('Human mode enabled', {
+  1235→  1235→            description: 'AI auto-reply is paused for this chat.',
+  1236→  1236→          })
+  1237→  1237→        } catch (err) {
+  1238→  1238→          toast.error('Failed to take over chat', {
+  1239→  1239→            description: err instanceof Error ? err.message : undefined,
+  1240→  1240→          })
+  1241→  1241→          setSending(false)
+  1242→  1242→          return
+  1243→  1243→        }
+  1244→  1244→      }
+  1245→  1245→
+  1246→  1246→      // Send the manual message
+  1247→  1247→      const res = await apiPost<SendMessageResponse>('/api/messages', {
+  1248→  1248→        contactId: selectedId,
+  1249→  1249→        text,
+  1250→  1250→      })
+  1251→  1251→      setMessages((prev) => [...prev, res.message])
+  1252→  1252→      // Refresh the chats list so the last-message preview updates
+  1253→  1253→      void fetchChats({ silent: true })
+  1254→  1254→      void fetchDetail({ silent: true })
+  1255→  1255→      toast.success('Message sent')
+  1256→  1256→    } catch (err) {
+  1257→  1257→      toast.error('Failed to send message', {
+  1258→  1258→        description: err instanceof Error ? err.message : undefined,
+  1259→  1259→      })
+  1260→  1260→    } finally {
+  1261→  1261→      setSending(false)
+  1262→  1262→    }
+  1263→  1263→  }
+  1264→  1264→
+  1265→  1265→  const handleToggleHumanMode = async (enabled: boolean) => {
+  1266→  1266→    if (!selectedId) return
+  1267→  1267→    try {
+  1268→  1268→      await apiPost<HumanModeResponse>(
+  1269→  1269→        `/api/contacts/${encodeURIComponent(selectedId)}/human-mode`,
+  1270→  1270→        { enabled },
+  1271→  1271→      )
+  1272→  1272→      setItems((prev) =>
+  1273→  1273→        prev.map((c) => (c.contactId === selectedId ? { ...c, humanMode: enabled } : c)),
+  1274→  1274→      )
+  1275→  1275→      setDetail((d) => (d && d.id === selectedId ? { ...d, humanMode: enabled } : d))
+  1276→  1276→      toast.success(enabled ? 'Human mode enabled' : 'AI auto-reply resumed')
+  1277→  1277→    } catch (err) {
+  1278→  1278→      toast.error('Failed to toggle human mode', {
+  1279→  1279→        description: err instanceof Error ? err.message : undefined,
+  1280→  1280→      })
+  1281→  1281→    }
+  1282→  1282→  }
+  1283→  1283→
+  1284→  1284→  const handlePin = async (pinned: boolean) => {
+  1285→  1285→    if (!selectedId) return
+  1286→  1286→    try {
+  1287→  1287→      await apiPatch<ContactDetail>(
+  1288→  1288→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1289→  1289→        { pinned },
+  1290→  1290→      )
+  1291→  1291→      // ContactDetail doesn't carry pinned, so update items list locally
+  1292→  1292→      // and refetch the chats list to re-sort (pinned float to top).
+  1293→  1293→      setItems((prev) =>
+  1294→  1294→        prev.map((c) => (c.contactId === selectedId ? { ...c, pinned } : c)),
+  1295→  1295→      )
+  1296→  1296→      void fetchChats({ silent: true })
+  1297→  1297→      toast.success(pinned ? 'Conversation pinned' : 'Conversation unpinned')
+  1298→  1298→    } catch (err) {
+  1299→  1299→      toast.error('Failed to update pin', {
+  1300→  1300→        description: err instanceof Error ? err.message : undefined,
+  1301→  1301→      })
+  1302→  1302→    }
+  1303→  1303→  }
+  1304→  1304→
+  1305→  1305→  const handleStatusChange = async (status: ContactStatus) => {
+  1306→  1306→    if (!selectedId) return
+  1307→  1307→    try {
+  1308→  1308→      const updated = await apiPatch<ContactDetail>(
+  1309→  1309→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1310→  1310→        { status },
+  1311→  1311→      )
+  1312→  1312→      setDetail(updated)
+  1313→  1313→      setItems((prev) =>
+  1314→  1314→        prev.map((c) => (c.contactId === selectedId ? { ...c, status: updated.status } : c)),
+  1315→  1315→      )
+  1316→  1316→      if (status === 'blocked') {
+  1317→  1317→        toast.warning('Contact blocked')
+  1318→  1318→      } else if (status === 'customer') {
+  1319→  1319→        toast.success('Marked as customer')
+  1320→  1320→      } else {
+  1321→  1321→        toast.success(`Status updated: ${status}`)
+  1322→  1322→      }
+  1323→  1323→    } catch (err) {
+  1324→  1324→      toast.error('Failed to update status', {
+  1325→  1325→        description: err instanceof Error ? err.message : undefined,
+  1326→  1326→      })
+  1327→  1327→    }
+  1328→  1328→  }
+  1329→  1329→
+  1330→  1330→  const handleNotesSave = async (notes: string) => {
+  1331→  1331→    if (!selectedId) return
+  1332→  1332→    try {
+  1333→  1333→      const updated = await apiPatch<ContactDetail>(
+  1334→  1334→        `/api/contacts/${encodeURIComponent(selectedId)}`,
+  1335→  1335→        { notes },
+  1336→  1336→      )
+  1337→  1337→      setDetail(updated)
+  1338→  1338→      toast.success('Notes saved')
+  1339→  1339→    } catch (err) {
+  1340→  1340→      toast.error('Failed to save notes', {
+  1341→  1341→        description: err instanceof Error ? err.message : undefined,
+  1342→  1342→      })
+  1343→  1343→    }
+  1344→  1344→  }
+  1345→  1345→
+  1346→  1346→  // --- Render ---
+  1347→  1347→  return (
+  1348→  1348→    <TooltipProvider delayDuration={300}>
+  1349→  1349→      <div className="flex h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-xl border bg-card/30 backdrop-blur lg:grid lg:grid-cols-[320px_1fr_288px]">
+  1350→  1350→        {/* LEFT — conversation list */}
+  1351→  1351→        <aside
+  1352→  1352→          className={cn(
+  1353→  1353→            'min-h-0 flex flex-col border-r',
+  1354→  1354→            mobilePane === 'chat' && 'hidden lg:flex',
+  1355→  1355→          )}
+  1356→  1356→        >
+  1357→  1357→          <ConversationList
+  1358→  1358→            items={items}
+  1359→  1359→            loading={loadingChats}
+  1360→  1360→            selectedId={selectedId}
+  1361→  1361→            search={search}
+  1362→  1362→            filter={filter}
+  1363→  1363→            onSelect={handleSelect}
+  1364→  1364→            onSearchChange={setSearch}
+  1365→  1365→            onFilterChange={setFilter}
+  1366→  1366→          />
+  1367→  1367→        </aside>
+  1368→  1368→
+  1369→  1369→        {/* CENTER — chat window */}
+  1370→  1370→        <section
+  1371→  1371→          className={cn(
+  1372→  1372→            'min-h-0 flex flex-col',
+  1373→  1373→            mobilePane === 'list' && 'hidden lg:flex',
+  1374→  1374→          )}
+  1375→  1375→        >
+  1376→  1376→          <ChatWindow
+  1377→  1377→            contact={selectedContact}
+  1378→  1378→            messages={messages}
+  1379→  1379→            loadingMessages={loadingMessages}
+  1380→  1380→            waState={waState}
+  1381→  1381→            onBack={handleBack}
+  1382→  1382→            onOpenDetails={() => setDetailsSheetOpen(true)}
+  1383→  1383→            onSend={handleSend}
+  1384→  1384→            sending={sending}
+  1385→  1385→          />
+  1386→  1386→        </section>
+  1387→  1387→
+  1388→  1388→        {/* RIGHT — details panel (desktop) */}
+  1389→  1389→        <aside className="hidden min-h-0 flex-col border-l lg:flex">
+  1390→  1390→          <DetailsPanel
+  1391→  1391→            detail={detail}
+  1392→  1392→            loading={loadingDetail}
+  1393→  1393→            waConnected={waState === 'connected'}
+  1394→  1394→            pinned={selectedContact?.pinned ?? false}
+  1395→  1395→            onToggleHumanMode={handleToggleHumanMode}
+  1396→  1396→            onPin={handlePin}
+  1397→  1397→            onStatusChange={handleStatusChange}
+  1398→  1398→            onNotesSave={handleNotesSave}
+  1399→  1399→          />
+  1400→  1400→        </aside>
+  1401→  1401→
+  1402→  1402→        {/* MOBILE — details sheet */}
+  1403→  1403→        <Sheet open={detailsSheetOpen} onOpenChange={setDetailsSheetOpen}>
+  1404→  1404→          <SheetContent side="right" className="w-full max-w-sm p-0 sm:max-w-md">
+  1405→  1405→            <SheetHeader className="border-b">
+  1406→  1406→              <SheetTitle className="flex items-center gap-2 text-sm">
+  1407→  1407→                <Info className="h-4 w-4 text-primary" />
+  1408→  1408→                Customer details
+  1409→  1409→              </SheetTitle>
+  1410→  1410→            </SheetHeader>
+  1411→  1411→            <div className="min-h-0 flex-1 overflow-hidden">
+  1412→  1412→              <DetailsPanel
+  1413→  1413→                detail={detail}
+  1414→  1414→                loading={loadingDetail}
+  1415→  1415→                waConnected={waState === 'connected'}
+  1416→  1416→                pinned={selectedContact?.pinned ?? false}
+  1417→  1417→                onToggleHumanMode={async (v) => {
+  1418→  1418→                  await handleToggleHumanMode(v)
+  1419→  1419→                }}
+  1420→  1420→                onPin={handlePin}
+  1421→  1421→                onStatusChange={handleStatusChange}
+  1422→  1422→                onNotesSave={handleNotesSave}
+  1423→  1423→              />
+  1424→  1424→            </div>
+  1425→  1425→          </SheetContent>
+  1426→  1426→        </Sheet>
+  1427→  1427→      </div>
+  1428→  1428→    </TooltipProvider>
+  1429→  1429→  )
+  1430→  1430→}
+  1431→  1431→
