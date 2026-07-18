@@ -3,15 +3,7 @@
 // with heuristic fallbacks. Non-blocking: never throws.
 // ============================================================
 import { db } from '@/lib/db'
-
-let zaiPromise: Promise<unknown> | null = null
-async function getZAI() {
-  if (!zaiPromise) {
-    const ZAI = (await import('z-ai-web-dev-sdk')).default
-    zaiPromise = ZAI.create()
-  }
-  return (await zaiPromise) as Awaited<ReturnType<typeof import('z-ai-web-dev-sdk').default.create>>
-}
+import { callOpenRouter } from '@/lib/ai-engine'
 
 // Simple heuristic language detection based on Unicode script ranges
 export function detectLanguageHeuristic(text: string): string {
@@ -32,23 +24,15 @@ export function detectLanguageHeuristic(text: string): string {
 
 export async function detectLanguage(text: string): Promise<string> {
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 3000)
-    const zai = await getZAI()
-    const completion = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          { role: 'assistant', content: 'Detect the language of this message. Reply with ONLY the ISO 639-1 language code (e.g. en, hi, es, fr, ar, zh, ja, ru, de, pt). Nothing else.' },
-          { role: 'user', content: text.slice(0, 500) },
-        ],
-        thinking: { type: 'disabled' },
-      } as Record<string, unknown>),
+    const result = await Promise.race([
+      callOpenRouter([
+        { role: 'system', content: 'Detect the language of this message. Reply with ONLY the ISO 639-1 language code (e.g. en, hi, es, fr, ar, zh, ja, ru, de, pt). Nothing else.' },
+        { role: 'user', content: text.slice(0, 500) },
+      ], { maxTokens: 5 }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
     ])
-    clearTimeout(timeout)
-    const result = (completion?.choices?.[0]?.message?.content ?? '').trim().toLowerCase().slice(0, 5)
-    // Validate it's a 2-letter code
-    if (/^[a-z]{2}$/.test(result)) return result
+    const code = result.content.trim().toLowerCase().slice(0, 5)
+    if (/^[a-z]{2}$/.test(code)) return code
     return detectLanguageHeuristic(text)
   } catch {
     return detectLanguageHeuristic(text)
@@ -58,19 +42,14 @@ export async function detectLanguage(text: string): Promise<string> {
 export async function translateText(text: string, from: string, to: string): Promise<string> {
   if (from === to || !text.trim()) return text
   try {
-    const zai = await getZAI()
-    const completion = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          { role: 'assistant', content: `Translate this ${from} text to ${to}. Return ONLY the translation, nothing else. No explanations, no notes.` },
-          { role: 'user', content: text.slice(0, 1000) },
-        ],
-        thinking: { type: 'disabled' },
-      } as Record<string, unknown>),
+    const result = await Promise.race([
+      callOpenRouter([
+        { role: 'system', content: `Translate this ${from} text to ${to}. Return ONLY the translation, nothing else. No explanations, no notes.` },
+        { role: 'user', content: text.slice(0, 1000) },
+      ]),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
     ])
-    const translated = (completion?.choices?.[0]?.message?.content ?? '').trim()
-    return translated || text
+    return result.content || text
   } catch {
     return text
   }

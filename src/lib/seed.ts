@@ -56,10 +56,10 @@ export async function ensureSeed() {
     await db.apiSetting.create({
       data: {
         id: 'api',
-        provider: 'zai',
-        baseUrl: 'https://api.z.ai/api/paas/v4',
-        apiKey: '',
-        model: 'glm-4.5',
+        provider: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: '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',
+        model: 'google/gemma-4-26b-a4b-it:free',
         temperature: 0.7,
         topP: 0.9,
         maxTokens: 512,

@@ -10,7 +10,7 @@
 // never throw — the message pipeline should not break if sentiment
 // detection fails.
 // ============================================================
-import ZAI from 'z-ai-web-dev-sdk'
+import { callOpenRouter } from '@/lib/ai-engine'
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative' | 'urgent'
 
@@ -241,7 +241,7 @@ export async function analyzeSentiment(text: string): Promise<SentimentResult> {
       SENTIMENT_TIMEOUT_MS,
     )
 
-    const raw = (completion?.choices?.[0]?.message?.content ?? '').trim()
+    const raw = result.content.trim()
     const parsed = extractJson(raw)
     const normalized = normalizeLLMResult(parsed)
     if (normalized) return normalized

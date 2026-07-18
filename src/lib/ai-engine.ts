@@ -1,16 +1,81 @@
 // ============================================================
-// AI Engine - WhatsApp auto-reply generation using z-ai-web-dev-sdk
+// AI Engine - WhatsApp auto-reply generation using OpenRouter API
+// OpenRouter is an OpenAI-compatible API gateway that supports
+// many models (GPT, Claude, Llama, Mistral, etc.)
 // Pipeline: build context -> LLM completion -> score lead -> persist memory
 // ============================================================
-import ZAI from 'z-ai-web-dev-sdk'
 import { db } from '@/lib/db'
 import type { LeadCategory } from '@/lib/types'
 import { QORVIX_COMPANY } from '@/lib/types'
 
-let zaiPromise: Promise<unknown> | null = null
-async function getZAI() {
-  if (!zaiPromise) zaiPromise = ZAI.create()
-  return (await zaiPromise) as Awaited<ReturnType<typeof ZAI.create>>
+// ============================================================
+// OpenRouter API client — uses the stored API key + base URL + model
+// from the ApiSetting table. Falls back to environment defaults.
+// ============================================================
+
+const DEFAULT_OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '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'
+const DEFAULT_OPENROUTER_BASE = 'https://openrouter.ai/api/v1'
+const DEFAULT_MODEL = 'google/gemma-4-26b-a4b-it:free'
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+async function callOpenRouter(
+  messages: ChatMessage[],
+  opts: { temperature?: number; topP?: number; maxTokens?: number } = {},
+): Promise<{ content: string; model: string }> {
+  // Fetch the API settings from DB (or use defaults)
+  let apiKey = DEFAULT_OPENROUTER_KEY
+  let baseUrl = DEFAULT_OPENROUTER_BASE
+  let model = DEFAULT_MODEL
+  let temperature = opts.temperature ?? 0.7
+  let topP = opts.topP ?? 0.9
+  let maxTokens = opts.maxTokens ?? 512
+
+  try {
+    const settings = await db.apiSetting.findUnique({ where: { id: 'api' } })
+    if (settings) {
+      if (settings.apiKey && settings.apiKey.length > 10 && !settings.apiKey.startsWith('•')) {
+        apiKey = settings.apiKey
+      }
+      if (settings.baseUrl) baseUrl = settings.baseUrl
+      if (settings.model) model = settings.model
+      temperature = settings.temperature
+      topP = settings.topP
+      maxTokens = settings.maxTokens
+    }
+  } catch {
+    // DB not available — use defaults
+  }
+
+  const res = await fetch(baseUrl + '/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey,
+      'HTTP-Referer': 'https://qorvixnodetechnologies.indevs.in',
+      'X-Title': 'QorvixNode WhatsApp Auto Reply',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      top_p: topP,
+      max_tokens: maxTokens,
+    }),
+    signal: AbortSignal.timeout(30000),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`OpenRouter API error ${res.status}: ${errText.slice(0, 200)}`)
+  }
+
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content ?? ''
+  return { content: content.trim(), model: data?.model || model }
 }
 
 export interface AIContext {
@@ -335,22 +400,18 @@ export async function generateReply(
     content: m.text,
   }))
 
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    { role: 'assistant', content: systemPrompt },
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
     ...historyAsc,
     { role: 'user', content: incomingText },
   ]
 
   let reply = ''
-  let model = apiSetting?.model ?? 'glm-4.5'
+  let model = DEFAULT_MODEL
   try {
-    const zai = await getZAI()
-    const completion = await zai.chat.completions.create({
-      // @ts-expect-error SDK accepts messages with role assistant as system-like
-      messages,
-      thinking: { type: 'disabled' },
-    } as Record<string, unknown>)
-    reply = (completion?.choices?.[0]?.message?.content ?? '').trim()
+    const result = await callOpenRouter(messages as ChatMessage[])
+    reply = result.content
+    model = result.model
     if (!reply) {
       reply = ownerRequested
         ? 'Sure, I have forwarded your request to our team. They will reach out to you shortly. Thank you for your patience!'
@@ -419,21 +480,15 @@ export async function testAIConnection(): Promise<{
 }> {
   const started = Date.now()
   try {
-    const apiSetting = await db.apiSetting.findUnique({ where: { id: 'api' } })
-    const zai = await getZAI()
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: 'Reply with exactly: PONG' },
-        { role: 'user', content: 'ping' },
-      ],
-      thinking: { type: 'disabled' },
-    } as Record<string, unknown>)
-    const sample = (completion?.choices?.[0]?.message?.content ?? '').trim()
+    const result = await callOpenRouter([
+      { role: 'system', content: 'Reply with exactly: PONG' },
+      { role: 'user', content: 'ping' },
+    ], { maxTokens: 10 })
     return {
       ok: true,
       latencyMs: Date.now() - started,
-      model: apiSetting?.model ?? 'glm-4.5',
-      sample,
+      model: result.model,
+      sample: result.content,
     }
   } catch (err) {
     return {

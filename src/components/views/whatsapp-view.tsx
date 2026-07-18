@@ -487,56 +487,59 @@ function RealQrCard({
 }
 
 // ============================================================
-// QR Image — renders a visual QR from the Baileys payload
+// QR Image — renders a REAL scannable QR code from the Baileys
+// payload using the `qrcode` library (generates a data URL).
 // ============================================================
-function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
-  const grid = React.useMemo(() => buildQrGrid(payload), [payload])
-  return (
-    <svg width={size} height={size} viewBox="0 0 25 25" className="rounded-lg">
-      <rect width="25" height="25" fill="white" />
-      {grid.map((on, i) => {
-        if (!on) return null
-        const x = i % 25
-        const y = Math.floor(i / 25)
-        return <rect key={i} x={x} y={y} width="1" height="1" fill="black" />
-      })}
-      {[[0, 0], [0, 18], [18, 0]].map(([fx, fy]) => (
-        <g key={`${fx}-${fy}`}>
-          <rect x={fx} y={fy} width="7" height="7" fill="black" />
-          <rect x={fx + 1} y={fy + 1} width="5" height="5" fill="white" />
-          <rect x={fx + 2} y={fy + 2} width="3" height="3" fill="black" />
-        </g>
-      ))}
-    </svg>
-  )
-}
+import QRCode from 'qrcode'
 
-function buildQrGrid(payload: string): boolean[] {
-  const grid = new Array(625).fill(false)
-  let hash = 0
-  for (let i = 0; i < payload.length; i++) {
-    hash = ((hash << 5) - hash + payload.charCodeAt(i)) | 0
-  }
-  let state = Math.abs(hash) || 1
-  for (let i = 0; i < 625; i++) {
-    state = (state * 1103515245 + 12345) & 0x7fffffff
-    grid[i] = (state >> 16) % 100 < 48
-  }
-  const clearArea = (ox: number, oy: number) => {
-    for (let dy = -1; dy <= 7; dy++) {
-      for (let dx = -1; dx <= 7; dx++) {
-        const x = ox + dx
-        const y = oy + dy
-        if (x >= 0 && x < 25 && y >= 0 && y < 25) {
-          grid[y * 25 + x] = false
-        }
-      }
+function QrImage({ payload, size = 240 }: { payload: string; size?: number }) {
+  const [dataUrl, setDataUrl] = React.useState<string>('')
+
+  React.useEffect(() => {
+    let cancelled = false
+    if (!payload) {
+      setDataUrl('')
+      return
     }
+    // Generate a REAL QR code as a data URL — this is scannable
+    QRCode.toDataURL(payload, {
+      width: size,
+      margin: 1,
+      errorCorrectionLevel: 'H', // High — survives even if the logo overlay covers part
+      color: { dark: '#000000', light: '#FFFFFF' },
+    })
+      .then((url) => {
+        if (!cancelled) setDataUrl(url)
+      })
+      .catch(() => {
+        if (!cancelled) setDataUrl('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [payload, size])
+
+  if (!dataUrl) {
+    return (
+      <div
+        style={{ width: size, height: size }}
+        className="grid place-items-center rounded-lg bg-white"
+      >
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+      </div>
+    )
   }
-  clearArea(0, 0)
-  clearArea(0, 18)
-  clearArea(18, 0)
-  return grid
+
+  return (
+    <img
+      src={dataUrl}
+      width={size}
+      height={size}
+      alt="WhatsApp QR Code"
+      className="rounded-lg"
+      style={{ imageRendering: 'pixelated' }}
+    />
+  )
 }
 
 // ============================================================
