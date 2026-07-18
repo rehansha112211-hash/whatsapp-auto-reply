@@ -1,9 +1,9 @@
 {
-  "connectionState": "connecting",
-  "qrCode": "https://wa.me/settings/linked_devices#2@Yvg6KhfeDGCEpWHQD8yWATO7iPfTV7xTYCOJ8LqMJWbQ5ATifS8xxkUWGAKCR0vPH92QlrF6S0XtCX6kMOAq+WISa/tfZ32DSGI=,80sGXSwT8fBEVRdO1KvsAp7mtlEpgg0CsVMZmz4TAg0=,lDxw2ZufqWUOvX2m7kUuDXF6W0q5gNxYp70VBOQI4xE=,8Zqk3IFGrtVrjmkOHJahPBzC5+FwgkE1StesQNSSQ5Y=,1",
+  "connectionState": "disconnected",
+  "qrCode": "",
   "phoneNumber": "",
   "userName": "",
   "connectedAt": null,
-  "lastSeen": "2026-07-18T19:28:44.536Z",
+  "lastSeen": "2026-07-18T19:33:44.728Z",
   "error": ""
 }
