@@ -26,6 +26,7 @@ import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { can } from '@/lib/permissions'
 import { sendOwnerMessage } from '@/lib/wa-engine'
+import { substituteVariables, hasVariables } from '@/lib/template-variables'
 
 export const dynamic = 'force-dynamic'
 
@@ -154,9 +155,25 @@ export async function POST(req: Request) {
   // --- Resolve the audience filter ---
   const effectiveAudience: Audience = audience === 'custom' ? 'all' : audience
   const where = buildAudienceWhere(effectiveAudience)
+  // Select every field substituteVariables might need — this is a
+  // small fixed projection and keeps the per-contact loop statically
+  // typed without a Prisma union-of-shapes headache. hasVariables()
+  // is still used in the worker to skip the substitution work when
+  // the message has no placeholders at all.
   const contacts = await db.contact.findMany({
     where,
-    select: { id: true, name: true },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      leadScore: true,
+      detectedService: true,
+      language: true,
+      status: true,
+      firstSeen: true,
+      lastSeen: true,
+      notes: true,
+    },
   })
 
   if (contacts.length === 0) {
@@ -191,13 +208,31 @@ export async function POST(req: Request) {
   let failedCount = 0
   const CONCURRENCY = 5
   let cursor = 0
+  // Skip the substituteVariables() call entirely when the message
+  // contains no `{token}` placeholders — pure optimisation.
+  const needsSubstitution = hasVariables(message)
 
   async function worker() {
     while (cursor < contacts.length) {
       const idx = cursor++
       const c = contacts[idx]
       try {
-        await sendOwnerMessage(c.id, message)
+        // Per-contact personalisation: each recipient sees their own
+        // name/score/etc. Unknown/missing variables are left as-is.
+        const personalized = needsSubstitution
+          ? substituteVariables(message, {
+              name: c.name,
+              phone: c.phone,
+              leadScore: c.leadScore,
+              detectedService: c.detectedService,
+              language: c.language,
+              status: c.status,
+              firstSeen: c.firstSeen,
+              lastSeen: c.lastSeen,
+              notes: c.notes,
+            })
+          : message
+        await sendOwnerMessage(c.id, personalized)
         sentCount += 1
       } catch {
         failedCount += 1

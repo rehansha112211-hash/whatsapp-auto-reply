@@ -31,6 +31,9 @@ function toChatMessage(m: {
   status: string
   read: boolean
   timestamp: Date
+  detectedLanguage?: string
+  translatedText?: string
+  isTranslated?: boolean
 }): ChatMessage {
   return {
     id: m.id,
@@ -41,6 +44,9 @@ function toChatMessage(m: {
     status: m.status as MessageStatus,
     read: m.read,
     timestamp: m.timestamp.toISOString(),
+    detectedLanguage: m.detectedLanguage ?? '',
+    translatedText: m.translatedText ?? '',
+    isTranslated: m.isTranslated ?? false,
   }
 }
 
@@ -95,6 +101,9 @@ export async function GET(request: Request) {
       status: true,
       read: true,
       timestamp: true,
+      detectedLanguage: true,
+      translatedText: true,
+      isTranslated: true,
     },
   })
 

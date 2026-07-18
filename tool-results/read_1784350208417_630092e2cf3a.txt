@@ -1,0 +1,2002 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// ContactProfileView — deep-dive view for a single contact.
+     5→//
+     6→// Sections:
+     7→//   1. Header bar (avatar, name, phone, status, lead badge, quick actions)
+     8→//   2. Stats grid (4 cards: messages, AI vs owner, response time, duration)
+     9→//   3. Lead Score History (recharts line chart + events list + adjust dialog)
+    10→//   4. Tabs:
+    11→//        · Conversation — full read-only message timeline + export
+    12→//        · AI Memory — editable key/value list
+    13→//        · Activity Log — merged notifications + logs timeline
+    14→//        · Details — editable contact fields
+    15→//        · Statistics — per-contact conversation insights (charts + heatmap)
+    16→//   5. Danger Zone — pin/unpin + block/unblock
+    17→//
+    18→// All API access uses apiGet/apiPost/apiPatch/apiDelete.
+    19→// ============================================================
+    20→import * as React from 'react'
+    21→import { motion } from 'framer-motion'
+    22→import { toast } from 'sonner'
+    23→import {
+    24→  ArrowLeft,
+    25→  MessageSquare,
+    26→  Bot,
+    27→  User,
+    28→  Clock,
+    29→  Brain,
+    30→  TrendingUp,
+    31→  Flame,
+    32→  Edit,
+    33→  Trash2,
+    34→  Plus,
+    35→  Save,
+    36→  Download,
+    37→  Ban,
+    38→  Pin,
+    39→  PinOff,
+    40→  Activity,
+    41→  History,
+    42→  Check,
+    43→  CheckCheck,
+    44→  AlertTriangle,
+    45→  Loader2,
+    46→  FileText,
+    47→  Braces,
+    48→  Inbox,
+    49→  ShieldAlert,
+    50→  Info,
+    51→  Bell,
+    52→  BarChart3,
+    53→  Zap,
+    54→  Calendar,
+    55→  Timer,
+    56→  Gauge,
+    57→  Smile,
+    58→  Meh,
+    59→  Frown,
+    60→  Heart,
+    61→} from 'lucide-react'
+    62→import {
+    63→  Area,
+    64→  AreaChart,
+    65→  Bar,
+    66→  BarChart,
+    67→  CartesianGrid,
+    68→  Cell,
+    69→  Line,
+    70→  LineChart,
+    71→  Pie,
+    72→  PieChart,
+    73→  ReferenceLine,
+    74→  XAxis,
+    75→  YAxis,
+    76→} from 'recharts'
+    77→
+    78→import { cn } from '@/lib/utils'
+    79→import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api-client'
+    80→import {
+    81→  colorFromString,
+    82→  downloadFile,
+    83→  formatDateTime,
+    84→  formatTime,
+    85→  initials,
+    86→  leadBadge,
+    87→  timeAgo,
+    88→  toCsv,
+    89→} from '@/lib/format'
+    90→import { LeadBadge } from '@/components/status'
+    91→import type {
+    92→  ContactStatus,
+    93→  LogCategory,
+    94→  LogLevel,
+    95→  MessageSource,
+    96→  MessageStatus,
+    97→  ViewKey,
+    98→} from '@/lib/types'
+    99→import { LEAD_CATEGORIES } from '@/lib/types'
+   100→
+   101→import { Button } from '@/components/ui/button'
+   102→import { Input } from '@/components/ui/input'
+   103→import { Textarea } from '@/components/ui/textarea'
+   104→import { Badge } from '@/components/ui/badge'
+   105→import { Card } from '@/components/ui/card'
+   106→import { Label } from '@/components/ui/label'
+   107→import { Separator } from '@/components/ui/separator'
+   108→import { Skeleton } from '@/components/ui/skeleton'
+   109→import { Slider } from '@/components/ui/slider'
+   110→import { AnimatedCounter } from '@/components/ui/animated-counter'
+   111→import {
+   112→  Tabs,
+   113→  TabsContent,
+   114→  TabsList,
+   115→  TabsTrigger,
+   116→} from '@/components/ui/tabs'
+   117→import {
+   118→  Select,
+   119→  SelectContent,
+   120→  SelectItem,
+   121→  SelectTrigger,
+   122→  SelectValue,
+   123→} from '@/components/ui/select'
+   124→import {
+   125→  Dialog,
+   126→  DialogContent,
+   127→  DialogDescription,
+   128→  DialogFooter,
+   129→  DialogHeader,
+   130→  DialogTitle,
+   131→} from '@/components/ui/dialog'
+   132→import {
+   133→  DropdownMenu,
+   134→  DropdownMenuContent,
+   135→  DropdownMenuItem,
+   136→  DropdownMenuTrigger,
+   137→} from '@/components/ui/dropdown-menu'
+   138→import {
+   139→  ChartContainer,
+   140→  ChartTooltip,
+   141→  ChartTooltipContent,
+   142→  type ChartConfig,
+   143→} from '@/components/ui/chart'
+   144→
+   145→// ---------------------------------------------------------------------------
+   146→// API payload types (mirrors /api/contacts/[id]/profile)
+   147→// ---------------------------------------------------------------------------
+   148→interface ProfileContact {
+   149→  id: string
+   150→  name: string
+   151→  phone: string
+   152→  countryCode: string
+   153→  language: string
+   154→  status: string
+   155→  leadScore: number
+   156→  detectedService: string
+   157→  notes: string
+   158→  pinned: boolean
+   159→  humanMode: boolean
+   160→  firstSeen: string
+   161→  lastSeen: string
+   162→  lastMessageAt: string | null
+   163→  createdAt: string
+   164→}
+   165→
+   166→interface ProfileMessage {
+   167→  id: string
+   168→  direction: string
+   169→  source: string
+   170→  text: string
+   171→  status: string
+   172→  read: boolean
+   173→  sentiment: string
+   174→  sentimentScore: number
+   175→  intent: string
+   176→  timestamp: string
+   177→}
+   178→
+   179→interface ProfileMemory {
+   180→  id: string
+   181→  key: string
+   182→  value: string
+   183→  updatedAt: string
+   184→}
+   185→
+   186→interface ProfileLeadScore {
+   187→  id: string
+   188→  score: number
+   189→  category: string
+   190→  reason: string
+   191→  createdAt: string
+   192→}
+   193→
+   194→interface ProfileNotification {
+   195→  id: string
+   196→  type: string
+   197→  title: string
+   198→  body: string
+   199→  severity: string
+   200→  createdAt: string
+   201→}
+   202→
+   203→interface ProfileStats {
+   204→  totalMessages: number
+   205→  incomingCount: number
+   206→  outgoingCount: number
+   207→  aiCount: number
+   208→  ownerCount: number
+   209→  avgResponseMs: number
+   210→  firstMessageAt: string | null
+   211→  lastMessageAt: string | null
+   212→  conversationDays: number
+   213→}
+   214→
+   215→interface ProfilePayload {
+   216→  contact: ProfileContact
+   217→  messages: ProfileMessage[]
+   218→  memories: ProfileMemory[]
+   219→  leadScoreHistory: ProfileLeadScore[]
+   220→  stats: ProfileStats
+   221→  notifications: ProfileNotification[]
+   222→}
+   223→
+   224→interface LogRow {
+   225→  id: string
+   226→  category: LogCategory
+   227→  level: LogLevel
+   228→  message: string
+   229→  meta: string
+   230→  contactId: string | null
+   231→  createdAt: string
+   232→}
+   233→
+   234→interface LogsResponse {
+   235→  items: LogRow[]
+   236→  hasMore: boolean
+   237→}
+   238→
+   239→// ---------------------------------------------------------------------------
+   240→// Stats payload (mirrors /api/contacts/[id]/stats)
+   241→// ---------------------------------------------------------------------------
+   242→interface StatsOverview {
+   243→  totalMessages: number
+   244→  incomingCount: number
+   245→  outgoingCount: number
+   246→  aiCount: number
+   247→  ownerCount: number
+   248→  customerInitiated: number
+   249→  avgResponseTimeMs: number
+   250→  avgCustomerResponseMs: number
+   251→  firstMessageAt: string | null
+   252→  lastMessageAt: string | null
+   253→  conversationDuration: number
+   254→  messagesPerDay: number
+   255→  longestStreak: number
+   256→}
+   257→
+   258→interface StatsTimelinePoint {
+   259→  date: string
+   260→  incoming: number
+   261→  outgoing: number
+   262→}
+   263→
+   264→interface StatsHourlyBucket {
+   265→  hour: number
+   266→  count: number
+   267→}
+   268→
+   269→interface StatsResponseTimePoint {
+   270→  replyMs: number
+   271→  timestamp: string
+   272→}
+   273→
+   274→interface StatsDayOfWeekBucket {
+   275→  day: string
+   276→  count: number
+   277→}
+   278→
+   279→interface StatsSourceBucket {
+   280→  source: string
+   281→  count: number
+   282→}
+   283→
+   284→interface StatsConversationFlowPoint {
+   285→  direction: 'in' | 'out'
+   286→  gap_minutes: number
+   287→  timestamp: string
+   288→}
+   289→
+   290→interface StatsPayload {
+   291→  overview: StatsOverview
+   292→  messageTimeline: StatsTimelinePoint[]
+   293→  hourlyHeatmap: StatsHourlyBucket[]
+   294→  responseTimes: StatsResponseTimePoint[]
+   295→  dayOfWeekDistribution: StatsDayOfWeekBucket[]
+   296→  sourceDistribution: StatsSourceBucket[]
+   297→  conversationFlow: StatsConversationFlowPoint[]
+   298→}
+   299→
+   300→// ---------------------------------------------------------------------------
+   301→// Constants
+   302→// ---------------------------------------------------------------------------
+   303→const CARD_CLS = 'rounded-xl border bg-card/60 backdrop-blur p-5 card-hover'
+   304→
+   305→const STATUS_BADGE: Record<ContactStatus, string> = {
+   306→  new: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+   307→  active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   308→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   309→  customer: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   310→  blocked: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   311→}
+   312→
+   313→const MEMORY_KEY_LABELS: Record<string, string> = {
+   314→  name: 'Name',
+   315→  business: 'Business',
+   316→  requirements: 'Requirements',
+   317→  budget: 'Budget',
+   318→  language: 'Language',
+   319→  last_intent: 'Last intent',
+   320→  intent: 'Intent',
+   321→  project_status: 'Project status',
+   322→  timeline: 'Timeline',
+   323→  location: 'Location',
+   324→  service: 'Service',
+   325→  contact_method: 'Contact method',
+   326→}
+   327→
+   328→const LANGUAGE_OPTIONS = [
+   329→  { value: 'en', label: 'English' },
+   330→  { value: 'hi', label: 'Hindi' },
+   331→  { value: 'hinglish', label: 'Hinglish' },
+   332→]
+   333→
+   334→const STATUS_OPTIONS: { value: ContactStatus; label: string }[] = [
+   335→  { value: 'new', label: 'New' },
+   336→  { value: 'active', label: 'Active' },
+   337→  { value: 'lead', label: 'Lead' },
+   338→  { value: 'customer', label: 'Customer' },
+   339→  { value: 'blocked', label: 'Blocked' },
+   340→]
+   341→
+   342→const LEAD_SCORE_CONFIG: ChartConfig = {
+   343→  score: { label: 'Lead Score', color: '#10b981' }, // emerald-500
+   344→}
+   345→
+   346→const HOT_LEAD_THRESHOLD = 70
+   347→
+   348→// Stats-tab chart configs — WhatsApp-green theme (emerald/teal/sky).
+   349→const TIMELINE_CONFIG: ChartConfig = {
+   350→  incoming: { label: 'Incoming', color: '#10b981' }, // emerald-500
+   351→  outgoing: { label: 'Outgoing', color: '#14b8a6' }, // teal-500
+   352→}
+   353→
+   354→const HOURLY_CONFIG: ChartConfig = {
+   355→  count: { label: 'Messages', color: '#10b981' },
+   356→}
+   357→
+   358→const DOW_CONFIG: ChartConfig = {
+   359→  count: { label: 'Messages', color: '#14b8a6' },
+   360→}
+   361→
+   362→const RESPONSE_TREND_CONFIG: ChartConfig = {
+   363→  replyMs: { label: 'AI reply time', color: '#10b981' },
+   364→}
+   365→
+   366→const SOURCE_PIE_COLORS: Record<string, string> = {
+   367→  ai: '#10b981', // emerald-500
+   368→  owner: '#0ea5e9', // sky-500
+   369→  customer: '#a3a3a3', // zinc-400
+   370→}
+   371→
+   372→const HEATMAP_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+   373→
+   374→// ---------------------------------------------------------------------------
+   375→// Sentiment badge — small colored dot + emoji label used on the
+   376→// conversation timeline and the per-contact stats summary card.
+   377→// ---------------------------------------------------------------------------
+   378→type SentimentKey = 'positive' | 'neutral' | 'negative' | 'urgent' | 'unknown'
+   379→
+   380→const SENTIMENT_META: Record<
+   381→  SentimentKey,
+   382→  { label: string; emoji: string; dot: string; chip: string; icon: React.ReactNode }
+   383→> = {
+   384→  positive: {
+   385→    label: 'Positive',
+   386→    emoji: '😊',
+   387→    dot: 'bg-emerald-500',
+   388→    chip: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+   389→    icon: <Smile className="h-3 w-3" />,
+   390→  },
+   391→  neutral: {
+   392→    label: 'Neutral',
+   393→    emoji: '😐',
+   394→    dot: 'bg-zinc-400',
+   395→    chip: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30',
+   396→    icon: <Meh className="h-3 w-3" />,
+   397→  },
+   398→  negative: {
+   399→    label: 'Negative',
+   400→    emoji: '😟',
+   401→    dot: 'bg-rose-500',
+   402→    chip: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
+   403→    icon: <Frown className="h-3 w-3" />,
+   404→  },
+   405→  urgent: {
+   406→    label: 'Urgent',
+   407→    emoji: '⚠️',
+   408→    dot: 'bg-amber-500',
+   409→    chip: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+   410→    icon: <AlertTriangle className="h-3 w-3" />,
+   411→  },
+   412→  unknown: {
+   413→    label: '—',
+   414→    emoji: '·',
+   415→    dot: 'bg-muted-foreground',
+   416→    chip: 'bg-muted text-muted-foreground border-border',
+   417→    icon: <Info className="h-3 w-3" />,
+   418→  },
+   419→}
+   420→
+   421→function sentimentMeta(s: string): { label: string; emoji: string; dot: string; chip: string; icon: React.ReactNode } {
+   422→  return SENTIMENT_META[s as SentimentKey] ?? SENTIMENT_META.unknown
+   423→}
+   424→
+   425→/** Small inline sentiment pill (dot + emoji + label). */
+   426→function SentimentBadge({ sentiment }: { sentiment: string }) {
+   427→  const meta = sentimentMeta(sentiment)
+   428→  if (sentiment === 'unknown' || sentiment === '' || !sentiment) {
+   429→    return null
+   430→  }
+   431→  return (
+   432→    <span
+   433→      className={cn(
+   434→        'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none',
+   435→        meta.chip,
+   436→      )}
+   437→      title={`Sentiment: ${meta.label}`}
+   438→    >
+   439→      <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} aria-hidden />
+   440→      <span>{meta.emoji}</span>
+   441→      <span>{meta.label}</span>
+   442→    </span>
+   443→  )
+   444→}
+   445→
+   446→// ---------------------------------------------------------------------------
+   447→// Helpers
+   448→// ---------------------------------------------------------------------------
+   449→function formatResponseTime(ms: number): string {
+   450→  if (!ms || ms <= 0) return '—'
+   451→  if (ms < 1000) return `${ms}ms`
+   452→  return `${(ms / 1000).toFixed(1)}s`
+   453→}
+   454→
+   455→/** Format a millisecond duration as a compact human string (e.g. "2m 13s", "1h 5m", "3d"). */
+   456→function formatDurationMs(ms: number): string {
+   457→  if (!ms || ms <= 0) return '—'
+   458→  const totalSec = Math.round(ms / 1000)
+   459→  if (totalSec < 60) return `${totalSec}s`
+   460→  const totalMin = Math.round(totalSec / 60)
+   461→  if (totalMin < 60) return `${totalMin}m`
+   462→  const totalHr = Math.round(totalMin / 60)
+   463→  if (totalHr < 24) {
+   464→    const m = totalMin % 60
+   465→    return m === 0 ? `${totalHr}h` : `${totalHr}h ${m}m`
+   466→  }
+   467→  const days = Math.round(totalHr / 24)
+   468→  const h = totalHr % 24
+   469→  return h === 0 ? `${days}d` : `${days}d ${h}h`
+   470→}
+   471→
+   472→/** Format an hour integer (0-23) as a 12-hour clock label like "3 PM". */
+   473→function formatHourLabel(h: number): string {
+   474→  const ampm = h < 12 ? 'AM' : 'PM'
+   475→  const hr = h % 12 === 0 ? 12 : h % 12
+   476→  return `${hr} ${ampm}`
+   477→}
+   478→
+   479→function memoryLabel(key: string): string {
+   480→  return (
+   481→    MEMORY_KEY_LABELS[key] ??
+   482→    key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+   483→  )
+   484→}
+   485→
+   486→function categoryLabel(svc: string): string {
+   487→  const map: Record<string, string> = {
+   488→    website: 'Website Development',
+   489→    app: 'Android App Development',
+   490→    crm: 'CRM Development',
+   491→    software: 'Business Software',
+   492→    ai_automation: 'AI Automation',
+   493→    maintenance: 'Maintenance',
+   494→    general: 'General Inquiry',
+   495→    support: 'Support Request',
+   496→    high_priority: 'High Priority',
+   497→  }
+   498→  return map[svc] ?? (svc ? svc : '—')
+   499→}
+   500→
+   501→function groupByDay(messages: ProfileMessage[]): { day: string; items: ProfileMessage[] }[] {
+   502→  const out: { day: string; items: ProfileMessage[] }[] = []
+   503→  for (const m of messages) {
+   504→    const d = new Date(m.timestamp)
+   505→    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+   506→    const last = out[out.length - 1]
+   507→    if (last && last.day === key) last.items.push(m)
+   508→    else out.push({ day: key, items: [m] })
+   509→  }
+   510→  return out
+   511→}
+   512→
+   513→function formatDayHeader(day: string): string {
+   514→  const d = new Date(day + 'T00:00:00')
+   515→  const today = new Date()
+   516→  const yesterday = new Date()
+   517→  yesterday.setDate(today.getDate() - 1)
+   518→  const sameDay = (a: Date, b: Date) =>
+   519→    a.getFullYear() === b.getFullYear() &&
+   520→    a.getMonth() === b.getMonth() &&
+   521→    a.getDate() === b.getDate()
+   522→  if (sameDay(d, today)) return 'Today'
+   523→  if (sameDay(d, yesterday)) return 'Yesterday'
+   524→  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+   525→}
+   526→
+   527→function shortDate(iso: string): string {
+   528→  const d = new Date(iso)
+   529→  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+   530→}
+   531→
+   532→// ---------------------------------------------------------------------------
+   533→// Small presentational components
+   534→// ---------------------------------------------------------------------------
+   535→function Avatar({ name, phone }: { name: string; phone: string }) {
+   536→  const cls = colorFromString(name || phone)
+   537→  return (
+   538→    <div
+   539→      className={cn(
+   540→        'grid h-14 w-14 shrink-0 place-items-center rounded-full text-lg font-bold',
+   541→        cls,
+   542→      )}
+   543→      aria-hidden
+   544→    >
+   545→      {initials(name || phone)}
+   546→    </div>
+   547→  )
+   548→}
+   549→
+   550→function SectionHeader({
+   551→  icon,
+   552→  title,
+   553→  description,
+   554→  action,
+   555→}: {
+   556→  icon: React.ReactNode
+   557→  title: string
+   558→  description?: string
+   559→  action?: React.ReactNode
+   560→}) {
+   561→  return (
+   562→    <div className="flex items-center gap-3 border-b border-border/60 pb-3">
+   563→      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   564→        {icon}
+   565→      </span>
+   566→      <div className="min-w-0 flex-1">
+   567→        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+   568→        {description && (
+   569→          <p className="truncate text-xs text-muted-foreground">{description}</p>
+   570→        )}
+   571→      </div>
+   572→      {action}
+   573→    </div>
+   574→  )
+   575→}
+   576→
+   577→function DeliveryIcon({ status }: { status: MessageStatus }) {
+   578→  if (status === 'failed') {
+   579→    return <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+   580→  }
+   581→  if (status === 'pending') {
+   582→    return <Clock className="h-3.5 w-3.5 opacity-70" />
+   583→  }
+   584→  if (status === 'sent') {
+   585→    return <Check className="h-3.5 w-3.5 opacity-70" />
+   586→  }
+   587→  if (status === 'delivered') {
+   588→    return <CheckCheck className="h-3.5 w-3.5 opacity-70" />
+   589→  }
+   590→  // read
+   591→  return <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+   592→}
+   593→
+   594→function SourceBadge({ source }: { source: MessageSource }) {
+   595→  if (source === 'customer') return null
+   596→  const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+   597→    ai: {
+   598→      label: 'AI',
+   599→      cls: 'bg-emerald-500/20 text-emerald-200',
+   600→      icon: <Bot className="h-3 w-3" />,
+   601→    },
+   602→    owner: {
+   603→      label: 'You',
+   604→      cls: 'bg-sky-500/20 text-sky-200',
+   605→      icon: <User className="h-3 w-3" />,
+   606→    },
+   607→    system: {
+   608→      label: 'System',
+   609→      cls: 'bg-zinc-500/20 text-zinc-200',
+   610→      icon: <Info className="h-3 w-3" />,
+   611→    },
+   612→  }
+   613→  const cfg = map[source]
+   614→  if (!cfg) return null
+   615→  return (
+   616→    <span
+   617→      className={cn(
+   618→        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+   619→        cfg.cls,
+   620→      )}
+   621→    >
+   622→      {cfg.icon}
+   623→      {cfg.label}
+   624→    </span>
+   625→  )
+   626→}
+   627→
+   628→function SeverityIcon({ severity }: { severity: string }) {
+   629→  const map: Record<string, { icon: React.ReactNode; cls: string }> = {
+   630→    success: { icon: <Check className="h-3.5 w-3.5" />, cls: 'bg-emerald-500/20 text-emerald-300' },
+   631→    warning: { icon: <AlertTriangle className="h-3.5 w-3.5" />, cls: 'bg-amber-500/20 text-amber-300' },
+   632→    error: { icon: <AlertTriangle className="h-3.5 w-3.5" />, cls: 'bg-rose-500/20 text-rose-300' },
+   633→    info: { icon: <Info className="h-3.5 w-3.5" />, cls: 'bg-sky-500/20 text-sky-300' },
+   634→  }
+   635→  const cfg = map[severity] ?? map.info
+   636→  return (
+   637→    <span className={cn('grid h-7 w-7 shrink-0 place-items-center rounded-full', cfg.cls)}>
+   638→      {cfg.icon}
+   639→    </span>
+   640→  )
+   641→}
+   642→
+   643→function LogLevelDot({ level }: { level: LogLevel }) {
+   644→  const map: Record<LogLevel, string> = {
+   645→    info: 'bg-sky-400',
+   646→    warn: 'bg-amber-400',
+   647→    error: 'bg-rose-400',
+   648→    debug: 'bg-zinc-400',
+   649→  }
+   650→  return <span className={cn('h-2 w-2 shrink-0 rounded-full', map[level])} />
+   651→}
+   652→
+   653→// ---------------------------------------------------------------------------
+   654→// Main component
+   655→// ---------------------------------------------------------------------------
+   656→export function ContactProfileView({
+   657→  contactId,
+   658→  onBack,
+   659→  onNavigate,
+   660→}: {
+   661→  contactId: string
+   662→  onBack: () => void
+   663→  onNavigate?: (v: ViewKey) => void
+   664→}) {
+   665→  const [data, setData] = React.useState<ProfilePayload | null>(null)
+   666→  const [logs, setLogs] = React.useState<LogRow[]>([])
+   667→  const [loading, setLoading] = React.useState(true)
+   668→  const [error, setError] = React.useState<string | null>(null)
+   669→  const [tab, setTab] = React.useState<string>('conversation')
+   670→
+   671→  // ----- Load profile + logs -----
+   672→  const loadAll = React.useCallback(async () => {
+   673→    try {
+   674→      const [profile, logsResp] = await Promise.all([
+   675→        apiGet<ProfilePayload>(`/api/contacts/${contactId}/profile`),
+   676→        apiGet<LogsResponse>(`/api/logs?contactId=${encodeURIComponent(contactId)}&limit=200`),
+   677→      ])
+   678→      setData(profile)
+   679→      setLogs(logsResp.items)
+   680→      setError(null)
+   681→    } catch (err) {
+   682→      const msg = err instanceof Error ? err.message : 'Failed to load contact profile'
+   683→      setError(msg)
+   684→      toast.error(msg)
+   685→    } finally {
+   686→      setLoading(false)
+   687→    }
+   688→  }, [contactId])
+   689→
+   690→  React.useEffect(() => {
+   691→    setLoading(true)
+   692→    void loadAll()
+   693→  }, [loadAll])
+   694→
+   695→  // ----- Quick action: toggle human mode -----
+   696→  const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+   697→  const runAction = async (key: string, fn: () => Promise<void>) => {
+   698→    setActionLoading(key)
+   699→    try {
+   700→      await fn()
+   701→    } finally {
+   702→      setActionLoading(null)
+   703→    }
+   704→  }
+   705→
+   706→  const toggleHumanMode = async () => {
+   707→    if (!data) return
+   708→    const next = !data.contact.humanMode
+   709→    try {
+   710→      await apiPost(`/api/contacts/${contactId}/human-mode`, { enabled: next })
+   711→      setData({
+   712→        ...data,
+   713→        contact: { ...data.contact, humanMode: next },
+   714→      })
+   715→      toast.success(next ? 'Human mode enabled — AI paused' : 'AI auto-reply resumed')
+   716→    } catch (err) {
+   717→      toast.error(err instanceof Error ? err.message : 'Failed to toggle human mode')
+   718→    }
+   719→  }
+   720→
+   721→  const togglePinned = async () => {
+   722→    if (!data) return
+   723→    const next = !data.contact.pinned
+   724→    try {
+   725→      await apiPatch(`/api/contacts/${contactId}`, { pinned: next })
+   726→      setData({
+   727→        ...data,
+   728→        contact: { ...data.contact, pinned: next },
+   729→      })
+   730→      toast.success(next ? 'Contact pinned' : 'Contact unpinned')
+   731→    } catch (err) {
+   732→      toast.error(err instanceof Error ? err.message : 'Failed to toggle pin')
+   733→    }
+   734→  }
+   735→
+   736→  const setStatus = async (status: ContactStatus) => {
+   737→    if (!data) return
+   738→    try {
+   739→      await apiPatch(`/api/contacts/${contactId}`, { status })
+   740→      setData({
+   741→        ...data,
+   742→        contact: { ...data.contact, status },
+   743→      })
+   744→      toast.success(`Status set to "${status}"`)
+   745→    } catch (err) {
+   746→      toast.error(err instanceof Error ? err.message : 'Failed to update status')
+   747→    }
+   748→  }
+   749→
+   750→  // ----- Loading state -----
+   751→  if (loading && !data) {
+   752→    return (
+   753→      <div className="mx-auto w-full max-w-6xl space-y-4 p-4 sm:p-6">
+   754→        <div className="flex items-center gap-3">
+   755→          <Skeleton className="h-10 w-10 rounded-full" />
+   756→          <div className="space-y-2">
+   757→            <Skeleton className="h-6 w-48" />
+   758→            <Skeleton className="h-4 w-32" />
+   759→          </div>
+   760→        </div>
+   761→        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+   762→          {Array.from({ length: 4 }).map((_, i) => (
+   763→            <Skeleton key={i} className="h-28 w-full rounded-xl" />
+   764→          ))}
+   765→        </div>
+   766→        <Skeleton className="h-72 w-full rounded-xl" />
+   767→        <Skeleton className="h-96 w-full rounded-xl" />
+   768→      </div>
+   769→    )
+   770→  }
+   771→
+   772→  // ----- Error state -----
+   773→  if (error && !data) {
+   774→    return (
+   775→      <div className="mx-auto w-full max-w-2xl p-6">
+   776→        <Card className={cn(CARD_CLS, 'flex flex-col items-center gap-4 py-12 text-center')}>
+   777→          <div className="grid h-12 w-12 place-items-center rounded-full bg-rose-500/15 text-rose-300">
+   778→            <AlertTriangle className="h-6 w-6" />
+   779→          </div>
+   780→          <div>
+   781→            <h2 className="text-lg font-semibold">Could not load contact profile</h2>
+   782→            <p className="mt-1 text-sm text-muted-foreground">{error}</p>
+   783→          </div>
+   784→          <div className="flex gap-2">
+   785→            <Button variant="outline" onClick={onBack}>
+   786→              <ArrowLeft className="h-4 w-4" /> Back
+   787→            </Button>
+   788→            <Button onClick={() => void loadAll()}>
+   789→              <Loader2 className="h-4 w-4" /> Retry
+   790→            </Button>
+   791→          </div>
+   792→        </Card>
+   793→      </div>
+   794→    )
+   795→  }
+   796→
+   797→  if (!data) return null
+   798→
+   799→  const { contact, messages, memories, leadScoreHistory, stats, notifications } = data
+   800→  const statusCls = STATUS_BADGE[contact.status as ContactStatus] ?? STATUS_BADGE.new
+   801→
+   802→  return (
+   803→    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6">
+   804→      {/* ---------- Header bar ---------- */}
+   805→      <motion.div
+   806→        initial={{ opacity: 0, y: 8 }}
+   807→        animate={{ opacity: 1, y: 0 }}
+   808→        transition={{ duration: 0.25 }}
+   809→      >
+   810→        <Card className={CARD_CLS}>
+   811→          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+   812→            <div className="flex items-center gap-3">
+   813→              <Button
+   814→                variant="outline"
+   815→                size="icon"
+   816→                onClick={onBack}
+   817→                aria-label="Back to chats"
+   818→                className="shrink-0"
+   819→              >
+   820→                <ArrowLeft className="h-4 w-4" />
+   821→              </Button>
+   822→              <Avatar name={contact.name} phone={contact.phone} />
+   823→            </div>
+   824→            <div className="min-w-0 flex-1">
+   825→              <div className="flex flex-wrap items-center gap-2">
+   826→                <h1 className="text-2xl font-bold tracking-tight">{contact.name}</h1>
+   827→                <Badge variant="outline" className={cn('px-2 py-0 text-xs capitalize', statusCls)}>
+   828→                  {contact.status}
+   829→                </Badge>
+   830→                <LeadBadge score={contact.leadScore} className="px-2 py-0.5 text-xs" />
+   831→                {contact.humanMode && (
+   832→                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/15 text-amber-300">
+   833→                    <User className="mr-1 h-3 w-3" /> Human mode
+   834→                  </Badge>
+   835→                )}
+   836→                {contact.pinned && (
+   837→                  <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/15 text-emerald-300">
+   838→                    <Pin className="mr-1 h-3 w-3" /> Pinned
+   839→                  </Badge>
+   840→                )}
+   841→              </div>
+   842→              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+   843→                <span className="font-mono">{contact.phone}</span>
+   844→                {contact.countryCode && <span>· {contact.countryCode}</span>}
+   845→                <span>· {categoryLabel(contact.detectedService)}</span>
+   846→                <span>· {contact.language}</span>
+   847→              </div>
+   848→            </div>
+   849→            <div className="flex flex-wrap gap-2">
+   850→              <Button
+   851→                variant="outline"
+   852→                size="sm"
+   853→                onClick={() => onNavigate?.('chats')}
+   854→                className="gap-1.5"
+   855→              >
+   856→                <MessageSquare className="h-4 w-4" /> Open Chat
+   857→              </Button>
+   858→              <Button
+   859→                variant={contact.humanMode ? 'default' : 'outline'}
+   860→                size="sm"
+   861→                onClick={() => void runAction('human', toggleHumanMode)}
+   862→                disabled={actionLoading === 'human'}
+   863→                className="gap-1.5"
+   864→              >
+   865→                {actionLoading === 'human' ? (
+   866→                  <Loader2 className="h-4 w-4 animate-spin" />
+   867→                ) : contact.humanMode ? (
+   868→                  <Bot className="h-4 w-4" />
+   869→                ) : (
+   870→                  <User className="h-4 w-4" />
+   871→                )}
+   872→                {contact.humanMode ? 'Resume AI' : 'Take Over'}
+   873→              </Button>
+   874→            </div>
+   875→          </div>
+   876→        </Card>
+   877→      </motion.div>
+   878→
+   879→      {/* ---------- Section 1: Stats Grid ---------- */}
+   880→      <motion.div
+   881→        initial={{ opacity: 0, y: 8 }}
+   882→        animate={{ opacity: 1, y: 0 }}
+   883→        transition={{ delay: 0.05, duration: 0.25 }}
+   884→        className="grid grid-cols-2 gap-4 lg:grid-cols-4"
+   885→      >
+   886→        <StatCard
+   887→          icon={<MessageSquare className="h-5 w-5" />}
+   888→          accent="bg-emerald-500/15 text-emerald-300"
+   889→          label="Total Messages"
+   890→          value={stats.totalMessages}
+   891→          sub={
+   892→            <span>
+   893→              <span className="text-emerald-400">{stats.incomingCount}</span> in ·{' '}
+   894→              <span className="text-sky-400">{stats.outgoingCount}</span> out
+   895→            </span>
+   896→          }
+   897→        />
+   898→        <StatCard
+   899→          icon={<Bot className="h-5 w-5" />}
+   900→          accent="bg-teal-500/15 text-teal-300"
+   901→          label="AI vs Owner"
+   902→          valueText={`${stats.aiCount} / ${stats.ownerCount}`}
+   903→          sub={
+   904→            <span>
+   905→              {stats.aiCount + stats.ownerCount > 0
+   906→                ? `${Math.round((stats.aiCount / (stats.aiCount + stats.ownerCount)) * 100)}% AI`
+   907→                : 'No replies yet'}
+   908→            </span>
+   909→          }
+   910→        />
+   911→        <StatCard
+   912→          icon={<Clock className="h-5 w-5" />}
+   913→          accent="bg-amber-500/15 text-amber-300"
+   914→          label="Avg Response"
+   915→          valueText={formatResponseTime(stats.avgResponseMs)}
+   916→          sub={<span>AI reply speed</span>}
+   917→        />
+   918→        <StatCard
+   919→          icon={<History className="h-5 w-5" />}
+   920→          accent="bg-cyan-500/15 text-cyan-300"
+   921→          label="Duration"
+   922→          value={stats.conversationDays}
+   923→          suffix={stats.conversationDays === 1 ? ' day' : ' days'}
+   924→          sub={
+   925→            <span>
+   926→              {stats.firstMessageAt ? `from ${shortDate(stats.firstMessageAt)}` : 'No messages yet'}
+   927→            </span>
+   928→          }
+   929→        />
+   930→      </motion.div>
+   931→
+   932→      {/* ---------- Section 2: Lead Score History ---------- */}
+   933→      <motion.div
+   934→        initial={{ opacity: 0, y: 8 }}
+   935→        animate={{ opacity: 1, y: 0 }}
+   936→        transition={{ delay: 0.1, duration: 0.25 }}
+   937→      >
+   938→        <LeadScoreSection
+   939→          contactId={contactId}
+   940→          history={leadScoreHistory}
+   941→          currentScore={contact.leadScore}
+   942→          currentCategory={contact.detectedService}
+   943→          onAdjusted={() => void loadAll()}
+   944→        />
+   945→      </motion.div>
+   946→
+   947→      {/* ---------- Section 3: Tabs ---------- */}
+   948→      <motion.div
+   949→        initial={{ opacity: 0, y: 8 }}
+   950→        animate={{ opacity: 1, y: 0 }}
+   951→        transition={{ delay: 0.15, duration: 0.25 }}
+   952→      >
+   953→        <Card className={CARD_CLS}>
+   954→          <Tabs value={tab} onValueChange={setTab}>
+   955→            <TabsList className="flex w-full flex-wrap justify-start gap-1 sm:w-auto">
+   956→              <TabsTrigger value="conversation" className="gap-1.5">
+   957→                <MessageSquare className="h-3.5 w-3.5" /> Conversation
+   958→              </TabsTrigger>
+   959→              <TabsTrigger value="memory" className="gap-1.5">
+   960→                <Brain className="h-3.5 w-3.5" /> AI Memory
+   961→                <span className="ml-1 rounded bg-muted px-1.5 py-0 text-[10px] tabular-nums">
+   962→                  {memories.length}
+   963→                </span>
+   964→              </TabsTrigger>
+   965→              <TabsTrigger value="activity" className="gap-1.5">
+   966→                <Activity className="h-3.5 w-3.5" /> Activity
+   967→              </TabsTrigger>
+   968→              <TabsTrigger value="details" className="gap-1.5">
+   969→                <Edit className="h-3.5 w-3.5" /> Details
+   970→              </TabsTrigger>
+   971→              <TabsTrigger value="statistics" className="gap-1.5">
+   972→                <BarChart3 className="h-3.5 w-3.5" /> Statistics
+   973→              </TabsTrigger>
+   974→            </TabsList>
+   975→
+   976→            <TabsContent value="conversation" className="mt-4">
+   977→              <ConversationTab messages={messages} contactName={contact.name} contactPhone={contact.phone} />
+   978→            </TabsContent>
+   979→
+   980→            <TabsContent value="memory" className="mt-4">
+   981→              <MemoryTab contactId={contactId} memories={memories} onChanged={() => void loadAll()} />
+   982→            </TabsContent>
+   983→
+   984→            <TabsContent value="activity" className="mt-4">
+   985→              <ActivityTab notifications={notifications} logs={logs} />
+   986→            </TabsContent>
+   987→
+   988→            <TabsContent value="details" className="mt-4">
+   989→              <DetailsTab
+   990→                contactId={contactId}
+   991→                contact={contact}
+   992→                onChanged={() => void loadAll()}
+   993→              />
+   994→            </TabsContent>
+   995→
+   996→            <TabsContent value="statistics" className="mt-4">
+   997→              <StatisticsTab contactId={contactId} messages={messages} />
+   998→            </TabsContent>
+   999→          </Tabs>
+  1000→        </Card>
+  1001→      </motion.div>
+  1002→
+  1003→      {/* ---------- Section 4: Danger Zone ---------- */}
+  1004→      <motion.div
+  1005→        initial={{ opacity: 0, y: 8 }}
+  1006→        animate={{ opacity: 1, y: 0 }}
+  1007→        transition={{ delay: 0.2, duration: 0.25 }}
+  1008→      >
+  1009→        <Card className={cn(CARD_CLS, 'border-rose-500/30 bg-rose-500/5')}>
+  1010→          <SectionHeader
+  1011→            icon={<ShieldAlert className="h-4 w-4 text-rose-300" />}
+  1012→            title="Danger Zone"
+  1013→            description="Irreversible & high-impact actions"
+  1014→          />
+  1015→          <div className="mt-4 flex flex-wrap gap-2">
+  1016→            <Button
+  1017→              variant="outline"
+  1018→              size="sm"
+  1019→              onClick={() => void runAction('pin', togglePinned)}
+  1020→              disabled={actionLoading === 'pin'}
+  1021→              className="gap-1.5"
+  1022→            >
+  1023→              {actionLoading === 'pin' ? (
+  1024→                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1025→              ) : contact.pinned ? (
+  1026→                <PinOff className="h-3.5 w-3.5" />
+  1027→              ) : (
+  1028→                <Pin className="h-3.5 w-3.5" />
+  1029→              )}
+  1030→              {contact.pinned ? 'Unpin contact' : 'Pin contact'}
+  1031→            </Button>
+  1032→            {contact.status !== 'blocked' ? (
+  1033→              <Button
+  1034→                variant="destructive"
+  1035→                size="sm"
+  1036→                onClick={() => void runAction('block', () => setStatus('blocked'))}
+  1037→                disabled={actionLoading === 'block'}
+  1038→                className="gap-1.5"
+  1039→              >
+  1040→                {actionLoading === 'block' ? (
+  1041→                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1042→                ) : (
+  1043→                  <Ban className="h-3.5 w-3.5" />
+  1044→                )}
+  1045→                Block contact
+  1046→              </Button>
+  1047→            ) : (
+  1048→              <Button
+  1049→                variant="outline"
+  1050→                size="sm"
+  1051→                onClick={() => void runAction('unblock', () => setStatus('active'))}
+  1052→                disabled={actionLoading === 'unblock'}
+  1053→                className="gap-1.5"
+  1054→              >
+  1055→                {actionLoading === 'unblock' ? (
+  1056→                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1057→                ) : (
+  1058→                  <Check className="h-3.5 w-3.5" />
+  1059→                )}
+  1060→                Unblock contact
+  1061→              </Button>
+  1062→            )}
+  1063→          </div>
+  1064→        </Card>
+  1065→      </motion.div>
+  1066→    </div>
+  1067→  )
+  1068→}
+  1069→
+  1070→// ---------------------------------------------------------------------------
+  1071→// Stat Card
+  1072→// ---------------------------------------------------------------------------
+  1073→function StatCard({
+  1074→  icon,
+  1075→  accent,
+  1076→  label,
+  1077→  value,
+  1078→  valueText,
+  1079→  suffix,
+  1080→  sub,
+  1081→}: {
+  1082→  icon: React.ReactNode
+  1083→  accent: string
+  1084→  label: string
+  1085→  value?: number
+  1086→  valueText?: string
+  1087→  suffix?: string
+  1088→  sub?: React.ReactNode
+  1089→}) {
+  1090→  return (
+  1091→    <Card className={cn(CARD_CLS, 'relative overflow-hidden')}>
+  1092→      <div
+  1093→        className={cn(
+  1094→          'pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full opacity-20 blur-2xl',
+  1095→          accent,
+  1096→        )}
+  1097→      />
+  1098→      <div className={cn('grid h-9 w-9 place-items-center rounded-lg', accent)}>{icon}</div>
+  1099→      <div className="mt-3 text-3xl font-bold tabular-nums leading-none">
+  1100→        {valueText !== undefined ? (
+  1101→          valueText
+  1102→        ) : (
+  1103→          <AnimatedCounter value={value ?? 0} suffix={suffix} />
+  1104→        )}
+  1105→      </div>
+  1106→      <div className="mt-1.5 text-xs font-medium text-muted-foreground">{label}</div>
+  1107→      {sub && <div className="mt-1.5 text-[11px] text-muted-foreground">{sub}</div>}
+  1108→    </Card>
+  1109→  )
+  1110→}
+  1111→
+  1112→// ---------------------------------------------------------------------------
+  1113→// Section 2 — Lead Score History
+  1114→// ---------------------------------------------------------------------------
+  1115→function LeadScoreSection({
+  1116→  contactId,
+  1117→  history,
+  1118→  currentScore,
+  1119→  currentCategory,
+  1120→  onAdjusted,
+  1121→}: {
+  1122→  contactId: string
+  1123→  history: ProfileLeadScore[]
+  1124→  currentScore: number
+  1125→  currentCategory: string
+  1126→  onAdjusted: () => void
+  1127→}) {
+  1128→  const [dialogOpen, setDialogOpen] = React.useState(false)
+  1129→
+  1130→  // Build chart data — always include the current contact score as the final
+  1131→  // point so the chart shows the latest state even if history is sparse.
+  1132→  const chartData = React.useMemo(() => {
+  1133→    const points = history.map((h) => ({
+  1134→      date: shortDate(h.createdAt),
+  1135→      score: h.score,
+  1136→      ts: h.createdAt,
+  1137→    }))
+  1138→    // Append the current score as "now" if it differs from the last entry.
+  1139→    const last = points[points.length - 1]
+  1140→    if (!last || last.score !== currentScore) {
+  1141→      points.push({ date: 'Now', score: currentScore, ts: new Date().toISOString() })
+  1142→    }
+  1143→    return points
+  1144→  }, [history, currentScore])
+  1145→
+  1146→  return (
+  1147→    <Card className={CARD_CLS}>
+  1148→      <SectionHeader
+  1149→        icon={<TrendingUp className="h-4 w-4" />}
+  1150→        title="Lead Score History"
+  1151→        description={`Current: ${currentScore} · ${categoryLabel(currentCategory)}`}
+  1152→        action={
+  1153→          <Button size="sm" onClick={() => setDialogOpen(true)} className="gap-1.5">
+  1154→            <Flame className="h-3.5 w-3.5" /> Adjust Score
+  1155→          </Button>
+  1156→        }
+  1157→      />
+  1158→
+  1159→      <div className="mt-4">
+  1160→        {chartData.length < 2 ? (
+  1161→          <div className="flex h-[200px] w-full items-center justify-center text-xs text-muted-foreground">
+  1162→            Not enough history yet — adjust the score to begin tracking.
+  1163→          </div>
+  1164→        ) : (
+  1165→          <ChartContainer config={LEAD_SCORE_CONFIG} className="h-[200px] w-full">
+  1166→            <AreaChart data={chartData} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+  1167→              <defs>
+  1168→                <linearGradient id="leadScoreFill" x1="0" y1="0" x2="0" y2="1">
+  1169→                  <stop offset="0%" stopColor="var(--color-score)" stopOpacity={0.5} />
+  1170→                  <stop offset="100%" stopColor="var(--color-score)" stopOpacity={0.05} />
+  1171→                </linearGradient>
+  1172→              </defs>
+  1173→              <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+  1174→              <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} />
+  1175→              <YAxis
+  1176→                domain={[0, 100]}
+  1177→                ticks={[0, 25, 50, 75, 100]}
+  1178→                tickLine={false}
+  1179→                axisLine={false}
+  1180→                width={32}
+  1181→              />
+  1182→              <ChartTooltip
+  1183→                content={
+  1184→                  <ChartTooltipContent
+  1185→                    indicator="dot"
+  1186→                    formatter={(value) => (
+  1187→                      <span className="font-mono tabular-nums text-foreground">
+  1188→                        Score: {Number(value)}
+  1189→                      </span>
+  1190→                    )}
+  1191→                  />
+  1192→                }
+  1193→              />
+  1194→              <ReferenceLine
+  1195→                y={HOT_LEAD_THRESHOLD}
+  1196→                stroke="#f59e0b"
+  1197→                strokeDasharray="4 4"
+  1198→                strokeOpacity={0.7}
+  1199→                label={{
+  1200→                  value: `Hot (${HOT_LEAD_THRESHOLD})`,
+  1201→                  position: 'insideTopRight',
+  1202→                  fill: '#f59e0b',
+  1203→                  fontSize: 10,
+  1204→                }}
+  1205→              />
+  1206→              <Area
+  1207→                dataKey="score"
+  1208→                type="monotone"
+  1209→                stroke="var(--color-score)"
+  1210→                strokeWidth={2.5}
+  1211→                fill="url(#leadScoreFill)"
+  1212→                dot={{ r: 3, fill: 'var(--color-score)', strokeWidth: 0 }}
+  1213→                activeDot={{ r: 5 }}
+  1214→              />
+  1215→            </AreaChart>
+  1216→          </ChartContainer>
+  1217→        )}
+  1218→      </div>
+  1219→
+  1220→      {/* Events list */}
+  1221→      <Separator className="my-4" />
+  1222→      <div className="space-y-2">
+  1223→        <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+  1224→          Score Events ({history.length})
+  1225→        </div>
+  1226→        {history.length === 0 ? (
+  1227→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-3 text-xs text-muted-foreground">
+  1228→            No score events recorded yet.
+  1229→          </div>
+  1230→        ) : (
+  1231→          <div className="max-h-72 space-y-1.5 overflow-y-auto scrollbar-thin pr-1">
+  1232→            {[...history].reverse().map((h) => (
+  1233→              <div
+  1234→                key={h.id}
+  1235→                className="flex items-center gap-3 rounded-lg border bg-background/40 px-3 py-2"
+  1236→              >
+  1237→                <div className="flex w-12 shrink-0 justify-center">
+  1238→                  <span
+  1239→                    className={cn(
+  1240→                      'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
+  1241→                      leadBadge(h.score),
+  1242→                    )}
+  1243→                  >
+  1244→                    {h.score >= 75 && <span>🔥</span>}
+  1245→                    {h.score}
+  1246→                  </span>
+  1247→                </div>
+  1248→                <div className="min-w-0 flex-1">
+  1249→                  <div className="truncate text-xs font-medium">{h.reason || '—'}</div>
+  1250→                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+  1251→                    <Badge
+  1252→                      variant="outline"
+  1253→                      className="px-1 py-0 text-[9px] font-medium"
+  1254→                    >
+  1255→                      {categoryLabel(h.category)}
+  1256→                    </Badge>
+  1257→                    <span>{formatDateTime(h.createdAt)}</span>
+  1258→                  </div>
+  1259→                </div>
+  1260→              </div>
+  1261→            ))}
+  1262→          </div>
+  1263→        )}
+  1264→      </div>
+  1265→
+  1266→      <AdjustScoreDialog
+  1267→        open={dialogOpen}
+  1268→        onOpenChange={setDialogOpen}
+  1269→        contactId={contactId}
+  1270→        currentScore={currentScore}
+  1271→        currentCategory={currentCategory}
+  1272→        onSaved={onAdjusted}
+  1273→      />
+  1274→    </Card>
+  1275→  )
+  1276→}
+  1277→
+  1278→function AdjustScoreDialog({
+  1279→  open,
+  1280→  onOpenChange,
+  1281→  contactId,
+  1282→  currentScore,
+  1283→  currentCategory,
+  1284→  onSaved,
+  1285→}: {
+  1286→  open: boolean
+  1287→  onOpenChange: (v: boolean) => void
+  1288→  contactId: string
+  1289→  currentScore: number
+  1290→  currentCategory: string
+  1291→  onSaved: () => void
+  1292→}) {
+  1293→  const [score, setScore] = React.useState(currentScore)
+  1294→  const [category, setCategory] = React.useState<string>(
+  1295→    currentCategory || 'general',
+  1296→  )
+  1297→  const [reason, setReason] = React.useState('')
+  1298→  const [saving, setSaving] = React.useState(false)
+  1299→
+  1300→  // Reset form whenever the dialog opens.
+  1301→  React.useEffect(() => {
+  1302→    if (open) {
+  1303→      setScore(currentScore)
+  1304→      setCategory(currentCategory || 'general')
+  1305→      setReason('')
+  1306→    }
+  1307→  }, [open, currentScore, currentCategory])
+  1308→
+  1309→  const handleSave = async () => {
+  1310→    setSaving(true)
+  1311→    try {
+  1312→      await apiPost(`/api/contacts/${contactId}/lead-score`, {
+  1313→        score,
+  1314→        category,
+  1315→        reason: reason.trim() || 'Manual adjustment by operator',
+  1316→      })
+  1317→      toast.success(`Lead score set to ${score}`)
+  1318→      onSaved()
+  1319→      onOpenChange(false)
+  1320→    } catch (err) {
+  1321→      toast.error(err instanceof Error ? err.message : 'Failed to adjust score')
+  1322→    } finally {
+  1323→      setSaving(false)
+  1324→    }
+  1325→  }
+  1326→
+  1327→  return (
+  1328→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1329→      <DialogContent className="sm:max-w-md">
+  1330→        <DialogHeader>
+  1331→          <DialogTitle>Adjust Lead Score</DialogTitle>
+  1332→          <DialogDescription>
+  1333→            Create a new score event in the history and update the contact's current score.
+  1334→          </DialogDescription>
+  1335→        </DialogHeader>
+  1336→
+  1337→        <div className="space-y-4 py-2">
+  1338→          <div className="space-y-2">
+  1339→            <div className="flex items-center justify-between">
+  1340→              <Label className="text-xs">Score</Label>
+  1341→              <span
+  1342→                className={cn(
+  1343→                  'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold tabular-nums',
+  1344→                  leadBadge(score),
+  1345→                )}
+  1346→              >
+  1347→                {score >= 75 && <span>🔥</span>}
+  1348→                {score}
+  1349→              </span>
+  1350→            </div>
+  1351→            <Slider
+  1352→              value={[score]}
+  1353→              min={0}
+  1354→              max={100}
+  1355→              step={1}
+  1356→              onValueChange={(v) => setScore(v[0] ?? 0)}
+  1357→            />
+  1358→            <div className="flex justify-between text-[10px] text-muted-foreground">
+  1359→              <span>0</span>
+  1360→              <span>25</span>
+  1361→              <span>50</span>
+  1362→              <span className="text-amber-400">70 (hot)</span>
+  1363→              <span>100</span>
+  1364→            </div>
+  1365→          </div>
+  1366→
+  1367→          <div className="space-y-1.5">
+  1368→            <Label className="text-xs">Category</Label>
+  1369→            <Select value={category} onValueChange={setCategory}>
+  1370→              <SelectTrigger className="w-full">
+  1371→                <SelectValue placeholder="Select category" />
+  1372→              </SelectTrigger>
+  1373→              <SelectContent>
+  1374→                {LEAD_CATEGORIES.map((c) => (
+  1375→                  <SelectItem key={c.value} value={c.value}>
+  1376→                    {c.label}
+  1377→                  </SelectItem>
+  1378→                ))}
+  1379→              </SelectContent>
+  1380→            </Select>
+  1381→          </div>
+  1382→
+  1383→          <div className="space-y-1.5">
+  1384→            <Label className="text-xs">Reason (optional)</Label>
+  1385→            <Input
+  1386→              value={reason}
+  1387→              onChange={(e) => setReason(e.target.value)}
+  1388→              placeholder="e.g. Customer confirmed ₹50k budget"
+  1389→              maxLength={500}
+  1390→            />
+  1391→          </div>
+  1392→        </div>
+  1393→
+  1394→        <DialogFooter>
+  1395→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+  1396→            Cancel
+  1397→          </Button>
+  1398→          <Button onClick={handleSave} disabled={saving} className="gap-1.5">
+  1399→            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+  1400→            Save score
+  1401→          </Button>
+  1402→        </DialogFooter>
+  1403→      </DialogContent>
+  1404→    </Dialog>
+  1405→  )
+  1406→}
+  1407→
+  1408→// ---------------------------------------------------------------------------
+  1409→// Tab 1 — Conversation
+  1410→// ---------------------------------------------------------------------------
+  1411→function ConversationTab({
+  1412→  messages,
+  1413→  contactName,
+  1414→  contactPhone,
+  1415→}: {
+  1416→  messages: ProfileMessage[]
+  1417→  contactName: string
+  1418→  contactPhone: string
+  1419→}) {
+  1420→  const grouped = groupByDay(messages)
+  1421→
+  1422→  const exportCsv = () => {
+  1423→    const rows = messages.map((m) => ({
+  1424→      id: m.id,
+  1425→      timestamp: m.timestamp,
+  1426→      direction: m.direction,
+  1427→      source: m.source,
+  1428→      status: m.status,
+  1429→      read: m.read ? 'yes' : 'no',
+  1430→      text: m.text,
+  1431→    }))
+  1432→    const csv = toCsv(rows)
+  1433→    const safeName = (contactName || contactPhone).replace(/\s+/g, '_')
+  1434→    downloadFile(`chat-${safeName}.csv`, csv, 'text/csv;charset=utf-8')
+  1435→    toast.success(`Exported ${rows.length} messages to CSV`)
+  1436→  }
+  1437→
+  1438→  const exportJson = () => {
+  1439→    const payload = {
+  1440→      contact: { name: contactName, phone: contactPhone },
+  1441→      messages,
+  1442→      exportedAt: new Date().toISOString(),
+  1443→    }
+  1444→    const safeName = (contactName || contactPhone).replace(/\s+/g, '_')
+  1445→    downloadFile(
+  1446→      `chat-${safeName}.json`,
+  1447→      JSON.stringify(payload, null, 2),
+  1448→      'application/json',
+  1449→    )
+  1450→    toast.success(`Exported ${messages.length} messages to JSON`)
+  1451→  }
+  1452→
+  1453→  if (messages.length === 0) {
+  1454→    return (
+  1455→      <div className="flex h-48 flex-col items-center justify-center gap-2 text-muted-foreground">
+  1456→        <Inbox className="h-8 w-8" />
+  1457→        <span className="text-xs">No messages in this conversation yet.</span>
+  1458→      </div>
+  1459→    )
+  1460→  }
+  1461→
+  1462→  return (
+  1463→    <div>
+  1464→      <div className="mb-3 flex items-center justify-between">
+  1465→        <div className="text-xs text-muted-foreground">
+  1466→          {messages.length} messages · read-only timeline
+  1467→        </div>
+  1468→        <DropdownMenu>
+  1469→          <DropdownMenuTrigger asChild>
+  1470→            <Button variant="outline" size="sm" className="gap-1.5">
+  1471→              <Download className="h-3.5 w-3.5" /> Export
+  1472→            </Button>
+  1473→          </DropdownMenuTrigger>
+  1474→          <DropdownMenuContent align="end">
+  1475→            <DropdownMenuItem onClick={exportCsv} className="gap-2">
+  1476→              <FileText className="h-3.5 w-3.5" /> Export as CSV
+  1477→            </DropdownMenuItem>
+  1478→            <DropdownMenuItem onClick={exportJson} className="gap-2">
+  1479→              <Braces className="h-3.5 w-3.5" /> Export as JSON
+  1480→            </DropdownMenuItem>
+  1481→          </DropdownMenuContent>
+  1482→        </DropdownMenu>
+  1483→      </div>
+  1484→
+  1485→      <div className="max-h-[600px] space-y-4 overflow-y-auto scrollbar-thin rounded-lg border bg-background/30 p-4">
+  1486→        {grouped.map((group) => (
+  1487→          <div key={group.day}>
+  1488→            <div className="sticky top-0 z-10 mb-2 flex justify-center">
+  1489→              <span className="rounded-full bg-muted px-3 py-0.5 text-[10px] font-medium text-muted-foreground">
+  1490→                {formatDayHeader(group.day)}
+  1491→              </span>
+  1492→            </div>
+  1493→            <div className="space-y-2">
+  1494→              {group.items.map((m) => {
+  1495→                const isOutgoing = m.direction === 'outgoing'
+  1496→                const showSentiment = !isOutgoing && m.sentiment && m.sentiment !== 'unknown'
+  1497→                return (
+  1498→                  <div
+  1499→                    key={m.id}
+  1500→                    className={cn('flex flex-col gap-0.5', isOutgoing ? 'items-end' : 'items-start')}
+  1501→                  >
+  1502→                    {showSentiment && (
+  1503→                      <div className="px-1">
+  1504→                        <SentimentBadge sentiment={m.sentiment} />
+  1505→                      </div>
+  1506→                    )}
+  1507→                    <div
+  1508→                      className={cn(
+  1509→                        'flex max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm',
+  1510→                        isOutgoing
+  1511→                          ? m.source === 'owner'
+  1512→                            ? 'rounded-br-sm bg-sky-500/20 text-sky-50'
+  1513→                            : 'rounded-br-sm bg-emerald-500/20 text-emerald-50'
+  1514→                          : 'rounded-bl-sm bg-muted text-foreground',
+  1515→                      )}
+  1516→                    >
+  1517→                      <div className="min-w-0">
+  1518→                        {isOutgoing && (
+  1519→                          <div className="mb-1 flex items-center justify-end gap-1">
+  1520→                            <SourceBadge source={m.source as MessageSource} />
+  1521→                          </div>
+  1522→                        )}
+  1523→                        <p className="whitespace-pre-wrap break-words">{m.text}</p>
+  1524→                        <div
+  1525→                          className={cn(
+  1526→                            'mt-1 flex items-center gap-1 text-[10px] opacity-70',
+  1527→                            isOutgoing ? 'justify-end' : 'justify-start',
+  1528→                          )}
+  1529→                        >
+  1530→                          <span>{formatTime(m.timestamp)}</span>
+  1531→                          {isOutgoing && <DeliveryIcon status={m.status as MessageStatus} />}
+  1532→                        </div>
+  1533→                      </div>
+  1534→                    </div>
+  1535→                  </div>
+  1536→                )
+  1537→              })}
+  1538→            </div>
+  1539→          </div>
+  1540→        ))}
+  1541→      </div>
+  1542→    </div>
+  1543→  )
+  1544→}
+  1545→
+  1546→// ---------------------------------------------------------------------------
+  1547→// Tab 2 — AI Memory
+  1548→// ---------------------------------------------------------------------------
+  1549→function MemoryTab({
+  1550→  contactId,
+  1551→  memories,
+  1552→  onChanged,
+  1553→}: {
+  1554→  contactId: string
+  1555→  memories: ProfileMemory[]
+  1556→  onChanged: () => void
+  1557→}) {
+  1558→  const [drafts, setDrafts] = React.useState<Record<string, string>>({})
+  1559→  const [savingKey, setSavingKey] = React.useState<string | null>(null)
+  1560→  const [deletingKey, setDeletingKey] = React.useState<string | null>(null)
+  1561→
+  1562→  // New memory form state
+  1563→  const [newKey, setNewKey] = React.useState('')
+  1564→  const [newValue, setNewValue] = React.useState('')
+  1565→  const [adding, setAdding] = React.useState(false)
+  1566→
+  1567→  const setDraft = (key: string, value: string) => {
+  1568→    setDrafts((d) => ({ ...d, [key]: value }))
+  1569→  }
+  1570→
+  1571→  const draftValue = (key: string, original: string) => {
+  1572→    return drafts[key] ?? original
+  1573→  }
+  1574→
+  1575→  const saveMemory = async (key: string) => {
+  1576→    const value = drafts[key]
+  1577→    if (value === undefined) return
+  1578→    setSavingKey(key)
+  1579→    try {
+  1580→      await apiPost(`/api/contacts/${contactId}/memory`, { key, value })
+  1581→      toast.success(`Saved "${memoryLabel(key)}"`)
+  1582→      setDrafts((d) => {
+  1583→        const next = { ...d }
+  1584→        delete next[key]
+  1585→        return next
+  1586→      })
+  1587→      onChanged()
+  1588→    } catch (err) {
+  1589→      toast.error(err instanceof Error ? err.message : 'Failed to save memory')
+  1590→    } finally {
+  1591→      setSavingKey(null)
+  1592→    }
+  1593→  }
+  1594→
+  1595→  const deleteMemory = async (key: string) => {
+  1596→    setDeletingKey(key)
+  1597→    try {
+  1598→      await apiDelete(`/api/contacts/${contactId}/memory?key=${encodeURIComponent(key)}`)
+  1599→      toast.success(`Deleted "${memoryLabel(key)}"`)
+  1600→      onChanged()
+  1601→    } catch (err) {
+  1602→      toast.error(err instanceof Error ? err.message : 'Failed to delete memory')
+  1603→    } finally {
+  1604→      setDeletingKey(null)
+  1605→    }
+  1606→  }
+  1607→
+  1608→  const addMemory = async () => {
+  1609→    const key = newKey.trim().toLowerCase().replace(/\s+/g, '_')
+  1610→    if (!key) {
+  1611→      toast.error('Key is required')
+  1612→      return
+  1613→    }
+  1614→    setAdding(true)
+  1615→    try {
+  1616→      await apiPost(`/api/contacts/${contactId}/memory`, { key, value: newValue })
+  1617→      toast.success(`Added "${memoryLabel(key)}"`)
+  1618→      setNewKey('')
+  1619→      setNewValue('')
+  1620→      onChanged()
+  1621→    } catch (err) {
+  1622→      toast.error(err instanceof Error ? err.message : 'Failed to add memory')
+  1623→    } finally {
+  1624→      setAdding(false)
+  1625→    }
+  1626→  }
+  1627→
+  1628→  return (
+  1629→    <div className="space-y-4">
+  1630→      {memories.length === 0 ? (
+  1631→        <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground">
+  1632→          <Brain className="h-6 w-6" />
+  1633→          <span className="text-xs">No AI memory extracted yet.</span>
+  1634→        </div>
+  1635→      ) : (
+  1636→        <div className="space-y-2">
+  1637→          {memories.map((m) => {
+  1638→            const draft = draftValue(m.key, m.value)
+  1639→            const dirty = draft !== m.value
+  1640→            return (
+  1641→              <div
+  1642→                key={m.id}
+  1643→                className="rounded-lg border bg-background/40 p-3"
+  1644→              >
+  1645→                <div className="mb-1.5 flex items-center justify-between">
+  1646→                  <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+  1647→                    {memoryLabel(m.key)}
+  1648→                  </span>
+  1649→                  <span className="text-[10px] text-muted-foreground">
+  1650→                    Updated {timeAgo(m.updatedAt)}
+  1651→                  </span>
+  1652→                </div>
+  1653→                <Textarea
+  1654→                  value={draft}
+  1655→                  onChange={(e) => setDraft(m.key, e.target.value)}
+  1656→                  className="min-h-12 text-xs"
+  1657→                  rows={2}
+  1658→                />
+  1659→                <div className="mt-2 flex items-center justify-end gap-1.5">
+  1660→                  <Button
+  1661→                    variant="ghost"
+  1662→                    size="sm"
+  1663→                    onClick={() => deleteMemory(m.key)}
+  1664→                    disabled={deletingKey === m.key}
+  1665→                    className="h-7 gap-1 px-2 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+  1666→                  >
+  1667→                    {deletingKey === m.key ? (
+  1668→                      <Loader2 className="h-3 w-3 animate-spin" />
+  1669→                    ) : (
+  1670→                      <Trash2 className="h-3 w-3" />
+  1671→                    )}
+  1672→                    Delete
+  1673→                  </Button>
+  1674→                  <Button
+  1675→                    variant="outline"
+  1676→                    size="sm"
+  1677→                    onClick={() => saveMemory(m.key)}
+  1678→                    disabled={!dirty || savingKey === m.key}
+  1679→                    className="h-7 gap-1 px-2"
+  1680→                  >
+  1681→                    {savingKey === m.key ? (
+  1682→                      <Loader2 className="h-3 w-3 animate-spin" />
+  1683→                    ) : (
+  1684→                      <Save className="h-3 w-3" />
+  1685→                    )}
+  1686→                    Save
+  1687→                  </Button>
+  1688→                </div>
+  1689→              </div>
+  1690→            )
+  1691→          })}
+  1692→        </div>
+  1693→      )}
+  1694→
+  1695→      {/* Add new memory */}
+  1696→      <Separator />
+  1697→      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+  1698→        <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+  1699→          <Plus className="h-3.5 w-3.5" /> Add new memory
+  1700→        </div>
+  1701→        <div className="space-y-2">
+  1702→          <Input
+  1703→            value={newKey}
+  1704→            onChange={(e) => setNewKey(e.target.value)}
+  1705→            placeholder="Key (e.g. budget, location, project_status)"
+  1706→            className="text-xs"
+  1707→            maxLength={64}
+  1708→          />
+  1709→          <Textarea
+  1710→            value={newValue}
+  1711→            onChange={(e) => setNewValue(e.target.value)}
+  1712→            placeholder="Value…"
+  1713→            className="min-h-12 text-xs"
+  1714→            rows={2}
+  1715→            maxLength={4000}
+  1716→          />
+  1717→          <Button
+  1718→            size="sm"
+  1719→            onClick={addMemory}
+  1720→            disabled={adding || !newKey.trim()}
+  1721→            className="gap-1.5"
+  1722→          >
+  1723→            {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+  1724→            Add memory
+  1725→          </Button>
+  1726→        </div>
+  1727→      </div>
+  1728→    </div>
+  1729→  )
+  1730→}
+  1731→
+  1732→// ---------------------------------------------------------------------------
+  1733→// Tab 3 — Activity Log
+  1734→// ---------------------------------------------------------------------------
+  1735→type ActivityItem =
+  1736→  | {
+  1737→      kind: 'notification'
+  1738→      id: string
+  1739→      createdAt: string
+  1740→      severity: string
+  1741→      title: string
+  1742→      body: string
+  1743→      type: string
+  1744→    }
+  1745→  | {
+  1746→      kind: 'log'
+  1747→      id: string
+  1748→      createdAt: string
+  1749→      level: LogLevel
+  1750→      category: LogCategory
+  1751→      message: string
+  1752→      meta: string
+  1753→    }
+  1754→
+  1755→function ActivityTab({
+  1756→  notifications,
+  1757→  logs,
+  1758→}: {
+  1759→  notifications: ProfileNotification[]
+  1760→  logs: LogRow[]
+  1761→}) {
+  1762→  const items = React.useMemo<ActivityItem[]>(() => {
+  1763→    const merged: ActivityItem[] = [
+  1764→      ...notifications.map<ActivityItem>((n) => ({
+  1765→        kind: 'notification',
+  1766→        id: n.id,
+  1767→        createdAt: n.createdAt,
+  1768→        severity: n.severity,
+  1769→        title: n.title,
+  1770→        body: n.body,
+  1771→        type: n.type,
+  1772→      })),
+  1773→      ...logs.map<ActivityItem>((l) => ({
+  1774→        kind: 'log',
+  1775→        id: l.id,
+  1776→        createdAt: l.createdAt,
+  1777→        level: l.level,
+  1778→        category: l.category,
+  1779→        message: l.message,
+  1780→        meta: l.meta,
+  1781→      })),
+  1782→    ]
+  1783→    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  1784→    return merged
+  1785→  }, [notifications, logs])
+  1786→
+  1787→  if (items.length === 0) {
+  1788→    return (
+  1789→      <div className="flex h-32 flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground">
+  1790→        <Activity className="h-6 w-6" />
+  1791→        <span className="text-xs">No activity recorded for this contact.</span>
+  1792→      </div>
+  1793→    )
+  1794→  }
+  1795→
+  1796→  return (
+  1797→    <div className="max-h-[600px] space-y-2 overflow-y-auto scrollbar-thin pr-1">
+  1798→      {items.map((item) => {
+  1799→        if (item.kind === 'notification') {
+  1800→          return (
+  1801→            <div
+  1802→              key={`n-${item.id}`}
+  1803→              className="flex gap-3 rounded-lg border bg-background/40 p-3"
+  1804→            >
+  1805→              <SeverityIcon severity={item.severity} />
+  1806→              <div className="min-w-0 flex-1">
+  1807→                <div className="flex items-center justify-between gap-2">
+  1808→                  <span className="truncate text-sm font-medium">{item.title}</span>
+  1809→                  <span className="shrink-0 text-[10px] text-muted-foreground">
+  1810→                    {formatDateTime(item.createdAt)}
+  1811→                  </span>
+  1812→                </div>
+  1813→                {item.body && (
+  1814→                  <p className="mt-0.5 break-words text-xs text-muted-foreground">{item.body}</p>
+  1815→                )}
+  1816→                <Badge
+  1817→                  variant="outline"
+  1818→                  className="mt-1.5 px-1 py-0 text-[9px] font-medium capitalize"
+  1819→                >
+  1820→                  <Bell className="mr-1 h-2.5 w-2.5" />
+  1821→                  {item.type.replace(/_/g, ' ')}
+  1822→                </Badge>
+  1823→              </div>
+  1824→            </div>
+  1825→          )
+  1826→        }
+  1827→        // log item
+  1828→        return (
+  1829→          <div
+  1830→            key={`l-${item.id}`}
+  1831→            className="flex gap-3 rounded-lg border bg-background/40 p-3"
+  1832→          >
+  1833→            <div className="flex h-7 w-7 shrink-0 items-center justify-center">
+  1834→              <LogLevelDot level={item.level} />
+  1835→            </div>
+  1836→            <div className="min-w-0 flex-1">
+  1837→              <div className="flex items-center justify-between gap-2">
+  1838→                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1839→                  {item.category}
+  1840→                </span>
+  1841→                <span className="shrink-0 text-[10px] text-muted-foreground">
+  1842→                  {formatDateTime(item.createdAt)}
+  1843→                </span>
+  1844→              </div>
+  1845→              <p className="mt-0.5 break-words text-xs">{item.message}</p>
+  1846→            </div>
+  1847→          </div>
+  1848→        )
+  1849→      })}
+  1850→    </div>
+  1851→  )
+  1852→}
+  1853→
+  1854→// ---------------------------------------------------------------------------
+  1855→// Tab 4 — Details
+  1856→// ---------------------------------------------------------------------------
+  1857→function DetailsTab({
+  1858→  contactId,
+  1859→  contact,
+  1860→  onChanged,
+  1861→}: {
+  1862→  contactId: string
+  1863→  contact: ProfileContact
+  1864→  onChanged: () => void
+  1865→}) {
+  1866→  const [name, setName] = React.useState(contact.name)
+  1867→  const [phone, setPhone] = React.useState(contact.phone)
+  1868→  const [language, setLanguage] = React.useState(contact.language || 'en')
+  1869→  const [status, setStatus] = React.useState<ContactStatus>(
+  1870→    (contact.status as ContactStatus) || 'new',
+  1871→  )
+  1872→  const [notes, setNotes] = React.useState(contact.notes)
+  1873→  const [saving, setSaving] = React.useState(false)
+  1874→
+  1875→  const dirty =
+  1876→    name !== contact.name ||
+  1877→    phone !== contact.phone ||
+  1878→    language !== (contact.language || 'en') ||
+  1879→    status !== (contact.status as ContactStatus) ||
+  1880→    notes !== (contact.notes ?? '')
+  1881→
+  1882→  const handleSave = async () => {
+  1883→    setSaving(true)
+  1884→    try {
+  1885→      // PATCH /api/contacts/[id] currently supports notes/pinned/status only,
+  1886→      // but accepting name/phone/language on the route is a backwards-compatible
+  1887→      // extension we make here. We still patch the supported fields, and also
+  1888→      // fall back gracefully if name/phone/language are ignored.
+  1889→      await apiPatch(`/api/contacts/${contactId}`, {
+  1890→        notes,
+  1891→        status,
+  1892→        name,
+  1893→        phone,
+  1894→        language,
+  1895→      })
+  1896→      toast.success('Contact details saved')
+  1897→      onChanged()
+  1898→    } catch (err) {
+  1899→      toast.error(err instanceof Error ? err.message : 'Failed to save details')
+  1900→    } finally {
+  1901→      setSaving(false)
+  1902→    }
+  1903→  }
+  1904→
+  1905→  return (
+  1906→    <div className="space-y-4">
+  1907→      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+  1908→        <div className="space-y-1.5">
+  1909→          <Label className="text-xs">Name</Label>
+  1910→          <Input value={name} onChange={(e) => setName(e.target.value)} className="text-sm" />
+  1911→        </div>
+  1912→        <div className="space-y-1.5">
+  1913→          <Label className="text-xs">Phone</Label>
+  1914→          <Input
+  1915→            value={phone}
+  1916→            onChange={(e) => setPhone(e.target.value)}
+  1917→            className="font-mono text-sm"
+  1918→          />
+  1919→        </div>
+  1920→        <div className="space-y-1.5">
+  1921→          <Label className="text-xs">Language</Label>
+  1922→          <Select value={language} onValueChange={setLanguage}>
+  1923→            <SelectTrigger className="w-full">
+  1924→              <SelectValue placeholder="Select language" />
+  1925→            </SelectTrigger>
+  1926→            <SelectContent>
+  1927→              {LANGUAGE_OPTIONS.map((o) => (
+  1928→                <SelectItem key={o.value} value={o.value}>
+  1929→                  {o.label}
+  1930→                </SelectItem>
+  1931→              ))}
+  1932→            </SelectContent>
+  1933→          </Select>
+  1934→        </div>
+  1935→        <div className="space-y-1.5">
+  1936→          <Label className="text-xs">Status</Label>
+  1937→          <Select value={status} onValueChange={(v) => setStatus(v as ContactStatus)}>
+  1938→            <SelectTrigger className="w-full">
+  1939→              <SelectValue placeholder="Select status" />
+  1940→            </SelectTrigger>
+  1941→            <SelectContent>
+  1942→              {STATUS_OPTIONS.map((o) => (
+  1943→                <SelectItem key={o.value} value={o.value}>
+  1944→                  {o.label}
+  1945→                </SelectItem>
+  1946→              ))}
+  1947→            </SelectContent>
+  1948→          </Select>
+  1949→        </div>
+  1950→      </div>
+  1951→
+  1952→      <div className="space-y-1.5">
+  1953→        <Label className="text-xs">Notes</Label>
+  1954→        <Textarea
+  1955→          value={notes}
+  1956→          onChange={(e) => setNotes(e.target.value)}
+  1957→          placeholder="Private notes about this customer…"
+  1958→          className="min-h-20 text-sm"
+  1959→          maxLength={4000}
+  1960→        />
+  1961→      </div>
+  1962→
+  1963→      <div className="flex justify-end">
+  1964→        <Button onClick={handleSave} disabled={!dirty || saving} className="gap-1.5">
+  1965→          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+  1966→          Save details
+  1967→        </Button>
+  1968→      </div>
+  1969→
+  1970→      <Separator />
+  1971→
+  1972→      {/* Read-only metadata */}
+  1973→      <div className="grid grid-cols-1 gap-2 rounded-lg border bg-background/40 p-3 text-xs sm:grid-cols-2">
+  1974→        <MetaRow label="First seen" value={formatDateTime(contact.firstSeen)} />
+  1975→        <MetaRow label="Last seen" value={formatDateTime(contact.lastSeen)} />
+  1976→        <MetaRow
+  1977→          label="Last message"
+  1978→          value={contact.lastMessageAt ? formatDateTime(contact.lastMessageAt) : '—'}
+  1979→        />
+  1980→        <MetaRow label="Created at" value={formatDateTime(contact.createdAt)} />
+  1981→        <MetaRow label="Country code" value={contact.countryCode || '—'} />
+  1982→        <MetaRow label="Contact ID" value={contact.id} mono />
+  1983→      </div>
+  1984→    </div>
+  1985→  )
+  1986→}
+  1987→
+  1988→function MetaRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  1989→  return (
+  1990→    <div className="flex items-center justify-between gap-2">
+  1991→      <span className="text-muted-foreground">{label}</span>
+  1992→      <span className={cn('truncate font-medium', mono && 'font-mono text-[10px]')}>{value}</span>
+  1993→    </div>
+  1994→  )
+  1995→}
+  1996→
+  1997→// ===========================================================================
+  1998→// Tab 5 — Statistics
+  1999→// ===========================================================================
+  2000→
+
+[showing lines 1-2000 of 3116; use offset=2001 with limit to continue reading]

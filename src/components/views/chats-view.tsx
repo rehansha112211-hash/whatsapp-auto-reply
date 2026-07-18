@@ -50,10 +50,20 @@ import {
   Tag as TagIcon,
   Plus,
   Tags,
+  Globe,
+  Languages,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
+import { languageLabel } from '@/lib/translate-languages'
+import {
+  substituteVariables,
+  hasVariables,
+  type ContactVariableData,
+} from '@/lib/template-variables'
 import {
   colorFromString,
   initials,
@@ -333,6 +343,57 @@ function SourceBadge({ source }: { source: ChatMessage['source'] }) {
 }
 
 // ------------------------------------------------------------
+// Translation UI helpers — language badge pill + inline
+// translated-text section beneath the original bubble content.
+// ------------------------------------------------------------
+
+/** Small pill showing the flag + ISO code for the detected language. */
+function LanguageBadge({ code }: { code: string }) {
+  if (!code) return null
+  const meta = languageLabel(code)
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-border/50 bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium leading-none text-muted-foreground"
+      title={`Detected language: ${meta.label} (${code})`}
+    >
+      <span aria-hidden>{meta.flag}</span>
+      <span className="uppercase">{code}</span>
+    </span>
+  )
+}
+
+/**
+ * Inline translation section shown beneath the original text inside
+ * a message bubble. Rendered in a dashed, muted style so it reads
+ * clearly as "added metadata" rather than part of the original
+ * message. Honors the parent `showTranslation` toggle (when false,
+ * nothing is rendered).
+ */
+function TranslationSection({
+  translatedText,
+  detectedLanguage,
+  show,
+}: {
+  translatedText: string
+  detectedLanguage?: string
+  show: boolean
+}) {
+  if (!show || !translatedText) return null
+  return (
+    <div className="border-t border-dashed border-border/50 mt-1 pt-1 text-xs text-muted-foreground">
+      <div className="mb-0.5 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider opacity-80">
+        <Globe className="h-2.5 w-2.5" aria-hidden />
+        <span>Translated</span>
+        {detectedLanguage && (
+          <span className="opacity-70">· {languageLabel(detectedLanguage).label}</span>
+        )}
+      </div>
+      <p className="whitespace-pre-wrap break-words leading-relaxed">{translatedText}</p>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------
 // Tag badges & picker
 // ------------------------------------------------------------
 const MAX_TAG_BADGES = 2
@@ -574,13 +635,37 @@ function TagPicker({
 function MessageBubble({
   message,
   onReply,
+  showTranslation,
 }: {
   message: ChatMessage
   onReply?: (text: string) => void
+  showTranslation?: boolean
 }) {
   const isOutgoing = message.direction === 'outgoing'
   const isAi = message.source === 'ai'
   const [copied, setCopied] = React.useState(false)
+  // Local override: when the user clicks "Translate" on a message
+  // that wasn't auto-translated, we store the result here so the
+  // same TranslationSection UI can render it without re-fetching.
+  const [manualTranslation, setManualTranslation] = React.useState<{
+    text: string
+    from: string
+  } | null>(null)
+  const [translating, setTranslating] = React.useState(false)
+  const [translationHidden, setTranslationHidden] = React.useState(false)
+
+  // Effective translation to render (auto if present, else manual).
+  const effectiveTranslated = message.isTranslated
+    ? message.translatedText ?? ''
+    : manualTranslation?.text ?? ''
+  const effectiveLang = message.isTranslated
+    ? (message.detectedLanguage ?? '')
+    : (manualTranslation?.from ?? '')
+  const hasTranslation = Boolean(effectiveTranslated)
+  // Whether to render the translation section: respects the global
+  // "Show translations" toggle and the per-bubble hide button.
+  const renderTranslation =
+    hasTranslation && (showTranslation ?? true) && !translationHidden
 
   const handleCopy = async () => {
     try {
@@ -589,6 +674,33 @@ function MessageBubble({
       window.setTimeout(() => setCopied(false), 1400)
     } catch {
       /* clipboard may be unavailable in insecure contexts — ignore */
+    }
+  }
+
+  const handleTranslate = async () => {
+    // If we already have an auto-translation, just toggle visibility.
+    if (hasTranslation) {
+      setTranslationHidden((h) => !h)
+      return
+    }
+    setTranslating(true)
+    try {
+      const res = await apiPost<{ translated: string; from: string; to: string }>(
+        '/api/translate',
+        { text: message.text, to: 'en' },
+      )
+      if (res?.translated) {
+        setManualTranslation({ text: res.translated, from: res.from })
+        setTranslationHidden(false)
+      } else {
+        toast.error('No translation returned')
+      }
+    } catch (err) {
+      toast.error('Failed to translate message', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
+      setTranslating(false)
     }
   }
 
@@ -608,7 +720,25 @@ function MessageBubble({
             <SourceBadge source={message.source} />
           </div>
         )}
+        {/* Language badge row — only on incoming messages with a detected language */}
+        {!isOutgoing && message.detectedLanguage && (
+          <div className="mb-1 flex items-center gap-1">
+            <LanguageBadge code={message.detectedLanguage} />
+            {message.isTranslated && (
+              <span className="inline-flex items-center gap-0.5 text-[9px] font-medium uppercase tracking-wider text-emerald-400/80">
+                <Languages className="h-2.5 w-2.5" aria-hidden />
+                Auto
+              </span>
+            )}
+          </div>
+        )}
         <div className="whitespace-pre-wrap leading-relaxed">{message.text}</div>
+        {/* Inline translation section (auto or manual) */}
+        <TranslationSection
+          translatedText={effectiveTranslated}
+          detectedLanguage={effectiveLang}
+          show={renderTranslation}
+        />
         <div
           className={cn(
             'mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums',
@@ -633,7 +763,7 @@ function MessageBubble({
           </div>
         )}
       </div>
-      {/* Hover actions: copy + reply (incoming only) */}
+      {/* Hover actions: copy + reply (incoming only) + translate */}
       <div
         className={cn(
           'pointer-events-none absolute top-0 flex items-center gap-0.5 rounded-md border bg-card/95 p-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:pointer-events-auto group-hover:opacity-100',
@@ -653,14 +783,52 @@ function MessageBubble({
           )}
         </button>
         {!isOutgoing && (
-          <button
-            type="button"
-            onClick={() => onReply?.(message.text)}
-            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            aria-label="Quote message in reply"
-          >
-            <CornerUpLeft className="h-3 w-3" />
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => onReply?.(message.text)}
+              className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Quote message in reply"
+            >
+              <CornerUpLeft className="h-3 w-3" />
+            </button>
+            {/* Translate / hide-translation toggle */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => void handleTranslate()}
+                  disabled={translating}
+                  className={cn(
+                    'grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                    hasTranslation && !translationHidden && 'text-emerald-400 hover:text-emerald-300',
+                  )}
+                  aria-label={
+                    hasTranslation
+                      ? translationHidden
+                        ? 'Show translation'
+                        : 'Hide translation'
+                      : 'Translate this message'
+                  }
+                >
+                  {translating ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : hasTranslation && !translationHidden ? (
+                    <EyeOff className="h-3 w-3" />
+                  ) : (
+                    <Globe className="h-3 w-3" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {hasTranslation
+                  ? translationHidden
+                    ? 'Show translation'
+                    : 'Hide translation'
+                  : 'Translate'}
+              </TooltipContent>
+            </Tooltip>
+          </>
         )}
       </div>
     </div>
@@ -1018,7 +1186,12 @@ function ChatWindow({
   onOpenDetails,
   onSend,
   sending,
-}: ChatWindowProps) {
+  showTranslations,
+  onToggleShowTranslations,
+}: ChatWindowProps & {
+  showTranslations: boolean
+  onToggleShowTranslations: (v: boolean) => void
+}) {
   const [text, setText] = React.useState('')
   const [exporting, setExporting] = React.useState(false)
   const [showScrollButton, setShowScrollButton] = React.useState(false)
@@ -1140,11 +1313,45 @@ function ChatWindow({
   // Insert a quick reply body into the composer. When the textarea is empty
   // the body replaces it; otherwise the body is appended after a separating
   // newline so multi-line snippets stay readable.
+  //
+  // If the body contains `{variables}`, they are substituted with the
+  // current contact's data (name, phone, leadScore, detectedService,
+  // status) before inserting. Missing fields (e.g. language) are left
+  // as the literal token so the operator can fill them in by hand.
+  //
+  // `fireInsertToast` is a small wrapper around the default toast that
+  // adds a "Variables filled with {contact}'s data" hint when a body
+  // containing {placeholders} was actually personalised.
+  const fireInsertToast = (reply: QuickReplyRow, personalised: boolean) => {
+    if (personalised && contact?.name) {
+      toast.success(`Inserted /${reply.shortcut}`, {
+        description: `${reply.title} · Variables filled with ${contact.name}'s data`,
+      })
+    } else {
+      showQuickReplyToast(reply)
+    }
+  }
+
   const insertQuickReply = (reply: QuickReplyRow) => {
+    const wantsVars = hasVariables(reply.body)
+    const contactData: ContactVariableData | null = contact
+      ? {
+          name: contact.name,
+          phone: contact.phone,
+          leadScore: contact.leadScore,
+          detectedService: contact.detectedService,
+          status: contact.status,
+        }
+      : null
+    const body =
+      wantsVars && contactData
+        ? substituteVariables(reply.body, contactData)
+        : reply.body
+
     setText((prev) => {
       const trimmed = prev.replace(/\s+$/, '')
-      if (!trimmed) return reply.body
-      return `${trimmed}\n${reply.body}`
+      if (!trimmed) return body
+      return `${trimmed}\n${body}`
     })
     // Place cursor at the end after insertion.
     requestAnimationFrame(() => {
@@ -1156,7 +1363,7 @@ function ChatWindow({
       setCursor(end)
     })
     void qr.bumpUsage(reply.id)
-    showQuickReplyToast(reply)
+    fireInsertToast(reply, wantsVars && !!contactData)
   }
 
   // Insert from slash-command dropdown: replaces the `/partial` token at the
@@ -1164,11 +1371,25 @@ function ChatWindow({
   const insertSlashReply = (reply: QuickReplyRow) => {
     const det = slash.detection
     if (!det) return
+    const wantsVars = hasVariables(reply.body)
+    const contactData: ContactVariableData | null = contact
+      ? {
+          name: contact.name,
+          phone: contact.phone,
+          leadScore: contact.leadScore,
+          detectedService: contact.detectedService,
+          status: contact.status,
+        }
+      : null
+    const body =
+      wantsVars && contactData
+        ? substituteVariables(reply.body, contactData)
+        : reply.body
     const before = text.slice(0, det.start)
     const after = text.slice(det.end)
-    const next = `${before}${reply.body}${after}`
+    const next = `${before}${body}${after}`
     setText(next)
-    const newCursor = det.start + reply.body.length
+    const newCursor = det.start + body.length
     requestAnimationFrame(() => {
       const ta = textareaRef.current
       if (!ta) return
@@ -1178,7 +1399,7 @@ function ChatWindow({
     })
     slash.reset()
     void qr.bumpUsage(reply.id)
-    showQuickReplyToast(reply)
+    fireInsertToast(reply, wantsVars && !!contactData)
   }
 
   // Composer change handler — keep cursor in sync so the slash dropdown
@@ -1340,6 +1561,38 @@ function ChatWindow({
           </div>
           <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
         </div>
+        {/* Translation toggle — show/hide inline translations in this chat */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => onToggleShowTranslations(!showTranslations)}
+              className={cn(
+                'flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors',
+                showTranslations
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                  : 'border-border/60 bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+              aria-pressed={showTranslations}
+              aria-label={showTranslations ? 'Hide translations' : 'Show translations'}
+            >
+              {showTranslations ? (
+                <Eye className="h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" aria-hidden />
+              )}
+              <Languages className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden sm:inline">
+                {showTranslations ? 'Translations on' : 'Translations off'}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {showTranslations
+              ? 'Showing inline translations for incoming messages'
+              : 'Translations are hidden — click to reveal them'}
+          </TooltipContent>
+        </Tooltip>
         {/* Export conversation */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -1431,7 +1684,12 @@ function ChatWindow({
                 <div key={group.day} className="flex flex-col gap-2">
                   <DateSeparator day={group.day} />
                   {group.items.map((m) => (
-                    <MessageBubble key={m.id} message={m} onReply={handleReply} />
+                    <MessageBubble
+                      key={m.id}
+                      message={m}
+                      onReply={handleReply}
+                      showTranslation={showTranslations}
+                    />
                   ))}
                 </div>
               ))
@@ -1539,7 +1797,17 @@ function ChatWindow({
           </Tooltip>
         </div>
         <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
-          <span>Enter to send · Shift+Enter for newline</span>
+          <span className="flex items-center gap-1.5">
+            {hasVariables(text) ? (
+              <span className="inline-flex items-center gap-1 text-emerald-400">
+                <Braces className="h-3 w-3" />
+                Variables will be filled with{' '}
+                {contact?.name || 'this contact'}&apos;s data on send
+              </span>
+            ) : (
+              <span>Enter to send · Shift+Enter for newline</span>
+            )}
+          </span>
           <span className="tabular-nums">{text.length}/4000</span>
         </div>
       </div>
@@ -2022,6 +2290,29 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
   const [loadingDetail, setLoadingDetail] = React.useState(false)
   const [sending, setSending] = React.useState(false)
   const [markingAllRead, setMarkingAllRead] = React.useState(false)
+
+  // --- Translation UI state ---
+  // Defaults to ON. As soon as the translation settings load, the
+  // default is reconciled: if translation is disabled at the platform
+  // level, the toggle is turned OFF (but the user can still flip it
+  // back on for ad-hoc /manual translations via the Globe button).
+  const [showTranslations, setShowTranslations] = React.useState(true)
+  React.useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const s = await apiGet<{ enabled: boolean; targetLanguage: string }>(
+          '/api/settings/translation',
+        )
+        if (active && !s.enabled) setShowTranslations(false)
+      } catch {
+        /* non-fatal — keep default ON */
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
 
   // --- Debounced search (300ms) ---
   React.useEffect(() => {
@@ -2511,6 +2802,8 @@ export function ChatsView({ onViewProfile }: { onViewProfile?: (contactId: strin
             onOpenDetails={() => setDetailsSheetOpen(true)}
             onSend={handleSend}
             sending={sending}
+            showTranslations={showTranslations}
+            onToggleShowTranslations={setShowTranslations}
           />
         </section>
 

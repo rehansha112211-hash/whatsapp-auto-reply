@@ -74,6 +74,7 @@ export type ViewKey =
   | 'data-management'
   | 'webhooks'
   | 'users'
+  | 'knowledge-base'
 
 export interface AuthUser {
   id: string
@@ -149,6 +150,11 @@ export interface ChatMessage {
   status: MessageStatus
   read: boolean
   timestamp: string
+  // Auto-translation fields (only meaningful for incoming messages,
+  // but present on all rows for type consistency).
+  detectedLanguage?: string
+  translatedText?: string
+  isTranslated?: boolean
 }
 
 export interface ContactDetail {
@@ -364,4 +370,33 @@ export interface WebhookDeliveryRow {
   attempts: number
   createdAt: string
   deliveredAt: string | null
+}
+
+// ---------------- Knowledge Base ----------------
+export type KnowledgeCategory =
+  | 'pricing'
+  | 'services'
+  | 'policies'
+  | 'faq'
+  | 'general'
+
+export interface KnowledgeArticleItem {
+  id: string
+  title: string
+  content: string
+  category: string // KnowledgeCategory (kept as string for API flexibility)
+  tags: string[]
+  isActive: boolean
+  priority: number
+  viewCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface KnowledgeSearchHit {
+  id: string
+  title: string
+  content: string
+  category: string
+  relevance: number
 }

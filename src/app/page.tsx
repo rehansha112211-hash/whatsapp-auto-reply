@@ -26,6 +26,7 @@ import { SearchView } from '@/components/views/search-view'
 import { WebhooksView } from '@/components/views/webhooks-view'
 import { DataManagementView } from '@/components/views/data-management-view'
 import { UsersView } from '@/components/views/users-view'
+import { KnowledgeBaseView } from '@/components/views/knowledge-base-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import { OnboardingTour } from '@/components/onboarding-tour'
 import { CurrentUserProvider } from '@/hooks/use-current-user'
@@ -211,6 +212,7 @@ export default function Home() {
                 {active === 'webhooks' && <WebhooksView />}
                 {active === 'data-management' && <DataManagementView />}
                 {active === 'users' && <UsersView />}
+                {active === 'knowledge-base' && <KnowledgeBaseView />}
               </>
             )}
           </PageTransition>

@@ -21,6 +21,7 @@ import {
 
 import { cn } from '@/lib/utils'
 import type { QuickReplyRow } from '@/lib/types'
+import { VariableHelper } from '@/components/variable-helper'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -114,6 +115,10 @@ export function QuickReplyManagerDialog({
   const [saving, setSaving] = React.useState(false)
   const [query, setQuery] = React.useState('')
   const [deleteTarget, setDeleteTarget] = React.useState<QuickReplyRow | null>(null)
+
+  // Ref to the body textarea — used so variable chips can be inserted
+  // at the caret instead of always at the end.
+  const bodyRef = React.useRef<HTMLTextAreaElement>(null)
 
   // Reset form when the dialog closes
   React.useEffect(() => {
@@ -449,11 +454,12 @@ export function QuickReplyManagerDialog({
                     </Label>
                     <Textarea
                       id="qr-body"
+                      ref={bodyRef}
                       value={form.body}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, body: e.target.value }))
                       }
-                      placeholder="Hi! 👋 Thanks for reaching out…"
+                      placeholder="Hi {first_name}! 👋 Thanks for reaching out about {service}…"
                       className="min-h-24 resize-y text-sm"
                       rows={5}
                       maxLength={4000}
@@ -462,6 +468,37 @@ export function QuickReplyManagerDialog({
                       {form.body.length}/4000
                     </div>
                   </div>
+
+                  {/* Variable helper — chips insert at the caret;
+                      preview uses example values since a quick reply
+                      isn't tied to a specific contact. */}
+                  <VariableHelper
+                    text={form.body}
+                    contact={null}
+                    onInsertVariable={(variable) => {
+                      const ta = bodyRef.current
+                      const max = 4000
+                      if (!ta) {
+                        setForm((f) => ({
+                          ...f,
+                          body: (f.body + variable).slice(0, max),
+                        }))
+                        return
+                      }
+                      const start = ta.selectionStart ?? ta.value.length
+                      const end = ta.selectionEnd ?? ta.value.length
+                      const before = form.body.slice(0, start)
+                      const after = form.body.slice(end)
+                      const next = `${before}${variable}${after}`.slice(0, max)
+                      setForm((f) => ({ ...f, body: next }))
+                      const caret = Math.min(start + variable.length, max)
+                      requestAnimationFrame(() => {
+                        ta.focus()
+                        ta.setSelectionRange(caret, caret)
+                      })
+                    }}
+                    compact
+                  />
                 </div>
               </ScrollArea>
               <div className="flex items-center justify-between gap-2 border-t p-2">

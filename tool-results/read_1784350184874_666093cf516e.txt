@@ -1,0 +1,1232 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// WebhooksView — outgoing webhook / API integration manager.
+     5→//
+     6→// Layout:
+     7→//   · Header + "New Webhook" button
+     8→//   · Info banner explaining the integration model
+     9→//   · Webhook list — each card shows name, active toggle, URL,
+    10→//     event badges, delivery stats bar, and action buttons:
+    11→//     Test / Deliveries / Edit / Regenerate Secret / Delete
+    12→//   · Empty state with a hint to integrate Zapier / n8n / Slack
+    13→//
+    14→// Dialogs:
+    15→//   · New/Edit — name, URL, events checklist, auto-generated secret
+    16→//     with one-time view + copy button
+    17→//   · Deliveries — recent delivery table with expandable payload,
+    18→//     status codes, response snippets. Auto-refreshes every 10s.
+    19→//   · Secret reveal — one-time view of a freshly generated secret.
+    20→// ============================================================
+    21→import * as React from 'react'
+    22→import { motion } from 'framer-motion'
+    23→import { toast } from 'sonner'
+    24→import {
+    25→  Webhook as WebhookIcon,
+    26→  Plus,
+    27→  Pencil,
+    28→  Trash2,
+    29→  Send,
+    30→  Check,
+    31→  X,
+    32→  Copy,
+    33→  RefreshCw,
+    34→  Eye,
+    35→  Activity,
+    36→  Zap,
+    37→  Inbox,
+    38→  Loader2,
+    39→  ShieldAlert,
+    40→  ExternalLink,
+    41→  ChevronDown,
+    42→  ChevronRight,
+    43→} from 'lucide-react'
+    44→
+    45→import { cn } from '@/lib/utils'
+    46→import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
+    47→import { formatDateTime, timeAgo } from '@/lib/format'
+    48→import {
+    49→  WEBHOOK_EVENTS,
+    50→  type WebhookListItem,
+    51→  type WebhookDeliveryRow,
+    52→  type WebhookEventCategory,
+    53→} from '@/lib/types'
+    54→
+    55→import { Button } from '@/components/ui/button'
+    56→import { Input } from '@/components/ui/input'
+    57→import { Label } from '@/components/ui/label'
+    58→import { Badge } from '@/components/ui/badge'
+    59→import { Switch } from '@/components/ui/switch'
+    60→import { Separator } from '@/components/ui/separator'
+    61→import { ScrollArea } from '@/components/ui/scroll-area'
+    62→import {
+    63→  Card,
+    64→  CardContent,
+    65→  CardHeader,
+    66→  CardTitle,
+    67→} from '@/components/ui/card'
+    68→import {
+    69→  Dialog,
+    70→  DialogContent,
+    71→  DialogDescription,
+    72→  DialogFooter,
+    73→  DialogHeader,
+    74→  DialogTitle,
+    75→} from '@/components/ui/dialog'
+    76→import {
+    77→  AlertDialog,
+    78→  AlertDialogAction,
+    79→  AlertDialogCancel,
+    80→  AlertDialogContent,
+    81→  AlertDialogDescription,
+    82→  AlertDialogFooter,
+    83→  AlertDialogHeader,
+    84→  AlertDialogTitle,
+    85→} from '@/components/ui/alert-dialog'
+    86→import {
+    87→  Collapsible,
+    88→  CollapsibleTrigger,
+    89→  CollapsibleContent,
+    90→} from '@/components/ui/collapsible'
+    91→import {
+    92→  Tooltip,
+    93→  TooltipTrigger,
+    94→  TooltipContent,
+    95→} from '@/components/ui/tooltip'
+    96→import {
+    97→  Table,
+    98→  TableBody,
+    99→  TableCell,
+   100→  TableHead,
+   101→  TableHeader,
+   102→  TableRow,
+   103→} from '@/components/ui/table'
+   104→
+   105→// ------------------------------------------------------------
+   106→// Event category → badge color mapping
+   107→// (message=emerald, lead=amber, owner=rose, ai=violet, whatsapp=teal, contact=sky)
+   108→// ------------------------------------------------------------
+   109→const CATEGORY_BADGE: Record<WebhookEventCategory, string> = {
+   110→  message: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   111→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   112→  owner: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   113→  ai: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+   114→  whatsapp: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   115→  contact: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+   116→}
+   117→
+   118→function eventDef(value: string) {
+   119→  return WEBHOOK_EVENTS.find((e) => e.value === value)
+   120→}
+   121→
+   122→function eventBadgeClass(value: string): string {
+   123→  const def = eventDef(value)
+   124→  if (!def) return 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30'
+   125→  return CATEGORY_BADGE[def.category]
+   126→}
+   127→
+   128→function eventLabel(value: string): string {
+   129→  return eventDef(value)?.label ?? value
+   130→}
+   131→
+   132→// ------------------------------------------------------------
+   133→// Constants
+   134→// ------------------------------------------------------------
+   135→const POLL_DELIVERIES_MS = 10_000
+   136→const MAX_URL = 2048
+   137→const MAX_NAME = 80
+   138→
+   139→// ------------------------------------------------------------
+   140→// Main view
+   141→// ------------------------------------------------------------
+   142→export function WebhooksView() {
+   143→  const [webhooks, setWebhooks] = React.useState<WebhookListItem[]>([])
+   144→  const [loading, setLoading] = React.useState(true)
+   145→  const [refreshing, setRefreshing] = React.useState(false)
+   146→  const [editorOpen, setEditorOpen] = React.useState(false)
+   147→  const [editing, setEditing] = React.useState<WebhookListItem | null>(null)
+   148→  const [deliveriesFor, setDeliveriesFor] = React.useState<WebhookListItem | null>(null)
+   149→  const [deleteTarget, setDeleteTarget] = React.useState<WebhookListItem | null>(null)
+   150→
+   151→  const fetchWebhooks = React.useCallback(
+   152→    async (opts?: { silent?: boolean }) => {
+   153→      if (opts?.silent) setRefreshing(true)
+   154→      else setLoading(true)
+   155→      try {
+   156→        const d = await apiGet<{ items: WebhookListItem[] }>('/api/webhooks')
+   157→        setWebhooks(d.items)
+   158→      } catch (err) {
+   159→        toast.error('Failed to load webhooks', {
+   160→          description: err instanceof Error ? err.message : undefined,
+   161→        })
+   162→      } finally {
+   163→        setLoading(false)
+   164→        setRefreshing(false)
+   165→      }
+   166→    },
+   167→    [],
+   168→  )
+   169→
+   170→  React.useEffect(() => {
+   171→    void fetchWebhooks()
+   172→  }, [fetchWebhooks])
+   173→
+   174→  const handleOpenNew = () => {
+   175→    setEditing(null)
+   176→    setEditorOpen(true)
+   177→  }
+   178→
+   179→  const handleOpenEdit = (w: WebhookListItem) => {
+   180→    setEditing(w)
+   181→    setEditorOpen(true)
+   182→  }
+   183→
+   184→  const handleToggleActive = async (w: WebhookListItem, next: boolean) => {
+   185→    // Optimistic update
+   186→    setWebhooks((prev) =>
+   187→      prev.map((x) => (x.id === w.id ? { ...x, isActive: next } : x)),
+   188→    )
+   189→    try {
+   190→      await apiPatch(`/api/webhooks/${w.id}`, { isActive: next })
+   191→      toast.success(`Webhook ${next ? 'enabled' : 'disabled'}`)
+   192→    } catch (err) {
+   193→      // Revert
+   194→      setWebhooks((prev) =>
+   195→        prev.map((x) => (x.id === w.id ? { ...x, isActive: !next } : x)),
+   196→      )
+   197→      toast.error('Failed to update webhook', {
+   198→        description: err instanceof Error ? err.message : undefined,
+   199→      })
+   200→    }
+   201→  }
+   202→
+   203→  const handleTest = async (w: WebhookListItem) => {
+   204→    const tid = toast.loading(`Sending test to ${w.name}…`)
+   205→    try {
+   206→      const res = await apiPost<{ ok: boolean; statusCode: number; response: string }>(
+   207→        `/api/webhooks/${w.id}/test`,
+   208→      )
+   209→      if (res.ok) {
+   210→        toast.success('Test delivered', {
+   211→          id: tid,
+   212→          description: `HTTP ${res.statusCode} · ${res.response.slice(0, 80) || 'empty body'}`,
+   213→        })
+   214→      } else {
+   215→        toast.error('Test failed', {
+   216→          id: tid,
+   217→          description: `HTTP ${res.statusCode || '—'} · ${res.response.slice(0, 120) || 'no response'}`,
+   218→        })
+   219→      }
+   220→      void fetchWebhooks({ silent: true })
+   221→    } catch (err) {
+   222→      toast.error('Test request failed', {
+   223→        id: tid,
+   224→        description: err instanceof Error ? err.message : undefined,
+   225→      })
+   226→    }
+   227→  }
+   228→
+   229→  const handleConfirmDelete = async () => {
+   230→    if (!deleteTarget) return
+   231→    try {
+   232→      await apiDelete(`/api/webhooks/${deleteTarget.id}`)
+   233→      toast.success('Webhook deleted')
+   234→      setDeleteTarget(null)
+   235→      void fetchWebhooks({ silent: true })
+   236→    } catch (err) {
+   237→      toast.error('Failed to delete webhook', {
+   238→        description: err instanceof Error ? err.message : undefined,
+   239→      })
+   240→    }
+   241→  }
+   242→
+   243→  return (
+   244→    <div className="flex flex-col gap-6">
+   245→      {/* Header */}
+   246→      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+   247→        <div>
+   248→          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight sm:text-2xl">
+   249→            <WebhookIcon className="h-5 w-5 text-emerald-400" />
+   250→            Webhooks
+   251→          </h1>
+   252→          <p className="mt-1 text-sm text-muted-foreground">
+   253→            Send real-time event data to external services like Zapier, n8n, Make.com, or any HTTP endpoint.
+   254→          </p>
+   255→        </div>
+   256→        <div className="flex items-center gap-2">
+   257→          <Button
+   258→            variant="outline"
+   259→            size="sm"
+   260→            onClick={() => void fetchWebhooks({ silent: true })}
+   261→            disabled={refreshing}
+   262→          >
+   263→            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+   264→            Refresh
+   265→          </Button>
+   266→          <Button size="sm" onClick={handleOpenNew}>
+   267→            <Plus className="h-4 w-4" />
+   268→            New Webhook
+   269→          </Button>
+   270→        </div>
+   271→      </div>
+   272→
+   273→      {/* Info banner */}
+   274→      <Card className="rounded-xl border-emerald-500/20 bg-emerald-500/[0.04]">
+   275→        <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-start">
+   276→          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   277→            <Zap className="h-4 w-4" />
+   278→          </div>
+   279→          <div className="flex-1">
+   280→            <p className="text-sm font-medium text-foreground">
+   281→              How webhooks work
+   282→            </p>
+   283→            <p className="mt-1 text-sm text-muted-foreground">
+   284→              When events happen (new message, hot lead, AI error, etc.), we&apos;ll POST a JSON
+   285→              payload to your URL. Verify the{' '}
+   286→              <code className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[11px] text-emerald-200">
+   287→                X-QorvixNode-Signature
+   288→              </code>{' '}
+   289→              header by computing an HMAC-SHA256 of the raw request body using your secret.
+   290→            </p>
+   291→            <a
+   292→              href="#"
+   293→              className="mt-2 inline-flex items-center gap-1 text-sm text-emerald-400 hover:text-emerald-300 hover:underline"
+   294→              onClick={(e) => e.preventDefault()}
+   295→            >
+   296→              Read the docs <ExternalLink className="h-3 w-3" />
+   297→            </a>
+   298→          </div>
+   299→        </CardContent>
+   300→      </Card>
+   301→
+   302→      {/* Webhook list */}
+   303→      {loading ? (
+   304→        <div className="flex items-center justify-center py-16">
+   305→          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+   306→        </div>
+   307→      ) : webhooks.length === 0 ? (
+   308→        <EmptyState onCreate={handleOpenNew} />
+   309→      ) : (
+   310→        <div className="grid gap-4">
+   311→          {webhooks.map((w, i) => (
+   312→            <motion.div
+   313→              key={w.id}
+   314→              initial={{ opacity: 0, y: 8 }}
+   315→              animate={{ opacity: 1, y: 0 }}
+   316→              transition={{ duration: 0.25, delay: i * 0.03 }}
+   317→            >
+   318→              <WebhookCard
+   319→                webhook={w}
+   320→                onToggle={(next) => void handleToggleActive(w, next)}
+   321→                onTest={() => void handleTest(w)}
+   322→                onEdit={() => handleOpenEdit(w)}
+   323→                onShowDeliveries={() => setDeliveriesFor(w)}
+   324→                onDelete={() => setDeleteTarget(w)}
+   325→                onMutated={() => void fetchWebhooks({ silent: true })}
+   326→              />
+   327→            </motion.div>
+   328→          ))}
+   329→        </div>
+   330→      )}
+   331→
+   332→      {/* New/Edit dialog */}
+   333→      <WebhookEditorDialog
+   334→        open={editorOpen}
+   335→        editing={editing}
+   336→        onOpenChange={(v) => {
+   337→          setEditorOpen(v)
+   338→          if (!v) setEditing(null)
+   339→        }}
+   340→        onSaved={() => {
+   341→          setEditorOpen(false)
+   342→          setEditing(null)
+   343→          void fetchWebhooks({ silent: true })
+   344→        }}
+   345→      />
+   346→
+   347→      {/* Deliveries dialog */}
+   348→      <DeliveriesDialog
+   349→        webhook={deliveriesFor}
+   350→        onOpenChange={(v) => {
+   351→          if (!v) setDeliveriesFor(null)
+   352→        }}
+   353→      />
+   354→
+   355→      {/* Delete confirmation */}
+   356→      <AlertDialog
+   357→        open={!!deleteTarget}
+   358→        onOpenChange={(v) => {
+   359→          if (!v) setDeleteTarget(null)
+   360→        }}
+   361→      >
+   362→        <AlertDialogContent>
+   363→          <AlertDialogHeader>
+   364→            <AlertDialogTitle className="flex items-center gap-2">
+   365→              <Trash2 className="h-4 w-4 text-rose-400" />
+   366→              Delete webhook
+   367→            </AlertDialogTitle>
+   368→            <AlertDialogDescription>
+   369→              Delete <span className="font-semibold text-foreground">{deleteTarget?.name}</span>?
+   370→              All delivery history for this webhook will be permanently removed. This cannot be undone.
+   371→            </AlertDialogDescription>
+   372→          </AlertDialogHeader>
+   373→          <AlertDialogFooter>
+   374→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   375→            <AlertDialogAction
+   376→              className="bg-rose-600 text-white hover:bg-rose-700"
+   377→              onClick={() => void handleConfirmDelete()}
+   378→            >
+   379→              Delete
+   380→            </AlertDialogAction>
+   381→          </AlertDialogFooter>
+   382→        </AlertDialogContent>
+   383→      </AlertDialog>
+   384→    </div>
+   385→  )
+   386→}
+   387→
+   388→// ============================================================
+   389→// Empty state
+   390→// ============================================================
+   391→function EmptyState({ onCreate }: { onCreate: () => void }) {
+   392→  return (
+   393→    <Card className="rounded-xl border-dashed border-emerald-500/20 bg-card/40">
+   394→      <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+   395→        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+   396→          <Inbox className="h-7 w-7" />
+   397→        </div>
+   398→        <div className="max-w-md">
+   399→          <p className="text-base font-medium text-foreground">No webhooks configured</p>
+   400→          <p className="mt-1 text-sm text-muted-foreground">
+   401→            Create your first webhook to integrate with Zapier, n8n, Slack, or any HTTP endpoint.
+   402→            Receive real-time events as JSON payloads, signed with HMAC.
+   403→          </p>
+   404→        </div>
+   405→        <Button onClick={onCreate} className="mt-2">
+   406→          <Plus className="h-4 w-4" />
+   407→          Create Webhook
+   408→        </Button>
+   409→      </CardContent>
+   410→    </Card>
+   411→  )
+   412→}
+   413→
+   414→// ============================================================
+   415→// Webhook card
+   416→// ============================================================
+   417→interface WebhookCardProps {
+   418→  webhook: WebhookListItem
+   419→  onToggle: (next: boolean) => void
+   420→  onTest: () => void
+   421→  onEdit: () => void
+   422→  onShowDeliveries: () => void
+   423→  onDelete: () => void
+   424→  onMutated: () => void
+   425→}
+   426→
+   427→function WebhookCard({
+   428→  webhook,
+   429→  onToggle,
+   430→  onTest,
+   431→  onEdit,
+   432→  onShowDeliveries,
+   433→  onDelete,
+   434→  onMutated,
+   435→}: WebhookCardProps) {
+   436→  const [regenerating, setRegenerating] = React.useState(false)
+   437→  const [revealSecret, setRevealSecret] = React.useState<string | null>(null)
+   438→
+   439→  const total = webhook.deliveries.total
+   440→  const delivered = webhook.deliveries.delivered
+   441→  const failed = webhook.deliveries.failed
+   442→  const pending = Math.max(0, total - delivered - failed)
+   443→  const successRate = total > 0 ? Math.round((delivered / total) * 100) : 0
+   444→
+   445→  const handleRegenerate = async () => {
+   446→    setRegenerating(true)
+   447→    try {
+   448→      const res = await apiPost<{ ok: boolean; secret: string }>(
+   449→        `/api/webhooks/${webhook.id}/secret`,
+   450→      )
+   451→      setRevealSecret(res.secret)
+   452→      toast.success('Secret regenerated', {
+   453→        description: 'The old secret stops working immediately.',
+   454→      })
+   455→      onMutated()
+   456→    } catch (err) {
+   457→      toast.error('Failed to regenerate secret', {
+   458→        description: err instanceof Error ? err.message : undefined,
+   459→      })
+   460→    } finally {
+   461→      setRegenerating(false)
+   462→    }
+   463→  }
+   464→
+   465→  return (
+   466→    <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
+   467→      <CardContent className="flex flex-col gap-4 p-5">
+   468→        {/* Title row */}
+   469→        <div className="flex flex-wrap items-start justify-between gap-3">
+   470→          <div className="flex min-w-0 flex-col gap-1">
+   471→            <div className="flex items-center gap-2">
+   472→              <h3 className="truncate text-base font-semibold text-foreground">
+   473→                {webhook.name}
+   474→              </h3>
+   475→              {webhook.isActive ? (
+   476→                <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+   477→                  <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+   478→                  Active
+   479→                </Badge>
+   480→              ) : (
+   481→                <Badge className="bg-zinc-500/15 text-zinc-300 border-zinc-500/30">
+   482→                  <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-zinc-500" />
+   483→                  Paused
+   484→                </Badge>
+   485→              )}
+   486→            </div>
+   487→            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+   488→              <span className="font-mono truncate max-w-[280px] sm:max-w-[420px]">
+   489→                {webhook.url}
+   490→              </span>
+   491→            </div>
+   492→          </div>
+   493→          <div className="flex items-center gap-2">
+   494→            <Label
+   495→              htmlFor={`wh-active-${webhook.id}`}
+   496→              className="text-[11px] text-muted-foreground"
+   497→            >
+   498→              {webhook.isActive ? 'Enabled' : 'Disabled'}
+   499→            </Label>
+   500→            <Switch
+   501→              id={`wh-active-${webhook.id}`}
+   502→              checked={webhook.isActive}
+   503→              onCheckedChange={onToggle}
+   504→              className="data-[state=checked]:bg-emerald-500"
+   505→            />
+   506→          </div>
+   507→        </div>
+   508→
+   509→        {/* Event badges */}
+   510→        <div className="flex flex-wrap items-center gap-1.5">
+   511→          {webhook.events.length === 0 ? (
+   512→            <Badge className="bg-zinc-500/15 text-zinc-300 border-zinc-500/30">
+   513→              All events
+   514→            </Badge>
+   515→          ) : (
+   516→            webhook.events.map((e) => (
+   517→              <Badge
+   518→                key={e}
+   519→                variant="outline"
+   520→                className={cn('font-mono text-[10px]', eventBadgeClass(e))}
+   521→                title={eventDef(e)?.description}
+   522→              >
+   523→                {eventLabel(e)}
+   524→              </Badge>
+   525→            ))
+   526→          )}
+   527→        </div>
+   528→
+   529→        <Separator />
+   530→
+   531→        {/* Delivery stats */}
+   532→        <div className="flex flex-col gap-2">
+   533→          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+   534→            <span className="inline-flex items-center gap-1 text-emerald-300">
+   535→              <Check className="h-3.5 w-3.5" />
+   536→              <span className="font-semibold tabular-nums">{delivered}</span>
+   537→              <span className="text-muted-foreground">delivered</span>
+   538→            </span>
+   539→            <span className="inline-flex items-center gap-1 text-rose-300">
+   540→              <X className="h-3.5 w-3.5" />
+   541→              <span className="font-semibold tabular-nums">{failed}</span>
+   542→              <span className="text-muted-foreground">failed</span>
+   543→            </span>
+   544→            {pending > 0 && (
+   545→              <span className="inline-flex items-center gap-1 text-amber-300">
+   546→                <Activity className="h-3.5 w-3.5" />
+   547→                <span className="font-semibold tabular-nums">{pending}</span>
+   548→                <span className="text-muted-foreground">pending</span>
+   549→              </span>
+   550→            )}
+   551→            {webhook.deliveries.lastDeliveryAt && (
+   552→              <span className="text-muted-foreground">
+   553→                · last {timeAgo(webhook.deliveries.lastDeliveryAt)}
+   554→              </span>
+   555→            )}
+   556→          </div>
+   557→          {/* Delivery bar */}
+   558→          {total > 0 && (
+   559→            <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
+   560→              <div
+   561→                className="bg-emerald-500"
+   562→                style={{ width: `${(delivered / total) * 100}%` }}
+   563→              />
+   564→              <div
+   565→                className="bg-rose-500"
+   566→                style={{ width: `${(failed / total) * 100}%` }}
+   567→              />
+   568→              <div
+   569→                className="bg-amber-500/70"
+   570→                style={{ width: `${(pending / total) * 100}%` }}
+   571→              />
+   572→            </div>
+   573→          )}
+   574→          {total > 0 && (
+   575→            <div className="text-[11px] text-muted-foreground">
+   576→              Success rate{' '}
+   577→              <span
+   578→                className={cn(
+   579→                  'font-medium tabular-nums',
+   580→                  successRate >= 90
+   581→                    ? 'text-emerald-300'
+   582→                    : successRate >= 50
+   583→                      ? 'text-amber-300'
+   584→                      : 'text-rose-300',
+   585→                )}
+   586→              >
+   587→                {successRate}%
+   588→              </span>{' '}
+   589→              over last {total} {total === 1 ? 'delivery' : 'deliveries'}
+   590→            </div>
+   591→          )}
+   592→        </div>
+   593→
+   594→        {/* Actions */}
+   595→        <div className="flex flex-wrap items-center gap-2">
+   596→          <Button size="sm" variant="outline" onClick={onTest}>
+   597→            <Send className="h-3.5 w-3.5" />
+   598→            Test
+   599→          </Button>
+   600→          <Button size="sm" variant="outline" onClick={onShowDeliveries}>
+   601→            <Activity className="h-3.5 w-3.5" />
+   602→            Deliveries
+   603→          </Button>
+   604→          <Button size="sm" variant="outline" onClick={onEdit}>
+   605→            <Pencil className="h-3.5 w-3.5" />
+   606→            Edit
+   607→          </Button>
+   608→          <Tooltip>
+   609→            <TooltipTrigger asChild>
+   610→              <Button
+   611→                size="sm"
+   612→                variant="outline"
+   613→                onClick={() => void handleRegenerate()}
+   614→                disabled={regenerating}
+   615→              >
+   616→                <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
+   617→                <span className="hidden sm:inline">Secret</span>
+   618→              </Button>
+   619→            </TooltipTrigger>
+   620→            <TooltipContent>Regenerate HMAC secret</TooltipContent>
+   621→          </Tooltip>
+   622→          <Button
+   623→            size="sm"
+   624→            variant="outline"
+   625→            className="text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+   626→            onClick={onDelete}
+   627→          >
+   628→            <Trash2 className="h-3.5 w-3.5" />
+   629→            <span className="hidden sm:inline">Delete</span>
+   630→          </Button>
+   631→        </div>
+   632→      </CardContent>
+   633→
+   634→      {/* Secret reveal dialog (after regenerate) */}
+   635→      <SecretRevealDialog
+   636→        secret={revealSecret}
+   637→        onOpenChange={(v) => {
+   638→          if (!v) setRevealSecret(null)
+   639→        }}
+   640→      />
+   641→    </Card>
+   642→  )
+   643→}
+   644→
+   645→// ============================================================
+   646→// New / Edit webhook dialog
+   647→// ============================================================
+   648→interface WebhookEditorProps {
+   649→  open: boolean
+   650→  editing: WebhookListItem | null
+   651→  onOpenChange: (v: boolean) => void
+   652→  onSaved: () => void
+   653→}
+   654→
+   655→function WebhookEditorDialog({
+   656→  open,
+   657→  editing,
+   658→  onOpenChange,
+   659→  onSaved,
+   660→}: WebhookEditorProps) {
+   661→  const isEdit = !!editing
+   662→  const [name, setName] = React.useState('')
+   663→  const [url, setUrl] = React.useState('')
+   664→  const [events, setEvents] = React.useState<string[]>([])
+   665→  const [saving, setSaving] = React.useState(false)
+   666→  const [createdSecret, setCreatedSecret] = React.useState<string | null>(null)
+   667→
+   668→  // Reset form when dialog opens
+   669→  React.useEffect(() => {
+   670→    if (!open) return
+   671→    if (editing) {
+   672→      setName(editing.name)
+   673→      setUrl(editing.url)
+   674→      setEvents(editing.events)
+   675→    } else {
+   676→      setName('')
+   677→      setUrl('')
+   678→      setEvents([])
+   679→    }
+   680→    setCreatedSecret(null)
+   681→  }, [open, editing])
+   682→
+   683→  const toggleEvent = (value: string) => {
+   684→    setEvents((prev) =>
+   685→      prev.includes(value) ? prev.filter((e) => e !== value) : [...prev, value],
+   686→    )
+   687→  }
+   688→
+   689→  const valid =
+   690→    name.trim().length > 0 &&
+   691→    name.length <= MAX_NAME &&
+   692→    /^https?:\/\/.+/i.test(url.trim()) &&
+   693→    url.length <= MAX_URL &&
+   694→    !saving
+   695→
+   696→  const handleSave = async () => {
+   697→    if (!valid) return
+   698→    setSaving(true)
+   699→    try {
+   700→      if (isEdit && editing) {
+   701→        await apiPatch(`/api/webhooks/${editing.id}`, {
+   702→          name: name.trim(),
+   703→          url: url.trim(),
+   704→          events,
+   705→        })
+   706→        toast.success('Webhook updated')
+   707→        onSaved()
+   708→      } else {
+   709→        const res = await apiPost<{
+   710→          ok: boolean
+   711→          webhook: WebhookListItem
+   712→          warning?: string
+   713→        }>('/api/webhooks', {
+   714→          name: name.trim(),
+   715→          url: url.trim(),
+   716→          events,
+   717→        })
+   718→        if (res.warning) {
+   719→          toast.warning('Webhook created', { description: res.warning })
+   720→        } else {
+   721→          toast.success('Webhook created')
+   722→        }
+   723→        setCreatedSecret(res.webhook.secret)
+   724→      }
+   725→    } catch (err) {
+   726→      toast.error(isEdit ? 'Failed to update webhook' : 'Failed to create webhook', {
+   727→        description: err instanceof Error ? err.message : undefined,
+   728→      })
+   729→    } finally {
+   730→      setSaving(false)
+   731→    }
+   732→  }
+   733→
+   734→  return (
+   735→    <>
+   736→      <Dialog
+   737→        open={open && !createdSecret}
+   738→        onOpenChange={(v) => {
+   739→          if (!saving) onOpenChange(v)
+   740→        }}
+   741→      >
+   742→        <DialogContent className="sm:max-w-[560px]">
+   743→          <DialogHeader>
+   744→            <DialogTitle className="flex items-center gap-2">
+   745→              <WebhookIcon className="h-4 w-4 text-emerald-400" />
+   746→              {isEdit ? 'Edit webhook' : 'New webhook'}
+   747→            </DialogTitle>
+   748→            <DialogDescription>
+   749→              {isEdit
+   750→                ? 'Update the webhook configuration. The secret can be regenerated separately.'
+   751→                : 'Configure a new outbound webhook endpoint. A signing secret will be auto-generated.'}
+   752→            </DialogDescription>
+   753→          </DialogHeader>
+   754→
+   755→          <div className="flex flex-col gap-4">
+   756→            {/* Name */}
+   757→            <div className="flex flex-col gap-1.5">
+   758→              <Label htmlFor="wh-name">Name</Label>
+   759→              <Input
+   760→                id="wh-name"
+   761→                placeholder="e.g. Zapier — Lead to CRM"
+   762→                value={name}
+   763→                onChange={(e) => setName(e.target.value)}
+   764→                maxLength={MAX_NAME}
+   765→              />
+   766→              <p className="text-[11px] text-muted-foreground">
+   767→                A friendly label to identify this webhook.
+   768→              </p>
+   769→            </div>
+   770→
+   771→            {/* URL */}
+   772→            <div className="flex flex-col gap-1.5">
+   773→              <Label htmlFor="wh-url">Endpoint URL</Label>
+   774→              <Input
+   775→                id="wh-url"
+   776→                placeholder="https://hooks.zapier.com/hooks/catch/…"
+   777→                value={url}
+   778→                onChange={(e) => setUrl(e.target.value)}
+   779→                maxLength={MAX_URL}
+   780→                className="font-mono text-sm"
+   781→                inputMode="url"
+   782→                autoComplete="url"
+   783→              />
+   784→              <p className="text-[11px] text-muted-foreground">
+   785→                Must be a valid <code>http</code> or <code>https</code> URL. We POST JSON to this endpoint.
+   786→              </p>
+   787→            </div>
+   788→
+   789→            {/* Events */}
+   790→            <div className="flex flex-col gap-2">
+   791→              <div className="flex items-center justify-between">
+   792→                <Label>Events</Label>
+   793→                <div className="flex items-center gap-2">
+   794→                  <Button
+   795→                    type="button"
+   796→                    variant="ghost"
+   797→                    size="sm"
+   798→                    className="h-7 px-2 text-[11px]"
+   799→                    onClick={() => setEvents(WEBHOOK_EVENTS.map((e) => e.value))}
+   800→                  >
+   801→                    Select all
+   802→                  </Button>
+   803→                  <Button
+   804→                    type="button"
+   805→                    variant="ghost"
+   806→                    size="sm"
+   807→                    className="h-7 px-2 text-[11px]"
+   808→                    onClick={() => setEvents([])}
+   809→                  >
+   810→                    Clear
+   811→                  </Button>
+   812→                </div>
+   813→              </div>
+   814→              <p className="text-[11px] text-muted-foreground">
+   815→                Select which events trigger this webhook. Leave empty to subscribe to all events.
+   816→              </p>
+   817→              <ScrollArea className="max-h-72 rounded-lg border">
+   818→                <div className="flex flex-col divide-y">
+   819→                  {WEBHOOK_EVENTS.map((ev) => {
+   820→                    const checked = events.includes(ev.value)
+   821→                    return (
+   822→                      <label
+   823→                        key={ev.value}
+   824→                        htmlFor={`ev-${ev.value}`}
+   825→                        className={cn(
+   826→                          'flex cursor-pointer items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50',
+   827→                          checked && 'bg-emerald-500/[0.04]',
+   828→                        )}
+   829→                      >
+   830→                        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
+   831→                          <button
+   832→                            type="button"
+   833→                            role="checkbox"
+   834→                            aria-checked={checked}
+   835→                            id={`ev-${ev.value}`}
+   836→                            onClick={(e) => {
+   837→                              e.preventDefault()
+   838→                              toggleEvent(ev.value)
+   839→                            }}
+   840→                            className={cn(
+   841→                              'flex h-4 w-4 items-center justify-center rounded border transition-colors',
+   842→                              checked
+   843→                                ? 'border-emerald-500 bg-emerald-500 text-white'
+   844→                                : 'border-input bg-transparent',
+   845→                            )}
+   846→                          >
+   847→                            {checked && <Check className="h-3 w-3" />}
+   848→                          </button>
+   849→                        </div>
+   850→                        <div className="flex min-w-0 flex-col gap-1">
+   851→                          <div className="flex flex-wrap items-center gap-2">
+   852→                            <span className="text-sm font-medium text-foreground">
+   853→                              {ev.label}
+   854→                            </span>
+   855→                            <Badge
+   856→                              variant="outline"
+   857→                              className={cn(
+   858→                                'font-mono text-[10px]',
+   859→                                CATEGORY_BADGE[ev.category],
+   860→                              )}
+   861→                            >
+   862→                              {ev.category}
+   863→                            </Badge>
+   864→                          </div>
+   865→                          <p className="text-[11px] text-muted-foreground">
+   866→                            {ev.description}
+   867→                          </p>
+   868→                          <code className="font-mono text-[10px] text-emerald-300/80">
+   869→                            {ev.value}
+   870→                          </code>
+   871→                        </div>
+   872→                      </label>
+   873→                    )
+   874→                  })}
+   875→                </div>
+   876→              </ScrollArea>
+   877→            </div>
+   878→
+   879→            {/* Secret note */}
+   880→            {!isEdit && (
+   881→              <div className="flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] px-3 py-2">
+   882→                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+   883→                <p className="text-[11px] text-muted-foreground">
+   884→                  A signing secret will be auto-generated. Use it to verify the{' '}
+   885→                  <code className="font-mono text-emerald-200">X-QorvixNode-Signature</code> header on incoming requests.
+   886→                  The full secret is shown once after creation — copy it somewhere safe.
+   887→                </p>
+   888→              </div>
+   889→            )}
+   890→          </div>
+   891→
+   892→          <DialogFooter>
+   893→            <Button
+   894→              variant="outline"
+   895→              onClick={() => onOpenChange(false)}
+   896→              disabled={saving}
+   897→            >
+   898→              Cancel
+   899→            </Button>
+   900→            <Button onClick={() => void handleSave()} disabled={!valid}>
+   901→              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+   902→              {isEdit ? 'Save changes' : 'Create webhook'}
+   903→            </Button>
+   904→          </DialogFooter>
+   905→        </DialogContent>
+   906→      </Dialog>
+   907→
+   908→      {/* Secret reveal after create */}
+   909→      <SecretRevealDialog
+   910→        secret={createdSecret}
+   911→        title="Webhook created"
+   912→        description="Your new webhook is ready. Copy the signing secret below — you won't see it again."
+   913→        onOpenChange={(v) => {
+   914→          if (!v) {
+   915→            setCreatedSecret(null)
+   916→            onSaved()
+   917→          }
+   918→        }}
+   919→      />
+   920→    </>
+   921→  )
+   922→}
+   923→
+   924→// ============================================================
+   925→// Secret reveal dialog (one-time view)
+   926→// ============================================================
+   927→interface SecretRevealProps {
+   928→  secret: string | null
+   929→  title?: string
+   930→  description?: string
+   931→  onOpenChange: (v: boolean) => void
+   932→}
+   933→
+   934→function SecretRevealDialog({
+   935→  secret,
+   936→  title = 'New signing secret',
+   937→  description,
+   938→  onOpenChange,
+   939→}: SecretRevealProps) {
+   940→  const [copied, setCopied] = React.useState(false)
+   941→
+   942→  React.useEffect(() => {
+   943→    if (!secret) setCopied(false)
+   944→  }, [secret])
+   945→
+   946→  const handleCopy = async () => {
+   947→    if (!secret) return
+   948→    try {
+   949→      await navigator.clipboard.writeText(secret)
+   950→      setCopied(true)
+   951→      toast.success('Secret copied to clipboard')
+   952→      setTimeout(() => setCopied(false), 2000)
+   953→    } catch {
+   954→      toast.error('Could not copy — select and copy manually')
+   955→    }
+   956→  }
+   957→
+   958→  return (
+   959→    <Dialog
+   960→      open={!!secret}
+   961→      onOpenChange={(v) => {
+   962→        if (!v) onOpenChange(false)
+   963→      }}
+   964→    >
+   965→      <DialogContent className="sm:max-w-[520px]">
+   966→        <DialogHeader>
+   967→          <DialogTitle className="flex items-center gap-2">
+   968→            <ShieldAlert className="h-4 w-4 text-amber-400" />
+   969→            {title}
+   970→          </DialogTitle>
+   971→          <DialogDescription>
+   972→            {description ??
+   973→              'This is your new HMAC signing secret. The old one stops working immediately.'}
+   974→          </DialogDescription>
+   975→        </DialogHeader>
+   976→
+   977→        <div className="flex flex-col gap-3">
+   978→          <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-200">
+   979→            <strong className="font-semibold">This secret won&apos;t be shown again.</strong>{' '}
+   980→            Copy it now and store it securely (e.g. in your secrets manager).
+   981→          </div>
+   982→
+   983→          <div className="flex items-stretch gap-2">
+   984→            <Input
+   985→              readOnly
+   986→              value={secret ?? ''}
+   987→              className="font-mono text-xs"
+   988→              onFocus={(e) => e.currentTarget.select()}
+   989→            />
+   990→            <Button onClick={() => void handleCopy()} className="shrink-0">
+   991→              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+   992→              {copied ? 'Copied' : 'Copy'}
+   993→            </Button>
+   994→          </div>
+   995→
+   996→          <p className="text-[11px] text-muted-foreground">
+   997→            To verify a webhook request, compute an HMAC-SHA256 of the raw request body using this secret,
+   998→            then compare (in constant time) to the value sent in the{' '}
+   999→            <code className="font-mono">X-QorvixNode-Signature</code> header.
+  1000→          </p>
+  1001→        </div>
+  1002→
+  1003→        <DialogFooter>
+  1004→          <Button onClick={() => onOpenChange(false)}>I&apos;ve saved it</Button>
+  1005→        </DialogFooter>
+  1006→      </DialogContent>
+  1007→    </Dialog>
+  1008→  )
+  1009→}
+  1010→
+  1011→// ============================================================
+  1012→// Deliveries dialog
+  1013→// ============================================================
+  1014→interface DeliveriesDialogProps {
+  1015→  webhook: WebhookListItem | null
+  1016→  onOpenChange: (v: boolean) => void
+  1017→}
+  1018→
+  1019→function DeliveriesDialog({ webhook, onOpenChange }: DeliveriesDialogProps) {
+  1020→  const [items, setItems] = React.useState<WebhookDeliveryRow[]>([])
+  1021→  const [loading, setLoading] = React.useState(false)
+  1022→
+  1023→  const fetchDeliveries = React.useCallback(async () => {
+  1024→    if (!webhook) return
+  1025→    try {
+  1026→      const d = await apiGet<{ items: WebhookDeliveryRow[] }>(
+  1027→        `/api/webhooks/${webhook.id}/deliveries`,
+  1028→      )
+  1029→      setItems(d.items)
+  1030→    } catch {
+  1031→      /* ignore */
+  1032→    } finally {
+  1033→      setLoading(false)
+  1034→    }
+  1035→  }, [webhook])
+  1036→
+  1037→  React.useEffect(() => {
+  1038→    if (!webhook) return
+  1039→    setLoading(true)
+  1040→    void fetchDeliveries()
+  1041→    const t = setInterval(() => void fetchDeliveries(), POLL_DELIVERIES_MS)
+  1042→    return () => clearInterval(t)
+  1043→  }, [webhook, fetchDeliveries])
+  1044→
+  1045→  return (
+  1046→    <Dialog
+  1047→      open={!!webhook}
+  1048→      onOpenChange={(v) => {
+  1049→        if (!v) onOpenChange(false)
+  1050→      }}
+  1051→    >
+  1052→      <DialogContent className="sm:max-w-[760px]">
+  1053→        <DialogHeader>
+  1054→          <DialogTitle className="flex items-center gap-2">
+  1055→            <Activity className="h-4 w-4 text-emerald-400" />
+  1056→            Deliveries — {webhook?.name}
+  1057→          </DialogTitle>
+  1058→          <DialogDescription>
+  1059→            Recent webhook deliveries (last 50). Auto-refreshes every 10 seconds.
+  1060→          </DialogDescription>
+  1061→        </DialogHeader>
+  1062→
+  1063→        <div className="max-h-[60vh] overflow-y-auto rounded-lg border">
+  1064→          {loading && items.length === 0 ? (
+  1065→            <div className="flex items-center justify-center py-12">
+  1066→              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+  1067→            </div>
+  1068→          ) : items.length === 0 ? (
+  1069→            <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
+  1070→              <Inbox className="h-6 w-6 text-muted-foreground" />
+  1071→              <p className="text-sm text-muted-foreground">No deliveries yet</p>
+  1072→              <p className="text-[11px] text-muted-foreground">
+  1073→                Trigger an event or send a test payload to see delivery history here.
+  1074→              </p>
+  1075→            </div>
+  1076→          ) : (
+  1077→            <Table>
+  1078→              <TableHeader>
+  1079→                <TableRow>
+  1080→                  <TableHead className="w-[140px]">Event</TableHead>
+  1081→                  <TableHead className="w-[80px]">Status</TableHead>
+  1082→                  <TableHead className="w-[70px]">Code</TableHead>
+  1083→                  <TableHead className="w-[110px]">When</TableHead>
+  1084→                  <TableHead>Payload / Response</TableHead>
+  1085→                </TableRow>
+  1086→              </TableHeader>
+  1087→              <TableBody>
+  1088→                {items.map((d) => (
+  1089→                  <DeliveryRow key={d.id} row={d} />
+  1090→                ))}
+  1091→              </TableBody>
+  1092→            </Table>
+  1093→          )}
+  1094→        </div>
+  1095→
+  1096→        <DialogFooter>
+  1097→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+  1098→            Close
+  1099→          </Button>
+  1100→        </DialogFooter>
+  1101→      </DialogContent>
+  1102→    </Dialog>
+  1103→  )
+  1104→}
+  1105→
+  1106→// ============================================================
+  1107→// Delivery row (expandable payload + response)
+  1108→// ============================================================
+  1109→function DeliveryRow({ row }: { row: WebhookDeliveryRow }) {
+  1110→  const [open, setOpen] = React.useState(false)
+  1111→  const isOk = row.status === 'delivered'
+  1112→  const isPending = row.status === 'pending'
+  1113→
+  1114→  return (
+  1115→    <Collapsible open={open} onOpenChange={setOpen} asChild>
+  1116→      <>
+  1117→        <TableRow className="cursor-pointer hover:bg-muted/40">
+  1118→          <TableCell>
+  1119→            <CollapsibleTrigger asChild>
+  1120→              <button
+  1121→                type="button"
+  1122→                className="inline-flex items-center gap-1 text-left"
+  1123→                onClick={() => setOpen((v) => !v)}
+  1124→              >
+  1125→                {open ? (
+  1126→                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+  1127→                ) : (
+  1128→                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+  1129→                )}
+  1130→                <Badge
+  1131→                  variant="outline"
+  1132→                  className={cn('font-mono text-[10px]', eventBadgeClass(row.event))}
+  1133→                >
+  1134→                  {eventLabel(row.event)}
+  1135→                </Badge>
+  1136→              </button>
+  1137→            </CollapsibleTrigger>
+  1138→          </TableCell>
+  1139→          <TableCell>
+  1140→            {isOk ? (
+  1141→              <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+  1142→                <Check className="h-3 w-3" /> Delivered
+  1143→              </Badge>
+  1144→            ) : isPending ? (
+  1145→              <Badge className="bg-amber-500/15 text-amber-300 border-amber-500/30">
+  1146→                <Loader2 className="h-3 w-3" /> Pending
+  1147→              </Badge>
+  1148→            ) : (
+  1149→              <Badge className="bg-rose-500/15 text-rose-300 border-rose-500/30">
+  1150→                <X className="h-3 w-3" /> Failed
+  1151→              </Badge>
+  1152→            )}
+  1153→          </TableCell>
+  1154→          <TableCell>
+  1155→            <span
+  1156→              className={cn(
+  1157→                'font-mono text-xs tabular-nums',
+  1158→                row.statusCode === 0
+  1159→                  ? 'text-muted-foreground'
+  1160→                  : row.statusCode >= 200 && row.statusCode < 300
+  1161→                    ? 'text-emerald-300'
+  1162→                    : row.statusCode >= 300 && row.statusCode < 400
+  1163→                      ? 'text-sky-300'
+  1164→                      : 'text-rose-300',
+  1165→              )}
+  1166→            >
+  1167→              {row.statusCode || '—'}
+  1168→            </span>
+  1169→          </TableCell>
+  1170→          <TableCell className="text-xs text-muted-foreground">
+  1171→            {timeAgo(row.createdAt)}
+  1172→          </TableCell>
+  1173→          <TableCell className="max-w-[260px]">
+  1174→            <span className="truncate text-[11px] font-mono text-muted-foreground">
+  1175→              {row.response || '—'}
+  1176→            </span>
+  1177→          </TableCell>
+  1178→        </TableRow>
+  1179→        <CollapsibleContent asChild>
+  1180→          <tr className="bg-muted/30">
+  1181→            <TableCell colSpan={5} className="p-3">
+  1182→              <div className="grid gap-3 sm:grid-cols-2">
+  1183→                <div>
+  1184→                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+  1185→                    Sent at
+  1186→                  </p>
+  1187→                  <p className="text-xs text-foreground">
+  1188→                    {formatDateTime(row.createdAt)}
+  1189→                  </p>
+  1190→                  {row.deliveredAt && (
+  1191→                    <p className="text-[11px] text-emerald-300">
+  1192→                      Delivered: {formatDateTime(row.deliveredAt)}
+  1193→                    </p>
+  1194→                  )}
+  1195→                  <p className="mt-2 text-[11px] text-muted-foreground">
+  1196→                    Attempts: <span className="font-mono">{row.attempts}</span>
+  1197→                  </p>
+  1198→                </div>
+  1199→                <div>
+  1200→                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+  1201→                    Response body
+  1202→                  </p>
+  1203→                  <pre className="max-h-32 overflow-auto rounded border bg-background/60 p-2 text-[10px] font-mono leading-relaxed text-muted-foreground">
+  1204→                    {row.response || '(empty)'}
+  1205→                  </pre>
+  1206→                </div>
+  1207→                <div className="sm:col-span-2">
+  1208→                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+  1209→                    Payload
+  1210→                  </p>
+  1211→                  <pre className="max-h-48 overflow-auto rounded border bg-background/60 p-2 text-[10px] font-mono leading-relaxed text-emerald-200/80">
+  1212→                    {prettyJson(row.payload) || '(empty)'}
+  1213→                  </pre>
+  1214→                </div>
+  1215→              </div>
+  1216→            </TableCell>
+  1217→          </tr>
+  1218→        </CollapsibleContent>
+  1219→      </>
+  1220→    </Collapsible>
+  1221→  )
+  1222→}
+  1223→
+  1224→function prettyJson(s: string): string {
+  1225→  if (!s) return ''
+  1226→  try {
+  1227→    return JSON.stringify(JSON.parse(s), null, 2)
+  1228→  } catch {
+  1229→    return s
+  1230→  }
+  1231→}
+  1232→

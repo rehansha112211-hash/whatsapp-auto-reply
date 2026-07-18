@@ -25,6 +25,7 @@ export interface Permission {
   canManageData: boolean // export/import, backup/restore
   canScheduleMessages: boolean
   canUseSimulator: boolean
+  canManageKnowledgeBase: boolean // create/edit/delete KB articles
 }
 
 export const ROLE_PERMISSIONS: Record<Role, Permission> = {
@@ -43,6 +44,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission> = {
     canManageData: true,
     canScheduleMessages: true,
     canUseSimulator: true,
+    canManageKnowledgeBase: true,
   },
   operator: {
     canViewDashboard: true,
@@ -59,6 +61,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission> = {
     canManageData: false,
     canScheduleMessages: true,
     canUseSimulator: true,
+    canManageKnowledgeBase: false,
   },
   viewer: {
     canViewDashboard: true,
@@ -75,6 +78,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission> = {
     canManageData: false,
     canScheduleMessages: false,
     canUseSimulator: false,
+    canManageKnowledgeBase: false,
   },
 }
 
@@ -97,6 +101,7 @@ const ALL_VIEWS: ViewKey[] = [
   'system',
   'data-management',
   'users',
+  'knowledge-base',
   'contact-profile',
 ]
 
@@ -173,6 +178,8 @@ export function permissionForView(view: ViewKey): keyof Permission | null {
     case 'owner-settings':
     case 'autoreply-settings':
       return 'canManageSettings'
+    case 'knowledge-base':
+      return 'canManageKnowledgeBase'
     case 'analytics':
       return 'canViewAnalytics'
     case 'logs':

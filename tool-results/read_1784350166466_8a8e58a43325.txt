@@ -1,0 +1,2002 @@
+     1→'use client'
+     2→
+     3→// ============================================================
+     4→// ChatsView — WhatsApp-Web-style 3-pane chat interface
+     5→//
+     6→//  · Left   → conversation list (search + filter, pinned-first sort)
+     7→//  · Center → chat window (bubbles, date separators, composer)
+     8→//  · Right  → customer details panel (lead info, memory, actions)
+     9→//
+    10→// On mobile, the layout collapses to a single pane with a back
+    11→// button to swap between list and chat, and the details panel
+    12→// becomes a Sheet triggered from the chat header.
+    13→//
+    14→// Polling: chats list every 8s, messages every 4s. Realtime:
+    15→// listens for `dashboard:tick` and `simulator:message` events
+    16→// from the war-realtime websocket mini-service for instant refresh.
+    17→// ============================================================
+    18→import * as React from 'react'
+    19→import { toast } from 'sonner'
+    20→import {
+    21→  MessageCircle,
+    22→  Search,
+    23→  Filter,
+    24→  Pin,
+    25→  Send,
+    26→  ArrowLeft,
+    27→  Info,
+    28→  Bot,
+    29→  User,
+    30→  UserCog,
+    31→  Flame,
+    32→  Clock,
+    33→  Check,
+    34→  CheckCheck,
+    35→  AlertTriangle,
+    36→  MoreVertical,
+    37→  Shield,
+    38→  Bell,
+    39→  Loader2,
+    40→  Inbox,
+    41→  X,
+    42→  Sparkles,
+    43→  Download,
+    44→  FileText,
+    45→  Braces,
+    46→  Copy,
+    47→  CornerUpLeft,
+    48→  ArrowDown,
+    49→  ExternalLink,
+    50→  Tag as TagIcon,
+    51→  Plus,
+    52→  Tags,
+    53→} from 'lucide-react'
+    54→
+    55→import { cn } from '@/lib/utils'
+    56→import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
+    57→import {
+    58→  colorFromString,
+    59→  initials,
+    60→  timeAgo,
+    61→  formatTime,
+    62→  formatDateTime,
+    63→  downloadFile,
+    64→  tagColor,
+    65→} from '@/lib/format'
+    66→import { useRealtime } from '@/hooks/use-realtime'
+    67→import { useCan } from '@/hooks/use-current-user'
+    68→import { LeadBadge } from '@/components/status'
+    69→import type {
+    70→  ChatListItem,
+    71→  ChatMessage,
+    72→  ContactDetail,
+    73→  ContactStatus,
+    74→  MessageStatus,
+    75→  TagItem,
+    76→  TagWithCount,
+    77→  WhatsAppState,
+    78→} from '@/lib/types'
+    79→
+    80→import { Button } from '@/components/ui/button'
+    81→import { Input } from '@/components/ui/input'
+    82→import { Badge } from '@/components/ui/badge'
+    83→import { Textarea } from '@/components/ui/textarea'
+    84→import { Separator } from '@/components/ui/separator'
+    85→import { Switch } from '@/components/ui/switch'
+    86→import { Progress } from '@/components/ui/progress'
+    87→import {
+    88→  Popover,
+    89→  PopoverContent,
+    90→  PopoverTrigger,
+    91→} from '@/components/ui/popover'
+    92→import {
+    93→  Select,
+    94→  SelectContent,
+    95→  SelectItem,
+    96→  SelectTrigger,
+    97→  SelectValue,
+    98→} from '@/components/ui/select'
+    99→import {
+   100→  Sheet,
+   101→  SheetContent,
+   102→  SheetHeader,
+   103→  SheetTitle,
+   104→} from '@/components/ui/sheet'
+   105→import {
+   106→  Tooltip,
+   107→  TooltipContent,
+   108→  TooltipProvider,
+   109→  TooltipTrigger,
+   110→} from '@/components/ui/tooltip'
+   111→import {
+   112→  DropdownMenu,
+   113→  DropdownMenuContent,
+   114→  DropdownMenuItem,
+   115→  DropdownMenuTrigger,
+   116→} from '@/components/ui/dropdown-menu'
+   117→import {
+   118→  QuickReplyPicker,
+   119→  QuickReplySlashDropdown,
+   120→  showQuickReplyToast,
+   121→} from '@/components/quick-replies/quick-reply-picker'
+   122→import { QuickReplyManagerDialog } from '@/components/quick-replies/quick-reply-manager-dialog'
+   123→import {
+   124→  useQuickReplies,
+   125→  useSlashCommand,
+   126→} from '@/components/quick-replies/quick-reply-hooks'
+   127→import type { QuickReplyRow } from '@/lib/types'
+   128→import {
+   129→  Dialog,
+   130→  DialogContent,
+   131→  DialogDescription,
+   132→  DialogFooter,
+   133→  DialogHeader,
+   134→  DialogTitle,
+   135→} from '@/components/ui/dialog'
+   136→import { Label } from '@/components/ui/label'
+   137→
+   138→// ------------------------------------------------------------
+   139→// Types
+   140→// ------------------------------------------------------------
+   141→type FilterKey = 'all' | 'unread' | 'lead' | 'hot' | 'ai' | 'human' | 'pinned'
+   142→
+   143→interface WaStateResponse {
+   144→  state: WhatsAppState
+   145→  connectedNumber: string
+   146→  connectedName: string
+   147→}
+   148→
+   149→interface SendMessageResponse {
+   150→  ok: boolean
+   151→  message: ChatMessage
+   152→}
+   153→
+   154→interface HumanModeResponse {
+   155→  ok: boolean
+   156→  humanMode: boolean
+   157→}
+   158→
+   159→const FILTER_OPTIONS: { value: FilterKey; label: string }[] = [
+   160→  { value: 'all', label: 'All conversations' },
+   161→  { value: 'unread', label: 'Unread only' },
+   162→  { value: 'lead', label: 'Leads' },
+   163→  { value: 'hot', label: 'Hot leads (≥70)' },
+   164→  { value: 'ai', label: 'AI active' },
+   165→  { value: 'human', label: 'Human mode' },
+   166→  { value: 'pinned', label: 'Pinned' },
+   167→]
+   168→
+   169→const STATUS_BADGE: Record<ContactStatus, string> = {
+   170→  new: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+   171→  active: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+   172→  lead: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+   173→  customer: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+   174→  blocked: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+   175→}
+   176→
+   177→const MEMORY_KEY_LABELS: Record<string, string> = {
+   178→  name: 'Name',
+   179→  business: 'Business',
+   180→  requirements: 'Requirements',
+   181→  budget: 'Budget',
+   182→  language: 'Language',
+   183→  last_intent: 'Last intent',
+   184→  intent: 'Intent',
+   185→  project_status: 'Project status',
+   186→  timeline: 'Timeline',
+   187→  location: 'Location',
+   188→  service: 'Service',
+   189→  contact_method: 'Contact method',
+   190→}
+   191→
+   192→// ------------------------------------------------------------
+   193→// Helpers
+   194→// ------------------------------------------------------------
+   195→
+   196→/** Group messages into buckets keyed by YYYY-MM-DD so we can render date separators. */
+   197→function groupByDay(messages: ChatMessage[]): { day: string; items: ChatMessage[] }[] {
+   198→  const out: { day: string; items: ChatMessage[] }[] = []
+   199→  for (const m of messages) {
+   200→    const d = new Date(m.timestamp)
+   201→    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+   202→    const last = out[out.length - 1]
+   203→    if (last && last.day === key) last.items.push(m)
+   204→    else out.push({ day: key, items: [m] })
+   205→  }
+   206→  return out
+   207→}
+   208→
+   209→function formatDayHeader(day: string): string {
+   210→  const d = new Date(day + 'T00:00:00')
+   211→  const today = new Date()
+   212→  const yesterday = new Date()
+   213→  yesterday.setDate(today.getDate() - 1)
+   214→  const sameDay = (a: Date, b: Date) =>
+   215→    a.getFullYear() === b.getFullYear() &&
+   216→    a.getMonth() === b.getMonth() &&
+   217→    a.getDate() === b.getDate()
+   218→  if (sameDay(d, today)) return 'Today'
+   219→  if (sameDay(d, yesterday)) return 'Yesterday'
+   220→  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+   221→}
+   222→
+   223→function memoryLabel(key: string): string {
+   224→  return MEMORY_KEY_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+   225→}
+   226→
+   227→/** Compact "Ns ago" / "just now" label for the AI replied badge. */
+   228→function aiRepliedAgoLabel(timestamp: string): string {
+   229→  const d = new Date(timestamp)
+   230→  const diff = Date.now() - d.getTime()
+   231→  if (diff < 5000) return 'just now'
+   232→  return timeAgo(timestamp)
+   233→}
+   234→
+   235→/** True when an AI message is recent enough to show a live pulse on the icon. */
+   236→function isAiMessageRecent(timestamp: string): boolean {
+   237→  return Date.now() - new Date(timestamp).getTime() < 8000
+   238→}
+   239→
+   240→function categoryLabel(svc: string): string {
+   241→  const map: Record<string, string> = {
+   242→    website: 'Website Development',
+   243→    app: 'Android App Development',
+   244→    crm: 'CRM Development',
+   245→    software: 'Business Software',
+   246→    ai_automation: 'AI Automation',
+   247→    maintenance: 'Maintenance',
+   248→    general: 'General Inquiry',
+   249→    support: 'Support Request',
+   250→    high_priority: 'High Priority',
+   251→  }
+   252→  return map[svc] ?? (svc ? svc : '—')
+   253→}
+   254→
+   255→// ------------------------------------------------------------
+   256→// Small presentational components
+   257→// ------------------------------------------------------------
+   258→
+   259→function Avatar({ name, phone, size = 'md' }: { name: string; phone: string; size?: 'sm' | 'md' | 'lg' }) {
+   260→  const cls = colorFromString(name || phone)
+   261→  const dim =
+   262→    size === 'sm' ? 'h-8 w-8 text-[10px]' : size === 'lg' ? 'h-14 w-14 text-base' : 'h-10 w-10 text-xs'
+   263→  return (
+   264→    <div
+   265→      className={cn(
+   266→        'grid shrink-0 place-items-center rounded-full font-bold',
+   267→        dim,
+   268→        cls,
+   269→      )}
+   270→      aria-hidden
+   271→    >
+   272→      {initials(name || phone)}
+   273→    </div>
+   274→  )
+   275→}
+   276→
+   277→function DeliveryIcon({ status }: { status: MessageStatus }) {
+   278→  if (status === 'failed') {
+   279→    return (
+   280→      <Tooltip>
+   281→        <TooltipTrigger asChild>
+   282→          <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+   283→        </TooltipTrigger>
+   284→        <TooltipContent side="top">Failed to send</TooltipContent>
+   285→      </Tooltip>
+   286→    )
+   287→  }
+   288→  if (status === 'pending') {
+   289→    return <Clock className="h-3.5 w-3.5 opacity-70" />
+   290→  }
+   291→  if (status === 'sent') {
+   292→    return <Check className="h-3.5 w-3.5 opacity-70" />
+   293→  }
+   294→  if (status === 'delivered') {
+   295→    return <CheckCheck className="h-3.5 w-3.5 opacity-70" />
+   296→  }
+   297→  // read
+   298→  return <CheckCheck className="h-3.5 w-3.5 text-sky-300" />
+   299→}
+   300→
+   301→function SourceBadge({ source }: { source: ChatMessage['source'] }) {
+   302→  if (source === 'customer') return null
+   303→  const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
+   304→    ai: {
+   305→      label: 'AI',
+   306→      cls: 'bg-emerald-500/20 text-emerald-200',
+   307→      icon: <Bot className="h-3 w-3" />,
+   308→    },
+   309→    owner: {
+   310→      label: 'You',
+   311→      cls: 'bg-primary/30 text-primary-foreground',
+   312→      icon: <User className="h-3 w-3" />,
+   313→    },
+   314→    system: {
+   315→      label: 'System',
+   316→      cls: 'bg-zinc-500/20 text-zinc-300',
+   317→      icon: <Shield className="h-3 w-3" />,
+   318→    },
+   319→  }
+   320→  const cfg = map[source]
+   321→  if (!cfg) return null
+   322→  return (
+   323→    <span
+   324→      className={cn(
+   325→        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider',
+   326→        cfg.cls,
+   327→      )}
+   328→    >
+   329→      {cfg.icon}
+   330→      {cfg.label}
+   331→    </span>
+   332→  )
+   333→}
+   334→
+   335→// ------------------------------------------------------------
+   336→// Tag badges & picker
+   337→// ------------------------------------------------------------
+   338→const MAX_TAG_BADGES = 2
+   339→
+   340→/** A single small colored pill for a tag. */
+   341→function TagPill({
+   342→  tag,
+   343→  onRemove,
+   344→  size = 'sm',
+   345→}: {
+   346→  tag: TagItem
+   347→  onRemove?: () => void
+   348→  size?: 'sm' | 'md'
+   349→}) {
+   350→  const c = tagColor(tag.color)
+   351→  return (
+   352→    <span
+   353→      className={cn(
+   354→        'group/tag inline-flex items-center gap-1 rounded-md font-medium',
+   355→        size === 'sm' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]',
+   356→        c.bg,
+   357→        c.text,
+   358→      )}
+   359→    >
+   360→      <span className={cn('h-1.5 w-1.5 rounded-full', c.dot)} aria-hidden />
+   361→      <span className="truncate max-w-[120px]">{tag.name}</span>
+   362→      {onRemove && (
+   363→        <button
+   364→          type="button"
+   365→          onClick={(e) => {
+   366→            e.stopPropagation()
+   367→            onRemove()
+   368→          }}
+   369→          className="ml-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:bg-foreground/15 group-hover/tag:opacity-100"
+   370→          aria-label={`Remove ${tag.name} tag`}
+   371→        >
+   372→          <X className="h-2.5 w-2.5" />
+   373→        </button>
+   374→      )}
+   375→    </span>
+   376→  )
+   377→}
+   378→
+   379→/** Compact inline cluster: up to MAX_TAG_BADGES + "+N" overflow chip. */
+   380→function TagBadgeCluster({
+   381→  tags,
+   382→  onRemove,
+   383→  className,
+   384→}: {
+   385→  tags: TagItem[]
+   386→  onRemove?: (tagId: string) => void
+   387→  className?: string
+   388→}) {
+   389→  if (!tags || tags.length === 0) return null
+   390→  const visible = tags.slice(0, MAX_TAG_BADGES)
+   391→  const overflow = tags.length - visible.length
+   392→  return (
+   393→    <div className={cn('flex flex-wrap items-center gap-1', className)}>
+   394→      {visible.map((t) => (
+   395→        <TagPill key={t.id} tag={t} onRemove={onRemove ? () => onRemove(t.id) : undefined} />
+   396→      ))}
+   397→      {overflow > 0 && (
+   398→        <Tooltip>
+   399→          <TooltipTrigger asChild>
+   400→            <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+   401→              +{overflow}
+   402→            </span>
+   403→          </TooltipTrigger>
+   404→          <TooltipContent side="top" className="text-xs">
+   405→            {tags.slice(MAX_TAG_BADGES).map((t) => t.name).join(', ')}
+   406→          </TooltipContent>
+   407→        </Tooltip>
+   408→      )}
+   409→    </div>
+   410→  )
+   411→}
+   412→
+   413→/** Popover that lets the user search existing tags + create a new one. */
+   414→function TagPicker({
+   415→  open,
+   416→  onOpenChange,
+   417→  allTags,
+   418→  currentTagIds,
+   419→  onAddExisting,
+   420→  onCreate,
+   421→}: {
+   422→  open: boolean
+   423→  onOpenChange: (v: boolean) => void
+   424→  allTags: TagWithCount[]
+   425→  currentTagIds: Set<string>
+   426→  onAddExisting: (tagId: string) => Promise<void> | void
+   427→  onCreate: (name: string) => Promise<void> | void
+   428→}) {
+   429→  const [query, setQuery] = React.useState('')
+   430→  const [creating, setCreating] = React.useState(false)
+   431→  const [addingId, setAddingId] = React.useState<string | null>(null)
+   432→
+   433→  // Reset the search field each time the popover opens.
+   434→  React.useEffect(() => {
+   435→    if (open) {
+   436→      setQuery('')
+   437→      setCreating(false)
+   438→      setAddingId(null)
+   439→    }
+   440→  }, [open])
+   441→
+   442→  const q = query.trim().toLowerCase()
+   443→  const filtered = React.useMemo(
+   444→    () =>
+   445→      allTags.filter((t) => (q ? t.name.toLowerCase().includes(q) : true)),
+   446→    [allTags, q],
+   447→  )
+   448→
+   449→  // Show a "create" option when the user typed something that doesn't match
+   450→  // an existing tag exactly (case-insensitive).
+   451→  const trimmedQuery = query.trim()
+   452→  const exactMatch = allTags.some(
+   453→    (t) => t.name.toLowerCase() === trimmedQuery.toLowerCase(),
+   454→  )
+   455→  const canCreate = trimmedQuery.length > 0 && !exactMatch
+   456→
+   457→  const handleCreate = async () => {
+   458→    if (!canCreate) return
+   459→    setCreating(true)
+   460→    try {
+   461→      await onCreate(trimmedQuery)
+   462→      onOpenChange(false)
+   463→    } finally {
+   464→      setCreating(false)
+   465→    }
+   466→  }
+   467→
+   468→  const handlePick = async (tagId: string) => {
+   469→    setAddingId(tagId)
+   470→    try {
+   471→      await onAddExisting(tagId)
+   472→      onOpenChange(false)
+   473→    } finally {
+   474→      setAddingId(null)
+   475→    }
+   476→  }
+   477→
+   478→  return (
+   479→    <Popover open={open} onOpenChange={onOpenChange}>
+   480→      <PopoverTrigger asChild>
+   481→        <Button
+   482→          variant="outline"
+   483→          size="sm"
+   484→          className="gap-1.5 text-xs"
+   485→          aria-label="Add tag"
+   486→        >
+   487→          <Plus className="h-3.5 w-3.5" />
+   488→          Add tag
+   489→        </Button>
+   490→      </PopoverTrigger>
+   491→      <PopoverContent align="start" className="w-64 p-0">
+   492→        <div className="border-b p-2">
+   493→          <div className="relative">
+   494→            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   495→            <Input
+   496→              autoFocus
+   497→              value={query}
+   498→              onChange={(e) => setQuery(e.target.value)}
+   499→              placeholder="Search or create tag…"
+   500→              className="h-8 pl-7 pr-7 text-xs"
+   501→            />
+   502→            {query && (
+   503→              <button
+   504→                type="button"
+   505→                onClick={() => setQuery('')}
+   506→                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+   507→                aria-label="Clear search"
+   508→              >
+   509→                <X className="h-3 w-3" />
+   510→              </button>
+   511→            )}
+   512→          </div>
+   513→        </div>
+   514→        <div className="max-h-64 overflow-y-auto p-1 scrollbar-thin">
+   515→          {filtered.length === 0 && !canCreate ? (
+   516→            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+   517→              No tags found.
+   518→            </div>
+   519→          ) : (
+   520→            filtered.map((t) => {
+   521→              const c = tagColor(t.color)
+   522→              const active = currentTagIds.has(t.id)
+   523→              return (
+   524→                <button
+   525→                  type="button"
+   526→                  key={t.id}
+   527→                  onClick={() => void handlePick(t.id)}
+   528→                  disabled={active || addingId === t.id}
+   529→                  className={cn(
+   530→                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+   531→                    active
+   532→                      ? 'cursor-default opacity-50'
+   533→                      : 'hover:bg-muted',
+   534→                  )}
+   535→                >
+   536→                  <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', c.dot)} />
+   537→                  <span className="flex-1 truncate">{t.name}</span>
+   538→                  {active ? (
+   539→                    <Check className="h-3 w-3 text-emerald-400" />
+   540→                  ) : addingId === t.id ? (
+   541→                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+   542→                  ) : (
+   543→                    <span className="text-[10px] text-muted-foreground tabular-nums">
+   544→                      {t.contactCount}
+   545→                    </span>
+   546→                  )}
+   547→                </button>
+   548→              )
+   549→            })
+   550→          )}
+   551→          {canCreate && (
+   552→            <button
+   553→              type="button"
+   554→              onClick={() => void handleCreate()}
+   555→              disabled={creating}
+   556→              className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed bg-background/40 px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted"
+   557→            >
+   558→              {creating ? (
+   559→                <Loader2 className="h-3 w-3 animate-spin text-emerald-400" />
+   560→              ) : (
+   561→                <Plus className="h-3 w-3 text-emerald-400" />
+   562→              )}
+   563→              <span className="flex-1">
+   564→                Create tag <span className="font-semibold">“{trimmedQuery}”</span>
+   565→              </span>
+   566→            </button>
+   567→          )}
+   568→        </div>
+   569→      </PopoverContent>
+   570→    </Popover>
+   571→  )
+   572→}
+   573→
+   574→function MessageBubble({
+   575→  message,
+   576→  onReply,
+   577→}: {
+   578→  message: ChatMessage
+   579→  onReply?: (text: string) => void
+   580→}) {
+   581→  const isOutgoing = message.direction === 'outgoing'
+   582→  const isAi = message.source === 'ai'
+   583→  const [copied, setCopied] = React.useState(false)
+   584→
+   585→  const handleCopy = async () => {
+   586→    try {
+   587→      await navigator.clipboard.writeText(message.text)
+   588→      setCopied(true)
+   589→      window.setTimeout(() => setCopied(false), 1400)
+   590→    } catch {
+   591→      /* clipboard may be unavailable in insecure contexts — ignore */
+   592→    }
+   593→  }
+   594→
+   595→  return (
+   596→    <div className={cn('group relative flex w-full', isOutgoing ? 'justify-end' : 'justify-start')}>
+   597→      <div
+   598→        className={cn(
+   599→          'shadow-sm max-w-[78%] sm:max-w-[68%] rounded-2xl px-3 py-2 text-sm break-words',
+   600→          isOutgoing
+   601→            ? 'chat-bubble-out rounded-tr-sm'
+   602→            : 'chat-bubble-in rounded-tl-sm',
+   603→        )}
+   604→      >
+   605→        {/* Source badge row (for AI / Owner / System outgoing, none for customer) */}
+   606→        {isOutgoing && message.source !== 'owner' && (
+   607→          <div className="mb-1">
+   608→            <SourceBadge source={message.source} />
+   609→          </div>
+   610→        )}
+   611→        <div className="whitespace-pre-wrap leading-relaxed">{message.text}</div>
+   612→        <div
+   613→          className={cn(
+   614→            'mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums',
+   615→            isOutgoing ? 'text-primary-foreground/70' : 'text-muted-foreground',
+   616→          )}
+   617→        >
+   618→          <span>{formatTime(message.timestamp)}</span>
+   619→          {isOutgoing && <DeliveryIcon status={message.status} />}
+   620→        </div>
+   621→        {/* AI "replied Ns ago" subtle sublabel */}
+   622→        {isAi && (
+   623→          <div className="mt-0.5 flex items-center justify-end">
+   624→            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400/70">
+   625→              <Bot
+   626→                className={cn(
+   627→                  'h-2.5 w-2.5',
+   628→                  isAiMessageRecent(message.timestamp) && 'animate-pulse',
+   629→                )}
+   630→              />
+   631→              AI · {aiRepliedAgoLabel(message.timestamp)}
+   632→            </span>
+   633→          </div>
+   634→        )}
+   635→      </div>
+   636→      {/* Hover actions: copy + reply (incoming only) */}
+   637→      <div
+   638→        className={cn(
+   639→          'pointer-events-none absolute top-0 flex items-center gap-0.5 rounded-md border bg-card/95 p-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:pointer-events-auto group-hover:opacity-100',
+   640→          isOutgoing ? 'right-0' : 'left-0',
+   641→        )}
+   642→      >
+   643→        <button
+   644→          type="button"
+   645→          onClick={handleCopy}
+   646→          className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   647→          aria-label="Copy message text"
+   648→        >
+   649→          {copied ? (
+   650→            <Check className="h-3 w-3 text-emerald-400" />
+   651→          ) : (
+   652→            <Copy className="h-3 w-3" />
+   653→          )}
+   654→        </button>
+   655→        {!isOutgoing && (
+   656→          <button
+   657→            type="button"
+   658→            onClick={() => onReply?.(message.text)}
+   659→            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   660→            aria-label="Quote message in reply"
+   661→          >
+   662→            <CornerUpLeft className="h-3 w-3" />
+   663→          </button>
+   664→        )}
+   665→      </div>
+   666→    </div>
+   667→  )
+   668→}
+   669→
+   670→function DateSeparator({ day }: { day: string }) {
+   671→  return (
+   672→    <div className="flex justify-center py-2">
+   673→      <span className="rounded-full bg-muted/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+   674→        {formatDayHeader(day)}
+   675→      </span>
+   676→    </div>
+   677→  )
+   678→}
+   679→
+   680→// ------------------------------------------------------------
+   681→// ConversationList — left pane
+   682→// ------------------------------------------------------------
+   683→interface ConversationListProps {
+   684→  items: ChatListItem[]
+   685→  loading: boolean
+   686→  selectedId: string | null
+   687→  search: string
+   688→  filter: FilterKey
+   689→  tagFilter: string
+   690→  allTags: TagWithCount[]
+   691→  totalUnread: number
+   692→  markingAllRead: boolean
+   693→  onSelect: (id: string) => void
+   694→  onSearchChange: (v: string) => void
+   695→  onFilterChange: (v: FilterKey) => void
+   696→  onTagFilterChange: (tag: string) => void
+   697→  onMarkAllRead: () => void
+   698→}
+   699→
+   700→function ConversationList({
+   701→  items,
+   702→  loading,
+   703→  selectedId,
+   704→  search,
+   705→  filter,
+   706→  tagFilter,
+   707→  allTags,
+   708→  totalUnread,
+   709→  markingAllRead,
+   710→  onSelect,
+   711→  onSearchChange,
+   712→  onFilterChange,
+   713→  onTagFilterChange,
+   714→  onMarkAllRead,
+   715→}: ConversationListProps) {
+   716→  const [tagFilterOpen, setTagFilterOpen] = React.useState(false)
+   717→  const activeTag = React.useMemo(
+   718→    () => (tagFilter ? allTags.find((t) => t.name === tagFilter) ?? null : null),
+   719→    [tagFilter, allTags],
+   720→  )
+   721→
+   722→  return (
+   723→    <div className="flex h-full min-h-0 flex-col">
+   724→      {/* Header */}
+   725→      <div className="border-b p-3">
+   726→        <div className="flex items-center justify-between">
+   727→          <h2 className="flex items-center gap-2 text-sm font-semibold">
+   728→            <MessageCircle className="h-4 w-4 text-primary" />
+   729→            Chats
+   730→          </h2>
+   731→          <Badge variant="outline" className="text-[10px] tabular-nums">
+   732→            {items.length}
+   733→          </Badge>
+   734→        </div>
+   735→        {/* Search */}
+   736→        <div className="relative mt-2">
+   737→          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+   738→          <Input
+   739→            value={search}
+   740→            onChange={(e) => onSearchChange(e.target.value)}
+   741→            placeholder="Search name, phone or message…"
+   742→            className="h-9 pl-8 pr-7 text-sm"
+   743→            aria-label="Search conversations"
+   744→          />
+   745→          {search && (
+   746→            <button
+   747→              type="button"
+   748→              onClick={() => onSearchChange('')}
+   749→              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+   750→              aria-label="Clear search"
+   751→            >
+   752→              <X className="h-3.5 w-3.5" />
+   753→            </button>
+   754→          )}
+   755→        </div>
+   756→        {/* Filter + Tag filter + Mark all read */}
+   757→        <div className="mt-2 flex items-center gap-1.5">
+   758→          <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+   759→          <Select value={filter} onValueChange={(v) => onFilterChange(v as FilterKey)}>
+   760→            <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
+   761→              <SelectValue />
+   762→            </SelectTrigger>
+   763→            <SelectContent>
+   764→              {FILTER_OPTIONS.map((opt) => (
+   765→                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+   766→                  {opt.label}
+   767→                </SelectItem>
+   768→              ))}
+   769→            </SelectContent>
+   770→          </Select>
+   771→          {/* Tag filter popover */}
+   772→          <Popover open={tagFilterOpen} onOpenChange={setTagFilterOpen}>
+   773→            <Tooltip>
+   774→              <TooltipTrigger asChild>
+   775→                <PopoverTrigger asChild>
+   776→                  <Button
+   777→                    variant={tagFilter ? 'default' : 'outline'}
+   778→                    size="icon"
+   779→                    className={cn(
+   780→                      'h-8 w-8 shrink-0',
+   781→                      tagFilter &&
+   782→                        'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+   783→                    )}
+   784→                    aria-label="Filter by tag"
+   785→                  >
+   786→                    <TagIcon className="h-3.5 w-3.5" />
+   787→                  </Button>
+   788→                </PopoverTrigger>
+   789→              </TooltipTrigger>
+   790→              <TooltipContent side="top">Filter by tag</TooltipContent>
+   791→            </Tooltip>
+   792→            <PopoverContent align="end" className="w-56 p-0">
+   793→              <div className="border-b px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+   794→                Filter by tag
+   795→              </div>
+   796→              <div className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
+   797→                {allTags.length === 0 ? (
+   798→                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+   799→                    No tags yet.
+   800→                  </div>
+   801→                ) : (
+   802→                  allTags.map((t) => {
+   803→                    const c = tagColor(t.color)
+   804→                    const isActive = tagFilter === t.name
+   805→                    return (
+   806→                      <button
+   807→                        type="button"
+   808→                        key={t.id}
+   809→                        onClick={() => {
+   810→                          onTagFilterChange(isActive ? '' : t.name)
+   811→                          setTagFilterOpen(false)
+   812→                        }}
+   813→                        className={cn(
+   814→                          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted',
+   815→                          isActive && 'bg-muted',
+   816→                        )}
+   817→                      >
+   818→                        <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', c.dot)} />
+   819→                        <span className="flex-1 truncate">{t.name}</span>
+   820→                        <span className="text-[10px] text-muted-foreground tabular-nums">
+   821→                          {t.contactCount}
+   822→                        </span>
+   823→                        {isActive && <Check className="h-3 w-3 text-emerald-400" />}
+   824→                      </button>
+   825→                    )
+   826→                  })
+   827→                )}
+   828→                {tagFilter && (
+   829→                  <button
+   830→                    type="button"
+   831→                    onClick={() => {
+   832→                      onTagFilterChange('')
+   833→                      setTagFilterOpen(false)
+   834→                    }}
+   835→                    className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed bg-background/40 px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted"
+   836→                  >
+   837→                    <X className="h-3 w-3" />
+   838→                    Clear tag filter
+   839→                  </button>
+   840→                )}
+   841→              </div>
+   842→            </PopoverContent>
+   843→          </Popover>
+   844→          {totalUnread > 0 && (
+   845→            <Tooltip>
+   846→              <TooltipTrigger asChild>
+   847→                <Button
+   848→                  variant="ghost"
+   849→                  size="icon"
+   850→                  className="h-8 w-8 shrink-0"
+   851→                  onClick={onMarkAllRead}
+   852→                  disabled={markingAllRead}
+   853→                  aria-label="Mark all conversations as read"
+   854→                >
+   855→                  {markingAllRead ? (
+   856→                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+   857→                  ) : (
+   858→                    <CheckCheck className="h-3.5 w-3.5 text-emerald-400" />
+   859→                  )}
+   860→                </Button>
+   861→              </TooltipTrigger>
+   862→              <TooltipContent side="top">Mark all read</TooltipContent>
+   863→            </Tooltip>
+   864→          )}
+   865→        </div>
+   866→      </div>
+   867→
+   868→      {/* Active tag filter banner */}
+   869→      {activeTag && (
+   870→        <div className="flex items-center justify-between gap-2 border-b bg-primary/5 px-3 py-1.5 text-[11px]">
+   871→          <span className="flex min-w-0 items-center gap-1.5 font-medium text-foreground">
+   872→            <Tags className="h-3 w-3 shrink-0 text-primary" />
+   873→            <span className="truncate">Tagged:</span>
+   874→            <TagPill tag={activeTag} />
+   875→          </span>
+   876→          <button
+   877→            type="button"
+   878→            onClick={() => onTagFilterChange('')}
+   879→            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   880→            aria-label="Clear tag filter"
+   881→          >
+   882→            <X className="h-3.5 w-3.5" />
+   883→          </button>
+   884→        </div>
+   885→      )}
+   886→
+   887→      {/* Unread banner */}
+   888→      {totalUnread > 0 && (
+   889→        <div className="flex items-center justify-between gap-2 border-b bg-emerald-500/5 px-3 py-1.5 text-[11px]">
+   890→          <span className="flex items-center gap-1.5 font-medium text-emerald-300">
+   891→            <Bell className="h-3 w-3" />
+   892→            {totalUnread} unread conversation{totalUnread === 1 ? '' : 's'}
+   893→          </span>
+   894→          <button
+   895→            type="button"
+   896→            onClick={onMarkAllRead}
+   897→            disabled={markingAllRead}
+   898→            className="font-semibold text-emerald-300 transition-colors hover:text-emerald-200 disabled:opacity-50"
+   899→          >
+   900→            {markingAllRead ? 'Marking…' : 'Mark all read'}
+   901→          </button>
+   902→        </div>
+   903→      )}
+   904→
+   905→      {/* List */}
+   906→      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+   907→        {loading && items.length === 0 ? (
+   908→          <div className="flex h-32 items-center justify-center text-muted-foreground">
+   909→            <Loader2 className="h-4 w-4 animate-spin" />
+   910→          </div>
+   911→        ) : items.length === 0 ? (
+   912→          <div className="flex h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+   913→            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-muted/60 text-muted-foreground">
+   914→              <Inbox className="h-6 w-6" />
+   915→            </div>
+   916→            <div>
+   917→              <div className="text-sm font-medium">
+   918→                {tagFilter ? `No conversations tagged “${tagFilter}”` : 'No conversations yet'}
+   919→              </div>
+   920→              <div className="mt-0.5 text-[11px] text-muted-foreground">
+   921→                {tagFilter
+   922→                  ? 'Try a different tag or clear the filter.'
+   923→                  : 'Use the Simulator to test the AI.'}
+   924→              </div>
+   925→            </div>
+   926→          </div>
+   927→        ) : (
+   928→          <ul className="divide-y divide-border/60">
+   929→            {items.map((c) => {
+   930→              const active = c.contactId === selectedId
+   931→              const previewPrefix =
+   932→                c.lastDirection === 'outgoing'
+   933→                  ? c.lastMessage.startsWith('AI:') || c.lastMessage.startsWith('You:')
+   934→                    ? ''
+   935→                    : 'You: '
+   936→                  : ''
+   937→              return (
+   938→                <li key={c.contactId}>
+   939→                  <button
+   940→                    type="button"
+   941→                    onClick={() => onSelect(c.contactId)}
+   942→                    className={cn(
+   943→                      'group relative flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
+   944→                      active ? 'bg-primary/10' : 'hover:bg-muted/40',
+   945→                    )}
+   946→                  >
+   947→                    {/* active left accent */}
+   948→                    {active && (
+   949→                      <span className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+   950→                    )}
+   951→                    <Avatar name={c.name} phone={c.phone} />
+   952→                    <div className="min-w-0 flex-1">
+   953→                      <div className="flex items-center justify-between gap-2">
+   954→                        <span className="truncate text-sm font-semibold">{c.name}</span>
+   955→                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+   956→                          {timeAgo(c.lastMessageAt)}
+   957→                        </span>
+   958→                      </div>
+   959→                      <div className="flex items-center justify-between gap-2">
+   960→                        <span className="line-clamp-1 text-xs text-muted-foreground">
+   961→                          {previewPrefix}
+   962→                          {c.lastMessage || '—'}
+   963→                        </span>
+   964→                        <div className="flex shrink-0 items-center gap-1">
+   965→                          {c.humanMode && (
+   966→                            <Badge className="border-amber-500/30 bg-amber-500/15 px-1 py-0 text-[9px] font-semibold text-amber-300">
+   967→                              Human
+   968→                            </Badge>
+   969→                          )}
+   970→                          {c.pinned && <Pin className="h-3 w-3 text-muted-foreground" />}
+   971→                          {c.unread > 0 && (
+   972→                            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-white">
+   973→                              {c.unread > 99 ? '99+' : c.unread}
+   974→                            </span>
+   975→                          )}
+   976→                        </div>
+   977→                      </div>
+   978→                      <div className="mt-1 flex items-center gap-1.5">
+   979→                        <span className="text-[10px] text-muted-foreground">{c.phone}</span>
+   980→                        {c.leadScore >= 25 && <LeadBadge score={c.leadScore} className="text-[9px]" />}
+   981→                      </div>
+   982→                      {/* Tag badges (up to 2 + "+N") */}
+   983→                      {c.tags.length > 0 && (
+   984→                        <TagBadgeCluster tags={c.tags} className="mt-1.5" />
+   985→                      )}
+   986→                    </div>
+   987→                  </button>
+   988→                </li>
+   989→              )
+   990→            })}
+   991→          </ul>
+   992→        )}
+   993→      </div>
+   994→    </div>
+   995→  )
+   996→}
+   997→
+   998→// ------------------------------------------------------------
+   999→// ChatWindow — center pane
+  1000→// ------------------------------------------------------------
+  1001→interface ChatWindowProps {
+  1002→  contact: ChatListItem | null
+  1003→  messages: ChatMessage[]
+  1004→  loadingMessages: boolean
+  1005→  waState: WhatsAppState
+  1006→  onBack: () => void
+  1007→  onOpenDetails: () => void
+  1008→  onSend: (text: string) => Promise<void>
+  1009→  sending: boolean
+  1010→}
+  1011→
+  1012→function ChatWindow({
+  1013→  contact,
+  1014→  messages,
+  1015→  loadingMessages,
+  1016→  waState,
+  1017→  onBack,
+  1018→  onOpenDetails,
+  1019→  onSend,
+  1020→  sending,
+  1021→}: ChatWindowProps) {
+  1022→  const [text, setText] = React.useState('')
+  1023→  const [exporting, setExporting] = React.useState(false)
+  1024→  const [showScrollButton, setShowScrollButton] = React.useState(false)
+  1025→  const [scheduleOpen, setScheduleOpen] = React.useState(false)
+  1026→  const [scheduleAt, setScheduleAt] = React.useState('')
+  1027→  const [scheduling, setScheduling] = React.useState(false)
+  1028→  const [qrManagerOpen, setQrManagerOpen] = React.useState(false)
+  1029→  const [cursor, setCursor] = React.useState(0)
+  1030→  const scrollRef = React.useRef<HTMLDivElement>(null)
+  1031→  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  1032→  const pinnedToBottomRef = React.useRef(true)
+  1033→
+  1034→  // Permission gate: viewers (read-only) cannot send or schedule messages.
+  1035→  // The Send and Schedule buttons are disabled with a tooltip explaining
+  1036→  // why. The API also rejects the request with 403 if they try anyway.
+  1037→  const canSend = useCan('canSendMessages')
+  1038→  const canSchedule = useCan('canScheduleMessages')
+  1039→
+  1040→  // Quick replies: shared between the Zap popover, the slash-command
+  1041→  // dropdown, and the manager dialog.
+  1042→  const qr = useQuickReplies()
+  1043→  const slash = useSlashCommand({
+  1044→    text,
+  1045→    cursor,
+  1046→    items: qr.items,
+  1047→  })
+  1048→
+  1049→  // Auto-scroll: always jump to bottom when switching contacts; only follow
+  1050→  // new messages when the user hasn't scrolled up to read history.
+  1051→  React.useEffect(() => {
+  1052→    const el = scrollRef.current
+  1053→    if (!el) return
+  1054→    el.scrollTop = el.scrollHeight
+  1055→    pinnedToBottomRef.current = true
+  1056→    setShowScrollButton(false)
+  1057→  }, [contact?.contactId])
+  1058→
+  1059→  React.useEffect(() => {
+  1060→    const el = scrollRef.current
+  1061→    if (!el) return
+  1062→    if (pinnedToBottomRef.current) {
+  1063→      el.scrollTop = el.scrollHeight
+  1064→    }
+  1065→  }, [messages])
+  1066→
+  1067→  // Auto-grow the textarea up to ~4 lines
+  1068→  React.useEffect(() => {
+  1069→    const ta = textareaRef.current
+  1070→    if (!ta) return
+  1071→    ta.style.height = 'auto'
+  1072→    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
+  1073→  }, [text])
+  1074→
+  1075→  const handleScroll = () => {
+  1076→    const el = scrollRef.current
+  1077→    if (!el) return
+  1078→    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  1079→    const atBottom = distanceFromBottom < 80
+  1080→    pinnedToBottomRef.current = atBottom
+  1081→    setShowScrollButton(!atBottom && messages.length > 0)
+  1082→  }
+  1083→
+  1084→  const scrollToBottom = () => {
+  1085→    const el = scrollRef.current
+  1086→    if (!el) return
+  1087→    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  1088→    pinnedToBottomRef.current = true
+  1089→    setShowScrollButton(false)
+  1090→  }
+  1091→
+  1092→  const handleExport = async (format: 'csv' | 'json') => {
+  1093→    if (!contact) return
+  1094→    setExporting(true)
+  1095→    try {
+  1096→      const res = await fetch(
+  1097→        `/api/messages/export?contactId=${encodeURIComponent(contact.contactId)}&format=${format}`,
+  1098→        { credentials: 'same-origin' },
+  1099→      )
+  1100→      if (!res.ok) {
+  1101→        throw new Error(`Export failed (${res.status})`)
+  1102→      }
+  1103→      const content = await res.text()
+  1104→      const safeName =
+  1105→        (contact.name || contact.phone)
+  1106→          .trim()
+  1107→          .replace(/[^a-zA-Z0-9-_]+/g, '_')
+  1108→          .replace(/^_+|_+$/g, '') || 'conversation'
+  1109→      const ext = format === 'csv' ? 'csv' : 'json'
+  1110→      const mime =
+  1111→        format === 'csv'
+  1112→          ? 'text/csv;charset=utf-8'
+  1113→          : 'application/json;charset=utf-8'
+  1114→      downloadFile(`chat-${safeName}.${ext}`, content, mime)
+  1115→      toast.success(`Exported as ${format.toUpperCase()}`)
+  1116→    } catch (err) {
+  1117→      toast.error('Failed to export conversation', {
+  1118→        description: err instanceof Error ? err.message : undefined,
+  1119→      })
+  1120→    } finally {
+  1121→      setExporting(false)
+  1122→    }
+  1123→  }
+  1124→
+  1125→  // Quote-reply: insert `> {line}` for each line of the quoted message
+  1126→  // so it reads as a markdown block-quote prefix in the composer.
+  1127→  const handleReply = (quotedText: string) => {
+  1128→    const prefix = quotedText
+  1129→      .split('\n')
+  1130→      .map((line) => `> ${line}`)
+  1131→      .join('\n')
+  1132→    setText((prev) => {
+  1133→      const merged = prev && !prev.endsWith('\n') ? prev + '\n' : prev
+  1134→      return `${merged}${prefix}\n`
+  1135→    })
+  1136→    textareaRef.current?.focus()
+  1137→  }
+  1138→
+  1139→  // --- Quick reply insertion ---
+  1140→  // Insert a quick reply body into the composer. When the textarea is empty
+  1141→  // the body replaces it; otherwise the body is appended after a separating
+  1142→  // newline so multi-line snippets stay readable.
+  1143→  const insertQuickReply = (reply: QuickReplyRow) => {
+  1144→    setText((prev) => {
+  1145→      const trimmed = prev.replace(/\s+$/, '')
+  1146→      if (!trimmed) return reply.body
+  1147→      return `${trimmed}\n${reply.body}`
+  1148→    })
+  1149→    // Place cursor at the end after insertion.
+  1150→    requestAnimationFrame(() => {
+  1151→      const ta = textareaRef.current
+  1152→      if (!ta) return
+  1153→      const end = ta.value.length
+  1154→      ta.focus()
+  1155→      ta.setSelectionRange(end, end)
+  1156→      setCursor(end)
+  1157→    })
+  1158→    void qr.bumpUsage(reply.id)
+  1159→    showQuickReplyToast(reply)
+  1160→  }
+  1161→
+  1162→  // Insert from slash-command dropdown: replaces the `/partial` token at the
+  1163→  // cursor with the chosen reply's body.
+  1164→  const insertSlashReply = (reply: QuickReplyRow) => {
+  1165→    const det = slash.detection
+  1166→    if (!det) return
+  1167→    const before = text.slice(0, det.start)
+  1168→    const after = text.slice(det.end)
+  1169→    const next = `${before}${reply.body}${after}`
+  1170→    setText(next)
+  1171→    const newCursor = det.start + reply.body.length
+  1172→    requestAnimationFrame(() => {
+  1173→      const ta = textareaRef.current
+  1174→      if (!ta) return
+  1175→      ta.focus()
+  1176→      ta.setSelectionRange(newCursor, newCursor)
+  1177→      setCursor(newCursor)
+  1178→    })
+  1179→    slash.reset()
+  1180→    void qr.bumpUsage(reply.id)
+  1181→    showQuickReplyToast(reply)
+  1182→  }
+  1183→
+  1184→  // Composer change handler — keep cursor in sync so the slash dropdown
+  1185→  // updates as the user types or moves the caret.
+  1186→  const handleComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  1187→    setText(e.target.value)
+  1188→    setCursor(e.target.selectionStart)
+  1189→  }
+  1190→  const handleComposerSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+  1191→    const ta = e.currentTarget
+  1192→    setCursor(ta.selectionStart)
+  1193→  }
+  1194→
+  1195→  if (!contact) {
+  1196→    return (
+  1197→      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+  1198→        <div className="grid h-16 w-16 place-items-center rounded-3xl bg-muted/60 text-muted-foreground">
+  1199→          <MessageCircle className="h-8 w-8" />
+  1200→        </div>
+  1201→        <div>
+  1202→          <div className="text-base font-semibold">Select a conversation</div>
+  1203→          <div className="mt-1 text-sm text-muted-foreground">
+  1204→            Pick a chat from the list to view messages and details.
+  1205→          </div>
+  1206→        </div>
+  1207→      </div>
+  1208→    )
+  1209→  }
+  1210→
+  1211→  const grouped = groupByDay(messages)
+  1212→  const aiActive = !contact.humanMode
+  1213→  const waConnected = waState === 'connected'
+  1214→
+  1215→  const handleSubmit = async () => {
+  1216→    const trimmed = text.trim()
+  1217→    if (!trimmed || sending || !canSend) return
+  1218→    setText('')
+  1219→    await onSend(trimmed)
+  1220→  }
+  1221→
+  1222→  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  1223→    // Slash-command dropdown navigation (only when matches are visible).
+  1224→    if (slash.matches.length > 0 && slash.detection) {
+  1225→      if (e.key === 'ArrowDown') {
+  1226→        e.preventDefault()
+  1227→        slash.setActiveIndex(
+  1228→          (slash.activeIndex + 1) % slash.matches.length,
+  1229→        )
+  1230→        return
+  1231→      }
+  1232→      if (e.key === 'ArrowUp') {
+  1233→        e.preventDefault()
+  1234→        slash.setActiveIndex(
+  1235→          (slash.activeIndex - 1 + slash.matches.length) % slash.matches.length,
+  1236→        )
+  1237→        return
+  1238→      }
+  1239→      if (e.key === 'Enter' && !e.shiftKey) {
+  1240→        e.preventDefault()
+  1241→        const picked = slash.matches[slash.activeIndex]
+  1242→        if (picked) insertSlashReply(picked)
+  1243→        return
+  1244→      }
+  1245→      if (e.key === 'Escape') {
+  1246→        e.preventDefault()
+  1247→        slash.reset()
+  1248→        // Collapse detection by moving the cursor out of the slash token.
+  1249→        const ta = textareaRef.current
+  1250→        if (ta) {
+  1251→          const end = ta.value.length
+  1252→          ta.setSelectionRange(end, end)
+  1253→          setCursor(end)
+  1254→        }
+  1255→        return
+  1256→      }
+  1257→      if (e.key === 'Tab') {
+  1258→        // Tab also selects the active match (handy on mobile keyboards
+  1259→        // where Enter is reserved by the send shortcut).
+  1260→        e.preventDefault()
+  1261→        const picked = slash.matches[slash.activeIndex]
+  1262→        if (picked) insertSlashReply(picked)
+  1263→        return
+  1264→      }
+  1265→    }
+  1266→
+  1267→    if (e.key === 'Enter' && !e.shiftKey) {
+  1268→      e.preventDefault()
+  1269→      void handleSubmit()
+  1270→    }
+  1271→  }
+  1272→
+  1273→  // --- Schedule dialog helpers ---
+  1274→  const openSchedule = () => {
+  1275→    if (!text.trim() || !contact) return
+  1276→    const pad = (n: number) => String(n).padStart(2, '0')
+  1277→    const d = new Date(Date.now() + 60 * 60 * 1000)
+  1278→    setScheduleAt(
+  1279→      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+  1280→        `T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  1281→    )
+  1282→    setScheduleOpen(true)
+  1283→  }
+  1284→
+  1285→  const handleScheduleSubmit = async () => {
+  1286→    if (!contact || !text.trim() || !scheduleAt) return
+  1287→    setScheduling(true)
+  1288→    try {
+  1289→      await apiPost<{ item: { id: string } }>(
+  1290→        '/api/scheduled',
+  1291→        {
+  1292→          contactId: contact.contactId,
+  1293→          text: text.trim(),
+  1294→          scheduledAt: new Date(scheduleAt).toISOString(),
+  1295→        },
+  1296→      )
+  1297→      toast.success('Message scheduled', {
+  1298→        description: `Will be sent to ${contact.name} at ${new Date(scheduleAt).toLocaleString()}`,
+  1299→      })
+  1300→      setScheduleOpen(false)
+  1301→    } catch (err) {
+  1302→      toast.error('Failed to schedule message', {
+  1303→        description: err instanceof Error ? err.message : undefined,
+  1304→      })
+  1305→    } finally {
+  1306→      setScheduling(false)
+  1307→    }
+  1308→  }
+  1309→
+  1310→  const statusLine = contact.humanMode
+  1311→    ? 'Human mode active — AI paused'
+  1312→    : waConnected
+  1313→      ? 'AI auto-reply is handling this chat'
+  1314→      : 'AI auto-reply is handling this chat (simulated)'
+  1315→
+  1316→  return (
+  1317→    <div className="flex h-full min-h-0 flex-col">
+  1318→      {/* Header */}
+  1319→      <header className="flex items-center gap-2 border-b p-3">
+  1320→        <Button
+  1321→          variant="ghost"
+  1322→          size="icon"
+  1323→          className="lg:hidden"
+  1324→          onClick={onBack}
+  1325→          aria-label="Back to list"
+  1326→        >
+  1327→          <ArrowLeft className="h-5 w-5" />
+  1328→        </Button>
+  1329→        <Avatar name={contact.name} phone={contact.phone} size="sm" />
+  1330→        <div className="min-w-0 flex-1">
+  1331→          <div className="flex flex-wrap items-center gap-1.5">
+  1332→            <span className="truncate text-sm font-semibold">{contact.name}</span>
+  1333→            {contact.leadScore >= 25 && <LeadBadge score={contact.leadScore} />}
+  1334→            {contact.humanMode && (
+  1335→              <Badge className="border-amber-500/30 bg-amber-500/15 px-1.5 py-0 text-[10px] font-semibold text-amber-300">
+  1336→                Human
+  1337→              </Badge>
+  1338→            )}
+  1339→            {contact.tags.length > 0 && <TagBadgeCluster tags={contact.tags} />}
+  1340→          </div>
+  1341→          <div className="truncate text-[11px] text-muted-foreground">{statusLine}</div>
+  1342→        </div>
+  1343→        {/* Export conversation */}
+  1344→        <DropdownMenu>
+  1345→          <DropdownMenuTrigger asChild>
+  1346→            <Button
+  1347→              variant="ghost"
+  1348→              size="icon"
+  1349→              className="h-8 w-8 shrink-0"
+  1350→              disabled={exporting || messages.length === 0}
+  1351→              aria-label="Export conversation"
+  1352→            >
+  1353→              {exporting ? (
+  1354→                <Loader2 className="h-4 w-4 animate-spin" />
+  1355→              ) : (
+  1356→                <Download className="h-4 w-4" />
+  1357→              )}
+  1358→            </Button>
+  1359→          </DropdownMenuTrigger>
+  1360→          <DropdownMenuContent align="end">
+  1361→            <DropdownMenuItem
+  1362→              onClick={() => void handleExport('csv')}
+  1363→              className="gap-2 text-xs"
+  1364→            >
+  1365→              <FileText className="h-3.5 w-3.5" />
+  1366→              Export as CSV
+  1367→            </DropdownMenuItem>
+  1368→            <DropdownMenuItem
+  1369→              onClick={() => void handleExport('json')}
+  1370→              className="gap-2 text-xs"
+  1371→            >
+  1372→              <Braces className="h-3.5 w-3.5" />
+  1373→              Export as JSON
+  1374→            </DropdownMenuItem>
+  1375→          </DropdownMenuContent>
+  1376→        </DropdownMenu>
+  1377→        <Button
+  1378→          variant="ghost"
+  1379→          size="icon"
+  1380→          className="lg:hidden"
+  1381→          onClick={onOpenDetails}
+  1382→          aria-label="View details"
+  1383→        >
+  1384→          <Info className="h-5 w-5" />
+  1385→        </Button>
+  1386→      </header>
+  1387→
+  1388→      {/* Status banner */}
+  1389→      <div
+  1390→        className={cn(
+  1391→          'flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium',
+  1392→          contact.humanMode
+  1393→            ? 'bg-amber-500/15 text-amber-300'
+  1394→            : 'bg-emerald-500/10 text-emerald-300',
+  1395→        )}
+  1396→      >
+  1397→        {contact.humanMode ? <UserCog className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+  1398→        <span>
+  1399→          {contact.humanMode
+  1400→            ? 'Human mode — AI paused. You reply manually.'
+  1401→            : 'AI auto-reply is ON. Take over to reply manually.'}
+  1402→        </span>
+  1403→      </div>
+  1404→      {!waConnected && (
+  1405→        <div className="flex items-center gap-2 bg-zinc-500/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300">
+  1406→          <AlertTriangle className="h-3.5 w-3.5" />
+  1407→          <span>WhatsApp not connected — messages are simulated.</span>
+  1408→        </div>
+  1409→      )}
+  1410→
+  1411→      {/* Messages area */}
+  1412→      <div className="relative min-h-0 flex-1">
+  1413→        <div
+  1414→          ref={scrollRef}
+  1415→          onScroll={handleScroll}
+  1416→          className="relative h-full overflow-y-auto scrollbar-thin bg-background px-3 py-4"
+  1417→        >
+  1418→          <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+  1419→          <div className="relative mx-auto flex max-w-3xl flex-col gap-2">
+  1420→            {loadingMessages && messages.length === 0 ? (
+  1421→              <div className="flex h-32 items-center justify-center text-muted-foreground">
+  1422→                <Loader2 className="h-4 w-4 animate-spin" />
+  1423→              </div>
+  1424→            ) : messages.length === 0 ? (
+  1425→              <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+  1426→                <MessageCircle className="h-6 w-6" />
+  1427→                <span className="text-xs">No messages yet. Say hello!</span>
+  1428→              </div>
+  1429→            ) : (
+  1430→              grouped.map((group) => (
+  1431→                <div key={group.day} className="flex flex-col gap-2">
+  1432→                  <DateSeparator day={group.day} />
+  1433→                  {group.items.map((m) => (
+  1434→                    <MessageBubble key={m.id} message={m} onReply={handleReply} />
+  1435→                  ))}
+  1436→                </div>
+  1437→              ))
+  1438→            )}
+  1439→          </div>
+  1440→        </div>
+  1441→        {/* Scroll-to-bottom floating button */}
+  1442→        <button
+  1443→          type="button"
+  1444→          onClick={scrollToBottom}
+  1445→          className={cn(
+  1446→            'absolute bottom-4 right-4 grid h-9 w-9 place-items-center rounded-full border bg-card shadow-lg transition-opacity hover:bg-muted',
+  1447→            showScrollButton
+  1448→              ? 'opacity-100'
+  1449→              : 'pointer-events-none opacity-0',
+  1450→          )}
+  1451→          aria-label="Scroll to latest message"
+  1452→        >
+  1453→          <ArrowDown className="h-4 w-4" />
+  1454→        </button>
+  1455→      </div>
+  1456→
+  1457→      {/* Composer */}
+  1458→      <div className="border-t bg-background/95 p-3 backdrop-blur">
+  1459→        {aiActive && (
+  1460→          <div className="mb-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+  1461→            <Sparkles className="h-3 w-3 text-primary" />
+  1462→            <span>AI is handling this conversation. Take over to reply manually.</span>
+  1463→          </div>
+  1464→        )}
+  1465→        <div className="relative flex items-end gap-2">
+  1466→          <QuickReplySlashDropdown
+  1467→            matches={slash.matches}
+  1468→            activeIndex={slash.activeIndex}
+  1469→            detection={slash.detection}
+  1470→            onSelect={insertSlashReply}
+  1471→            onHover={slash.setActiveIndex}
+  1472→          />
+  1473→          <Textarea
+  1474→            ref={textareaRef}
+  1475→            value={text}
+  1476→            onChange={handleComposerChange}
+  1477→            onKeyUp={handleComposerSelect}
+  1478→            onClick={handleComposerSelect}
+  1479→            onSelect={handleComposerSelect}
+  1480→            onKeyDown={handleKeyDown}
+  1481→            placeholder={aiActive ? 'Type to take over & send… · / for quick replies' : 'Type a message… · / for quick replies'}
+  1482→            className="min-h-10 max-h-30 resize-none text-sm"
+  1483→            rows={1}
+  1484→            aria-label="Message composer"
+  1485→          />
+  1486→          <QuickReplyPicker
+  1487→            items={qr.items}
+  1488→            loading={qr.loading}
+  1489→            onPick={insertQuickReply}
+  1490→            onManage={() => setQrManagerOpen(true)}
+  1491→          />
+  1492→          <Tooltip>
+  1493→            <TooltipTrigger asChild>
+  1494→              <Button
+  1495→                variant="outline"
+  1496→                size="icon"
+  1497→                className="h-10 shrink-0 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
+  1498→                onClick={openSchedule}
+  1499→                disabled={!text.trim() || !contact || !canSchedule}
+  1500→                aria-label="Schedule message"
+  1501→              >
+  1502→                <Clock className="h-4 w-4" />
+  1503→              </Button>
+  1504→            </TooltipTrigger>
+  1505→            <TooltipContent side="top">
+  1506→              {canSchedule
+  1507→                ? 'Schedule this message for later'
+  1508→                : 'You need operator role to schedule messages'}
+  1509→            </TooltipContent>
+  1510→          </Tooltip>
+  1511→          <Tooltip>
+  1512→            <TooltipTrigger asChild>
+  1513→              <Button
+  1514→                onClick={handleSubmit}
+  1515→                disabled={!text.trim() || sending || !canSend}
+  1516→                className={cn(
+  1517→                  'h-10 shrink-0 gap-1.5 px-3',
+  1518→                  aiActive
+  1519→                    ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
+  1520→                    : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+  1521→                )}
+  1522→                aria-label={aiActive ? 'Take over and send' : 'Send message'}
+  1523→              >
+  1524→                {sending ? (
+  1525→                  <Loader2 className="h-4 w-4 animate-spin" />
+  1526→                ) : (
+  1527→                  <Send className="h-4 w-4" />
+  1528→                )}
+  1529→                <span className="hidden text-xs font-semibold sm:inline">
+  1530→                  {aiActive ? 'Take over & send' : 'Send'}
+  1531→                </span>
+  1532→              </Button>
+  1533→            </TooltipTrigger>
+  1534→            <TooltipContent side="top">
+  1535→              {canSend
+  1536→                ? (aiActive ? 'Take over from AI and send' : 'Send message')
+  1537→                : 'You need operator role to send messages'}
+  1538→            </TooltipContent>
+  1539→          </Tooltip>
+  1540→        </div>
+  1541→        <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+  1542→          <span>Enter to send · Shift+Enter for newline</span>
+  1543→          <span className="tabular-nums">{text.length}/4000</span>
+  1544→        </div>
+  1545→      </div>
+  1546→
+  1547→      {/* Schedule-message dialog (composed from current composer text) */}
+  1548→      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+  1549→        <DialogContent className="sm:max-w-md">
+  1550→          <DialogHeader>
+  1551→            <DialogTitle className="flex items-center gap-2 text-base">
+  1552→              <Clock className="h-4 w-4 text-emerald-400" />
+  1553→              Schedule message
+  1554→            </DialogTitle>
+  1555→            <DialogDescription>
+  1556→              Send this message to {contact?.name} at a future time.
+  1557→            </DialogDescription>
+  1558→          </DialogHeader>
+  1559→
+  1560→          <div className="flex flex-col gap-4">
+  1561→            <div className="rounded-md border bg-muted/40 p-3 text-xs text-foreground/80">
+  1562→              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1563→                Message preview
+  1564→              </div>
+  1565→              <p className="whitespace-pre-wrap break-words">{text.trim()}</p>
+  1566→            </div>
+  1567→
+  1568→            <div className="flex flex-col gap-1.5">
+  1569→              <Label htmlFor="chat-sched-at" className="text-xs">
+  1570→                Send at
+  1571→              </Label>
+  1572→              <Input
+  1573→                id="chat-sched-at"
+  1574→                type="datetime-local"
+  1575→                value={scheduleAt}
+  1576→                onChange={(e) => setScheduleAt(e.target.value)}
+  1577→                className="bg-background text-sm [color-scheme:dark]"
+  1578→              />
+  1579→            </div>
+  1580→          </div>
+  1581→
+  1582→          <DialogFooter className="gap-2">
+  1583→            <Button
+  1584→              variant="outline"
+  1585→              onClick={() => setScheduleOpen(false)}
+  1586→              disabled={scheduling}
+  1587→            >
+  1588→              Cancel
+  1589→            </Button>
+  1590→            <Button
+  1591→              onClick={handleScheduleSubmit}
+  1592→              disabled={scheduling || !scheduleAt || !text.trim()}
+  1593→              className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+  1594→            >
+  1595→              {scheduling ? (
+  1596→                <Loader2 className="h-4 w-4 animate-spin" />
+  1597→              ) : (
+  1598→                <Clock className="h-4 w-4" />
+  1599→              )}
+  1600→              Schedule
+  1601→            </Button>
+  1602→          </DialogFooter>
+  1603→        </DialogContent>
+  1604→      </Dialog>
+  1605→
+  1606→      {/* Quick Reply manager dialog — opened from the Zap popover */}
+  1607→      <QuickReplyManagerDialog
+  1608→        open={qrManagerOpen}
+  1609→        onOpenChange={setQrManagerOpen}
+  1610→        items={qr.items}
+  1611→        loading={qr.loading}
+  1612→        onCreate={qr.createReply}
+  1613→        onUpdate={qr.updateReply}
+  1614→        onDelete={qr.deleteReply}
+  1615→      />
+  1616→    </div>
+  1617→  )
+  1618→}
+  1619→
+  1620→// ------------------------------------------------------------
+  1621→// DetailsPanel — right pane (also rendered inside the mobile Sheet)
+  1622→// ------------------------------------------------------------
+  1623→interface DetailsPanelProps {
+  1624→  detail: ContactDetail | null
+  1625→  loading: boolean
+  1626→  waConnected: boolean
+  1627→  pinned: boolean
+  1628→  allTags: TagWithCount[]
+  1629→  onToggleHumanMode: (enabled: boolean) => Promise<void>
+  1630→  onPin: (pinned: boolean) => Promise<void>
+  1631→  onStatusChange: (status: ContactStatus) => Promise<void>
+  1632→  onNotesSave: (notes: string) => Promise<void>
+  1633→  onAddTag: (tagId: string) => Promise<void>
+  1634→  onCreateTag: (name: string) => Promise<void>
+  1635→  onRemoveTag: (tagId: string) => Promise<void>
+  1636→  onViewProfile?: (contactId: string) => void
+  1637→}
+  1638→
+  1639→function DetailsPanel({
+  1640→  detail,
+  1641→  loading,
+  1642→  pinned,
+  1643→  allTags,
+  1644→  onToggleHumanMode,
+  1645→  onPin,
+  1646→  onStatusChange,
+  1647→  onNotesSave,
+  1648→  onAddTag,
+  1649→  onCreateTag,
+  1650→  onRemoveTag,
+  1651→  onViewProfile,
+  1652→}: DetailsPanelProps) {
+  1653→  const [notesDraft, setNotesDraft] = React.useState('')
+  1654→  const [savingNotes, setSavingNotes] = React.useState(false)
+  1655→  const [actionLoading, setActionLoading] = React.useState<string | null>(null)
+  1656→  const [tagPickerOpen, setTagPickerOpen] = React.useState(false)
+  1657→  const [removingTagId, setRemovingTagId] = React.useState<string | null>(null)
+  1658→
+  1659→  // Keep a local draft synced with server-loaded notes
+  1660→  React.useEffect(() => {
+  1661→    setNotesDraft(detail?.notes ?? '')
+  1662→  }, [detail?.id, detail?.notes])
+  1663→
+  1664→  if (loading && !detail) {
+  1665→    return (
+  1666→      <div className="flex h-full items-center justify-center text-muted-foreground">
+  1667→        <Loader2 className="h-5 w-5 animate-spin" />
+  1668→      </div>
+  1669→    )
+  1670→  }
+  1671→  if (!detail) {
+  1672→    return (
+  1673→      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-muted-foreground">
+  1674→        <User className="h-8 w-8" />
+  1675→        <span className="text-xs">Select a conversation to see customer details.</span>
+  1676→      </div>
+  1677→    )
+  1678→  }
+  1679→
+  1680→  const scoreColor =
+  1681→    detail.leadScore >= 70
+  1682→      ? 'bg-emerald-500'
+  1683→      : detail.leadScore >= 50
+  1684→        ? 'bg-amber-500'
+  1685→        : detail.leadScore >= 25
+  1686→          ? 'bg-orange-500'
+  1687→          : 'bg-muted-foreground/40'
+  1688→
+  1689→  const run = async (key: string, fn: () => Promise<void>) => {
+  1690→    setActionLoading(key)
+  1691→    try {
+  1692→      await fn()
+  1693→    } finally {
+  1694→      setActionLoading(null)
+  1695→    }
+  1696→  }
+  1697→
+  1698→  const handleRemoveTag = async (tagId: string) => {
+  1699→    setRemovingTagId(tagId)
+  1700→    try {
+  1701→      await onRemoveTag(tagId)
+  1702→    } finally {
+  1703→      setRemovingTagId(null)
+  1704→    }
+  1705→  }
+  1706→
+  1707→  const currentTagIds = new Set(detail.tags.map((t) => t.id))
+  1708→
+  1709→  return (
+  1710→    <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-thin">
+  1711→      {/* Header */}
+  1712→      <div className="border-b p-4">
+  1713→        <div className="flex items-center gap-3">
+  1714→          <Avatar name={detail.name} phone={detail.phone} size="lg" />
+  1715→          <div className="min-w-0 flex-1">
+  1716→            <div className="truncate text-sm font-semibold">{detail.name}</div>
+  1717→            <div className="truncate text-xs text-muted-foreground">{detail.phone}</div>
+  1718→            <Badge
+  1719→              variant="outline"
+  1720→              className={cn(
+  1721→                'mt-1 px-1.5 py-0 text-[10px] font-medium capitalize',
+  1722→                STATUS_BADGE[detail.status],
+  1723→              )}
+  1724→            >
+  1725→              {detail.status}
+  1726→            </Badge>
+  1727→          </div>
+  1728→        </div>
+  1729→        {onViewProfile && (
+  1730→          <Button
+  1731→            variant="outline"
+  1732→            size="sm"
+  1733→            className="mt-3 w-full gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 hover:text-emerald-100"
+  1734→            onClick={() => onViewProfile(detail.id)}
+  1735→          >
+  1736→            <ExternalLink className="h-3.5 w-3.5" />
+  1737→            View Full Profile
+  1738→          </Button>
+  1739→        )}
+  1740→        {detail.summary && (
+  1741→          <p className="mt-3 rounded-lg bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+  1742→            {detail.summary}
+  1743→          </p>
+  1744→        )}
+  1745→      </div>
+  1746→
+  1747→      {/* Tags section */}
+  1748→      <Section icon={<Tags className="h-3.5 w-3.5" />} title="Tags">
+  1749→        {detail.tags.length === 0 ? (
+  1750→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+  1751→            No tags yet. Use “Add tag” to organize this conversation.
+  1752→          </div>
+  1753→        ) : (
+  1754→          <div className="flex flex-wrap gap-1.5">
+  1755→            {detail.tags.map((t) => (
+  1756→              <TagPill
+  1757→                key={t.id}
+  1758→                tag={t}
+  1759→                onRemove={
+  1760→                  removingTagId === t.id ? undefined : () => void handleRemoveTag(t.id)
+  1761→                }
+  1762→              />
+  1763→            ))}
+  1764→          </div>
+  1765→        )}
+  1766→        <div className="mt-2">
+  1767→          <TagPicker
+  1768→            open={tagPickerOpen}
+  1769→            onOpenChange={setTagPickerOpen}
+  1770→            allTags={allTags}
+  1771→            currentTagIds={currentTagIds}
+  1772→            onAddExisting={onAddTag}
+  1773→            onCreate={onCreateTag}
+  1774→          />
+  1775→        </div>
+  1776→      </Section>
+  1777→
+  1778→      {/* Status section */}
+  1779→      <Section icon={<UserCog className="h-3.5 w-3.5" />} title="Status">
+  1780→        <div className="flex items-center justify-between rounded-md border bg-background/40 px-3 py-2">
+  1781→          <div className="flex flex-col">
+  1782→            <span className="text-xs font-medium">
+  1783→              {detail.humanMode ? 'Human mode' : 'AI auto-reply'}
+  1784→            </span>
+  1785→            <span className="text-[10px] text-muted-foreground">
+  1786→              {detail.humanMode ? 'AI paused · you reply' : 'AI handling replies'}
+  1787→            </span>
+  1788→          </div>
+  1789→          <Switch
+  1790→            checked={detail.humanMode}
+  1791→            onCheckedChange={(v) => void run('human', () => onToggleHumanMode(v))}
+  1792→            disabled={actionLoading === 'human'}
+  1793→            aria-label="Toggle human mode"
+  1794→          />
+  1795→        </div>
+  1796→        <Button
+  1797→          variant={detail.humanMode ? 'default' : 'outline'}
+  1798→          size="sm"
+  1799→          className="mt-2 w-full gap-1.5"
+  1800→          disabled={actionLoading === 'human'}
+  1801→          onClick={() =>
+  1802→            void run('human', () => onToggleHumanMode(!detail.humanMode))
+  1803→          }
+  1804→        >
+  1805→          {actionLoading === 'human' ? (
+  1806→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1807→          ) : detail.humanMode ? (
+  1808→            <Bot className="h-3.5 w-3.5" />
+  1809→          ) : (
+  1810→            <UserCog className="h-3.5 w-3.5" />
+  1811→          )}
+  1812→          {detail.humanMode ? 'Resume AI' : 'Take over chat'}
+  1813→        </Button>
+  1814→      </Section>
+  1815→
+  1816→      {/* Lead info */}
+  1817→      <Section icon={<Flame className="h-3.5 w-3.5" />} title="Lead info">
+  1818→        <div className="flex items-center justify-between">
+  1819→          <span className="text-xs text-muted-foreground">Lead score</span>
+  1820→          <LeadBadge score={detail.leadScore} />
+  1821→        </div>
+  1822→        <Progress
+  1823→          value={detail.leadScore}
+  1824→          className={cn('mt-1 h-1.5', scoreColor)}
+  1825→        />
+  1826→        <div className="mt-2 flex items-center justify-between text-xs">
+  1827→          <span className="text-muted-foreground">Detected service</span>
+  1828→          <span className="text-right font-medium">{categoryLabel(detail.detectedService)}</span>
+  1829→        </div>
+  1830→        <div className="mt-1 flex items-center justify-between text-xs">
+  1831→          <span className="text-muted-foreground">Language</span>
+  1832→          <span className="font-medium">{detail.language || '—'}</span>
+  1833→        </div>
+  1834→      </Section>
+  1835→
+  1836→      {/* Customer info */}
+  1837→      <Section icon={<User className="h-3.5 w-3.5" />} title="Customer info">
+  1838→        <InfoRow label="First seen" value={formatDateTime(detail.firstSeen)} />
+  1839→        <InfoRow label="Last active" value={timeAgo(detail.lastSeen)} />
+  1840→        <InfoRow
+  1841→          label="Last message"
+  1842→          value={detail.lastMessageAt ? timeAgo(detail.lastMessageAt) : '—'}
+  1843→        />
+  1844→        <InfoRow label="Status" value={detail.status} />
+  1845→        <InfoRow label="Country code" value={detail.countryCode || '—'} />
+  1846→      </Section>
+  1847→
+  1848→      {/* AI Memory */}
+  1849→      <Section icon={<Bot className="h-3.5 w-3.5" />} title="AI memory">
+  1850→        {detail.memories.length === 0 ? (
+  1851→          <div className="rounded-md border border-dashed bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+  1852→            No memory extracted yet. Send a message via the simulator to populate.
+  1853→          </div>
+  1854→        ) : (
+  1855→          <dl className="overflow-hidden rounded-md border">
+  1856→            {detail.memories.map((m, idx) => (
+  1857→              <div
+  1858→                key={m.key}
+  1859→                className={cn(
+  1860→                  'flex items-start gap-2 px-2.5 py-1.5',
+  1861→                  idx % 2 === 0 ? 'bg-background/40' : 'bg-transparent',
+  1862→                )}
+  1863→              >
+  1864→                <dt className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1865→                  {memoryLabel(m.key)}
+  1866→                </dt>
+  1867→                <dd className="flex-1 break-words text-xs">{m.value || '—'}</dd>
+  1868→              </div>
+  1869→            ))}
+  1870→          </dl>
+  1871→        )}
+  1872→      </Section>
+  1873→
+  1874→      {/* Notes */}
+  1875→      <Section icon={<MoreVertical className="h-3.5 w-3.5" />} title="Notes">
+  1876→        <Textarea
+  1877→          value={notesDraft}
+  1878→          onChange={(e) => setNotesDraft(e.target.value)}
+  1879→          placeholder="Add private notes about this customer…"
+  1880→          className="min-h-16 text-xs"
+  1881→        />
+  1882→        <Button
+  1883→          size="sm"
+  1884→          variant="outline"
+  1885→          className="mt-2 w-full gap-1.5"
+  1886→          disabled={savingNotes || notesDraft === (detail.notes ?? '')}
+  1887→          onClick={async () => {
+  1888→            setSavingNotes(true)
+  1889→            try {
+  1890→              await onNotesSave(notesDraft)
+  1891→            } finally {
+  1892→              setSavingNotes(false)
+  1893→            }
+  1894→          }}
+  1895→        >
+  1896→          {savingNotes ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+  1897→          Save notes
+  1898→        </Button>
+  1899→      </Section>
+  1900→
+  1901→      {/* Actions */}
+  1902→      <Section icon={<Shield className="h-3.5 w-3.5" />} title="Actions">
+  1903→        <Button
+  1904→          variant="outline"
+  1905→          size="sm"
+  1906→          className="w-full gap-1.5"
+  1907→          disabled={actionLoading === 'pin'}
+  1908→          onClick={() => void run('pin', () => onPin(!pinned))}
+  1909→        >
+  1910→          {actionLoading === 'pin' ? (
+  1911→            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1912→          ) : (
+  1913→            <Pin className="h-3.5 w-3.5" />
+  1914→          )}
+  1915→          {pinned ? 'Unpin conversation' : 'Pin conversation'}
+  1916→        </Button>
+  1917→        {detail.status !== 'customer' && (
+  1918→          <Button
+  1919→            variant="outline"
+  1920→            size="sm"
+  1921→            className="mt-2 w-full gap-1.5"
+  1922→            disabled={actionLoading === 'customer'}
+  1923→            onClick={() => void run('customer', () => onStatusChange('customer'))}
+  1924→          >
+  1925→            {actionLoading === 'customer' ? (
+  1926→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1927→            ) : (
+  1928→              <Check className="h-3.5 w-3.5" />
+  1929→            )}
+  1930→            Mark as customer
+  1931→          </Button>
+  1932→        )}
+  1933→        {detail.status !== 'blocked' ? (
+  1934→          <Button
+  1935→            variant="destructive"
+  1936→            size="sm"
+  1937→            className="mt-2 w-full gap-1.5"
+  1938→            disabled={actionLoading === 'block'}
+  1939→            onClick={() => void run('block', () => onStatusChange('blocked'))}
+  1940→          >
+  1941→            {actionLoading === 'block' ? (
+  1942→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1943→            ) : (
+  1944→              <AlertTriangle className="h-3.5 w-3.5" />
+  1945→            )}
+  1946→            Block contact
+  1947→          </Button>
+  1948→        ) : (
+  1949→          <Button
+  1950→            variant="outline"
+  1951→            size="sm"
+  1952→            className="mt-2 w-full gap-1.5"
+  1953→            disabled={actionLoading === 'unblock'}
+  1954→            onClick={() => void run('unblock', () => onStatusChange('active'))}
+  1955→          >
+  1956→            {actionLoading === 'unblock' ? (
+  1957→              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  1958→            ) : (
+  1959→              <Shield className="h-3.5 w-3.5" />
+  1960→            )}
+  1961→            Unblock contact
+  1962→          </Button>
+  1963→        )}
+  1964→      </Section>
+  1965→      <div className="mt-auto p-3 text-center text-[10px] text-muted-foreground">
+  1966→        Contact ID: <span className="font-mono">{detail.id.slice(-8)}</span>
+  1967→      </div>
+  1968→    </div>
+  1969→  )
+  1970→}
+  1971→
+  1972→function Section({
+  1973→  icon,
+  1974→  title,
+  1975→  children,
+  1976→}: {
+  1977→  icon: React.ReactNode
+  1978→  title: string
+  1979→  children: React.ReactNode
+  1980→}) {
+  1981→  return (
+  1982→    <div className="border-b p-4">
+  1983→      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1984→        {icon}
+  1985→        <span>{title}</span>
+  1986→      </div>
+  1987→      <div className="flex flex-col gap-1.5">{children}</div>
+  1988→    </div>
+  1989→  )
+  1990→}
+  1991→
+  1992→function InfoRow({ label, value }: { label: string; value: string }) {
+  1993→  return (
+  1994→    <div className="flex items-center justify-between text-xs">
+  1995→      <span className="text-muted-foreground">{label}</span>
+  1996→      <span className="font-medium capitalize">{value}</span>
+  1997→    </div>
+  1998→  )
+  1999→}
+  2000→
+
+[showing lines 1-2000 of 2570; use offset=2001 with limit to continue reading]

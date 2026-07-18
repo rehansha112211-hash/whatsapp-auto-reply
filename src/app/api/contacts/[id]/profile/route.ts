@@ -33,6 +33,9 @@ interface ProfileMessage {
   sentimentScore: number
   intent: string
   timestamp: string
+  detectedLanguage: string
+  translatedText: string
+  isTranslated: boolean
 }
 
 interface ProfileMemory {
@@ -173,6 +176,9 @@ export async function GET(
         sentimentScore: true,
         intent: true,
         timestamp: true,
+        detectedLanguage: true,
+        translatedText: true,
+        isTranslated: true,
       },
     }),
     db.conversationMemory.findMany({
@@ -268,6 +274,9 @@ export async function GET(
       sentimentScore: m.sentimentScore,
       intent: m.intent,
       timestamp: m.timestamp.toISOString(),
+      detectedLanguage: m.detectedLanguage ?? '',
+      translatedText: m.translatedText ?? '',
+      isTranslated: m.isTranslated ?? false,
     })),
     memories: memories.map<ProfileMemory>((m) => ({
       id: m.id,

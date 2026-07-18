@@ -35,6 +35,9 @@ import {
 import { cn } from '@/lib/utils'
 import { apiGet, apiPost, apiDelete } from '@/lib/api-client'
 import { timeAgo, formatDateTime } from '@/lib/format'
+import type { ContactVariableData } from '@/lib/template-variables'
+
+import { VariableHelper } from '@/components/variable-helper'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -209,6 +212,16 @@ function CampaignsTab() {
   const [audienceCount, setAudienceCount] = React.useState<number | null>(null)
   const [audienceCountLoading, setAudienceCountLoading] = React.useState(false)
 
+  // First contact in the current audience — used for the live
+  // "Preview as {first contact}" panel.
+  const [previewContact, setPreviewContact] =
+    React.useState<ContactVariableData | null>(null)
+  const [previewLoading, setPreviewLoading] = React.useState(false)
+
+  // Ref to the message textarea so variable chips can be inserted at
+  // the caret position rather than always at the end.
+  const messageRef = React.useRef<HTMLTextAreaElement>(null)
+
   const [broadcasts, setBroadcasts] = React.useState<BroadcastRow[]>([])
   const [loadingList, setLoadingList] = React.useState(true)
   const [refreshing, setRefreshing] = React.useState(false)
@@ -273,6 +286,56 @@ function CampaignsTab() {
       cancelled = true
     }
   }, [audience])
+
+  // --- Audience preview contact: first contact in the selected
+  // audience, used by the live preview panel. Re-fetched in
+  // parallel with the count whenever the audience changes.
+  React.useEffect(() => {
+    let cancelled = false
+    setPreviewLoading(true)
+    apiGet<{
+      audience: string
+      contact: ContactVariableData | null
+    }>(`/api/broadcast/audience-preview?audience=${encodeURIComponent(audience)}`)
+      .then((d) => {
+        if (!cancelled) setPreviewContact(d.contact)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewContact(null)
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [audience])
+
+  // Insert a `{variable}` token at the textarea caret position.
+  // Falls back to appending to the end if the ref is gone (e.g. when
+  // the field is unfocused) so the click is never a no-op.
+  const handleInsertVariable = (variable: string) => {
+    const ta = messageRef.current
+    const max = MAX_MESSAGE
+    if (!ta) {
+      setMessage((prev) =>
+        (prev + variable).slice(0, max),
+      )
+      return
+    }
+    const start = ta.selectionStart ?? ta.value.length
+    const end = ta.selectionEnd ?? ta.value.length
+    const before = message.slice(0, start)
+    const after = message.slice(end)
+    const next = `${before}${variable}${after}`.slice(0, max)
+    setMessage(next)
+    // Restore focus + caret right after the inserted token.
+    const caret = Math.min(start + variable.length, max)
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(caret, caret)
+    })
+  }
 
   const canSend =
     name.trim().length > 0 &&
@@ -368,6 +431,7 @@ function CampaignsTab() {
             </div>
             <Textarea
               id="bc-message"
+              ref={messageRef}
               placeholder="Type the broadcast message. Use {name} as a placeholder for the contact's name."
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -376,6 +440,24 @@ function CampaignsTab() {
               className="resize-y"
             />
           </div>
+
+          {/* Variables helper + live preview against the first
+              contact in the selected audience */}
+          <VariableHelper
+            text={message}
+            contact={previewContact}
+            onInsertVariable={handleInsertVariable}
+          />
+          {previewLoading && (
+            <p className="text-[10px] text-muted-foreground">
+              Loading audience preview…
+            </p>
+          )}
+          {!previewLoading && !previewContact && (
+            <p className="text-[10px] text-muted-foreground/80">
+              No contacts in this audience — preview uses example values.
+            </p>
+          )}
 
           {/* Audience */}
           <div className="flex flex-col gap-1.5">

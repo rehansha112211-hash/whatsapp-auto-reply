@@ -160,6 +160,10 @@ model Message {
   sentiment    String   @default("unknown") // positive | neutral | negative | urgent | unknown
   sentimentScore Float  @default(0) // -1.0 to 1.0
   intent       String   @default("") // e.g. "pricing_inquiry", "complaint", "greeting", "purchase_intent"
+  // --- Auto-translation (Conversation Auto-Translation feature) ---
+  detectedLanguage String @default("") // ISO 639-1 code: en, hi, es, fr, etc.
+  translatedText   String @default("") // English translation if original is non-English
+  isTranslated     Boolean @default(false)
   timestamp    DateTime @default(now())
   createdAt    DateTime @default(now())
 
@@ -360,4 +364,21 @@ model WebhookDelivery {
 
   @@index([webhookId])
   @@index([status])
+}
+
+// ---------------- Knowledge Base (AI reference articles) ----------------
+model KnowledgeArticle {
+  id        String   @id @default(cuid())
+  title     String
+  content   String   // markdown or plain text
+  category  String   @default("general") // pricing | services | policies | faq | general
+  tags      String   @default("[]") // JSON array of tags
+  isActive  Boolean  @default(true)
+  priority  Int      @default(0) // higher = more important, referenced first
+  viewCount Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category, isActive])
+  @@index([priority])
 }

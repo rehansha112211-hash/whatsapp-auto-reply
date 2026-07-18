@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { sendOwnerMessage } from '@/lib/wa-engine'
+import { substituteVariables, hasVariables } from '@/lib/template-variables'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,7 +29,22 @@ export async function POST() {
   const now = new Date()
   const due = await db.scheduledMessage.findMany({
     where: { status: 'pending', scheduledAt: { lte: now } },
-    include: { contact: { select: { id: true, name: true, phone: true } } },
+    include: {
+      contact: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          leadScore: true,
+          detectedService: true,
+          language: true,
+          status: true,
+          firstSeen: true,
+          lastSeen: true,
+          notes: true,
+        },
+      },
+    },
     orderBy: { scheduledAt: 'asc' },
     take: 100, // cap per tick to keep latency bounded
   })
@@ -46,7 +62,25 @@ export async function POST() {
   // affecting siblings.
   for (const sm of due) {
     try {
-      await sendOwnerMessage(sm.contactId, sm.text)
+      // Substitute `{variables}` with the contact's actual data so a
+      // single scheduled template can be personalised per recipient.
+      // We only spend the substitution work when the body actually
+      // contains a `{token}` placeholder; otherwise we send it as-is.
+      const personalized =
+        hasVariables(sm.text) && sm.contact
+          ? substituteVariables(sm.text, {
+              name: sm.contact.name,
+              phone: sm.contact.phone,
+              leadScore: sm.contact.leadScore,
+              detectedService: sm.contact.detectedService,
+              language: sm.contact.language,
+              status: sm.contact.status,
+              firstSeen: sm.contact.firstSeen,
+              lastSeen: sm.contact.lastSeen,
+              notes: sm.contact.notes,
+            })
+          : sm.text
+      await sendOwnerMessage(sm.contactId, personalized)
       await db.scheduledMessage.update({
         where: { id: sm.id },
         data: { status: 'sent', sentAt: new Date() },

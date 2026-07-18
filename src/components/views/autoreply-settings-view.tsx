@@ -11,6 +11,8 @@ import {
   Globe,
   Clock,
   Zap,
+  Languages,
+  CheckCircle2,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -30,6 +32,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { apiGet, apiPut, ApiError } from '@/lib/api-client'
+import { TARGET_LANGUAGES } from '@/lib/translate-languages'
 
 type LanguagePref = 'auto' | 'en' | 'hi' | 'hinglish'
 
@@ -55,6 +58,11 @@ interface AutoReplyApiResponse {
   languagePref: LanguagePref
 }
 
+interface TranslationSettings {
+  enabled: boolean
+  targetLanguage: string
+}
+
 const DEFAULTS: AutoReplySettings = {
   enabled: true,
   replyDelaySec: 1,
@@ -66,25 +74,40 @@ const DEFAULTS: AutoReplySettings = {
   languagePref: 'auto',
 }
 
+const DEFAULT_TRANSLATION: TranslationSettings = {
+  enabled: true,
+  targetLanguage: 'en',
+}
+
 export function AutoReplySettingsView() {
   const [settings, setSettings] = React.useState<AutoReplySettings>(DEFAULTS)
+  const [translation, setTranslation] = React.useState<TranslationSettings>(DEFAULT_TRANSLATION)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
+  const [translationDirty, setTranslationDirty] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const data = await apiGet<AutoReplyApiResponse>('/api/settings/autoreply')
+      const [autoData, trData] = await Promise.all([
+        apiGet<AutoReplyApiResponse>('/api/settings/autoreply'),
+        apiGet<TranslationSettings>('/api/settings/translation'),
+      ])
       setSettings({
-        enabled: data.enabled,
-        replyDelaySec: data.replyDelaySec,
-        typingDelaySec: data.typingDelaySec,
-        businessHoursOnly: data.businessHoursOnly,
-        greeting: data.greeting,
-        awayMessage: data.awayMessage,
-        maxReplyLength: data.maxReplyLength,
-        languagePref: data.languagePref,
+        enabled: autoData.enabled,
+        replyDelaySec: autoData.replyDelaySec,
+        typingDelaySec: autoData.typingDelaySec,
+        businessHoursOnly: autoData.businessHoursOnly,
+        greeting: autoData.greeting,
+        awayMessage: autoData.awayMessage,
+        maxReplyLength: autoData.maxReplyLength,
+        languagePref: autoData.languagePref,
       })
+      setTranslation({
+        enabled: trData.enabled,
+        targetLanguage: trData.targetLanguage || 'en',
+      })
+      setTranslationDirty(false)
     } catch (err) {
       toast.error('Failed to load auto-reply settings', { description: (err as Error).message })
     } finally {
@@ -99,6 +122,7 @@ export function AutoReplySettingsView() {
   const handleSave = async () => {
     setSaving(true)
     try {
+      // Save auto-reply settings.
       await apiPut('/api/settings/autoreply', {
         enabled: settings.enabled,
         replyDelaySec: settings.replyDelaySec,
@@ -109,6 +133,14 @@ export function AutoReplySettingsView() {
         maxReplyLength: settings.maxReplyLength,
         languagePref: settings.languagePref,
       })
+      // Persist translation settings whenever they have changed.
+      if (translationDirty) {
+        await apiPut('/api/settings/translation', {
+          enabled: translation.enabled,
+          targetLanguage: translation.targetLanguage,
+        })
+        setTranslationDirty(false)
+      }
       toast.success('Auto-reply settings saved', {
         description: 'Changes affect AI replies immediately.',
       })
@@ -299,6 +331,134 @@ export function AutoReplySettingsView() {
           </Button>
           <p className="ml-auto text-xs text-muted-foreground">
             Changes affect AI replies immediately.
+          </p>
+        </CardFooter>
+      </Card>
+
+      <Card className="rounded-xl border bg-card/60 backdrop-blur card-hover">
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Languages className="size-5 text-primary" />
+                Auto-Translation
+              </CardTitle>
+              <CardDescription>
+                Detect the language of incoming messages and show an
+                inline translation so you can understand customers who
+                write in any language.
+              </CardDescription>
+            </div>
+            {loading ? null : (
+              <Badge
+                className={
+                  translation.enabled
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-600'
+                    : 'bg-muted text-muted-foreground hover:bg-muted'
+                }
+              >
+                {translation.enabled ? 'Active' : 'Disabled'}
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-5">
+          {loading ? (
+            <div className="space-y-4">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-4 rounded-xl border bg-muted/20 p-4">
+                <div className="space-y-1">
+                  <Label className="flex items-center gap-2 text-base font-semibold">
+                    <Globe className="size-4 text-primary" />
+                    Auto-Translate Incoming Messages
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    When on, every incoming message is language-detected
+                    and translated into your target language automatically.
+                    The translation appears beneath the original bubble.
+                  </p>
+                </div>
+                <Switch
+                  checked={translation.enabled}
+                  onCheckedChange={(v) => {
+                    setTranslation({ ...translation, enabled: v })
+                    setTranslationDirty(true)
+                  }}
+                  className="scale-125"
+                />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-sm font-medium">
+                  <Languages className="size-4 text-muted-foreground" />
+                  Target Translation Language
+                </Label>
+                <Select
+                  value={translation.targetLanguage}
+                  onValueChange={(v) => {
+                    setTranslation({ ...translation, targetLanguage: v })
+                    setTranslationDirty(true)
+                  }}
+                >
+                  <SelectTrigger className="w-full sm:w-72">
+                    <SelectValue placeholder="Select target language" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TARGET_LANGUAGES.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        <span className="mr-1.5">{o.flag}</span>
+                        {o.label}
+                        <span className="ml-1.5 font-mono text-[10px] uppercase text-muted-foreground">
+                          {o.value}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Incoming messages written in this language won&apos;t
+                  be translated. Messages in any other language will be
+                  auto-translated into this language.
+                </p>
+              </div>
+
+              <Separator />
+
+              <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-200">
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-400" />
+                <div className="space-y-1">
+                  <p className="font-semibold">How it works</p>
+                  <ul className="list-inside list-disc space-y-0.5 text-emerald-200/80">
+                    <li>Incoming messages are auto-detected (Hindi, Spanish, Arabic…).</li>
+                    <li>If the detected language differs from the target, an LLM translates it.</li>
+                    <li>The original text stays in the bubble; the translation appears beneath it.</li>
+                    <li>AI replies are still sent in the customer&apos;s language.</li>
+                    <li>You can hide any translation inline or turn it off per chat.</li>
+                  </ul>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+
+        <CardFooter className="flex flex-wrap items-center gap-2">
+          <Button onClick={handleSave} disabled={loading || saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            Save
+          </Button>
+          <Button variant="outline" onClick={load} disabled={loading || saving}>
+            <RotateCcw className="size-4" />
+            Reset
+          </Button>
+          <p className="ml-auto text-xs text-muted-foreground">
+            Translation settings apply to all conversations.
           </p>
         </CardFooter>
       </Card>

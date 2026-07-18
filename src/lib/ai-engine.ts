@@ -102,6 +102,99 @@ function scoreLeadFromText(text: string, category: LeadCategory): number {
   return Math.max(0, Math.min(100, score))
 }
 
+// ------------------------------------------------------------
+// Knowledge Base — find active articles relevant to the incoming
+// customer message. Returns the top N matches as {title, content}
+// pairs, with each content truncated to keep the prompt concise.
+// Never throws — KB enrichment is best-effort.
+// ------------------------------------------------------------
+const KB_MAX_ARTICLES = 5
+const KB_MAX_CONTENT_CHARS = 500
+
+const KB_STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'if', 'then', 'else', 'when', 'at',
+  'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through',
+  'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down',
+  'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'is', 'are',
+  'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does',
+  'did', 'will', 'would', 'should', 'could', 'can', 'may', 'might', 'must',
+  'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'him', 'his', 'she',
+  'her', 'it', 'its', 'they', 'them', 'their', 'this', 'that', 'these',
+  'those', 'of', 'as', 'want', 'need', 'like', 'get', 'got', 'hi', 'hello',
+  'hey', 'please', 'help', 'just', 'how', 'what', 'why', 'who', 'when',
+  'where', 'which', 'whom', 'whose', 'sir', 'madam', 'bhai', 'yaar',
+])
+
+function kbTokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !KB_STOPWORDS.has(t))
+}
+
+function kbParseTags(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw || '[]')
+    if (Array.isArray(parsed)) {
+      return parsed.filter((t): t is string => typeof t === 'string')
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+async function searchKnowledgeBase(
+  query: string,
+): Promise<{ title: string; content: string }[]> {
+  try {
+    const tokens = kbTokenize(query)
+    if (tokens.length === 0) return []
+    const rows = await db.knowledgeArticle.findMany({
+      where: { isActive: true },
+      orderBy: [{ priority: 'desc' }, { updatedAt: 'desc' }],
+    })
+    const scored: { title: string; content: string; score: number }[] = []
+    for (const r of rows) {
+      const titleLower = r.title.toLowerCase()
+      const contentLower = r.content.toLowerCase()
+      const tagsLower = kbParseTags(r.tags).map((t) => t.toLowerCase())
+      let score = 0
+      for (const tok of tokens) {
+        if (titleLower.includes(tok)) score += 3
+        if (contentLower.includes(tok)) score += 1
+        if (tagsLower.some((t) => t.includes(tok))) score += 2
+      }
+      if (score <= 0) continue
+      score += Math.max(0, r.priority) / 100
+      scored.push({ title: r.title, content: r.content, score })
+    }
+    if (scored.length === 0) return []
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, KB_MAX_ARTICLES).map((s) => ({
+      title: s.title,
+      content:
+        s.content.length > KB_MAX_CONTENT_CHARS
+          ? s.content.slice(0, KB_MAX_CONTENT_CHARS).trimEnd() + '…'
+          : s.content,
+    }))
+  } catch {
+    return []
+  }
+}
+
+function knowledgeBlock(articles: { title: string; content: string }[]): string {
+  if (articles.length === 0) return ''
+  const body = articles
+    .map((a) => `### ${a.title}\n${a.content}`)
+    .join('\n\n')
+  return `KNOWLEDGE BASE CONTEXT (use this information to answer the customer's question accurately — never contradict these facts):
+${body}
+
+`
+}
+
 function buildSystemPrompt(opts: {
   company: { name: string; website: string; description: string; services: string[] }
   owner: { name: string; availability: string }
@@ -119,6 +212,7 @@ function buildSystemPrompt(opts: {
   leadScore: number
   maxReplyLength: number
   currentTime: string
+  knowledgeArticles: { title: string; content: string }[]
 }): string {
   const lang =
     opts.languagePref === 'auto' ? opts.customerLanguage : opts.languagePref
@@ -149,11 +243,12 @@ Greeting template (use only for first message): ${opts.greeting}
 Closing template: ${opts.closing}
 Support template: ${opts.support}
 
+${knowledgeBlock(opts.knowledgeArticles)}
 RULES (STRICT):
 1. Keep replies SHORT and natural (max ~${opts.maxReplyLength} characters). Sound human, friendly, professional. Never robotic or repetitive.
 2. ${opts.isFirstMessage ? 'This is the FIRST message: introduce the company briefly (who we are, what we do, how we can help), then invite the customer to share their requirement. Do NOT ask random questions first.' : 'Do NOT reintroduce the company. Continue the conversation naturally using the memory above.'}
 3. If the customer asks for our website, portfolio, official site or company details, ALWAYS include the link: ${opts.company.website}
-4. If the customer wants pricing, share that pricing depends on requirements and gently ask for project details so we can quote accurately.
+4. If the customer wants pricing, services, timelines, refund or policy info, USE THE KNOWLEDGE BASE CONTEXT BELOW to give an accurate, company-specific answer. Always frame pricing as "depends on requirements" and ask for project details so we can quote accurately. Never invent numbers outside the ranges listed in the knowledge base.
 5. ${opts.ownerRequested ? 'The customer asked to talk to the owner/human. Politely confirm the request has been forwarded to the team and they will be in touch soon. Do NOT invent a phone number.' : 'Do NOT mention the owner unless the customer asks.'}
 6. Never reveal the owner's phone number.
 7. Reply in the detected language. If the customer writes Hinglish, reply in Hinglish. If Hindi (Devanagari), reply in Hindi. If English, reply in English.
@@ -205,6 +300,10 @@ export async function generateReply(
   })
   const isFirstMessage = previousIncoming <= 1
 
+  // Find knowledge base articles relevant to this customer's message.
+  // Best-effort — KB enrichment never blocks the reply pipeline.
+  const knowledgeArticles = await searchKnowledgeBase(incomingText)
+
   const systemPrompt = buildSystemPrompt({
     company: companyCtx,
     owner: ownerCtx,
@@ -222,6 +321,7 @@ export async function generateReply(
     leadScore: Math.max(contact.leadScore, heuristicScore),
     maxReplyLength: autoReply?.maxReplyLength ?? 600,
     currentTime: new Date().toISOString(),
+    knowledgeArticles,
   })
 
   // Load recent history for context (last 12 messages)

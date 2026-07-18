@@ -58,6 +58,10 @@ import {
   Meh,
   Frown,
   Heart,
+  Globe,
+  Languages,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import {
   Area,
@@ -77,6 +81,7 @@ import {
 
 import { cn } from '@/lib/utils'
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api-client'
+import { languageLabel } from '@/lib/translate-languages'
 import {
   colorFromString,
   downloadFile,
@@ -136,6 +141,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
@@ -174,6 +185,9 @@ interface ProfileMessage {
   sentimentScore: number
   intent: string
   timestamp: string
+  detectedLanguage?: string
+  translatedText?: string
+  isTranslated?: boolean
 }
 
 interface ProfileMemory {
@@ -747,6 +761,21 @@ export function ContactProfileView({
     }
   }
 
+  // Most recent detected language from incoming messages — surfaces
+  // in the Details tab as a read-only "Detected language" metadata row.
+  // Declared before the early returns below so the rules-of-hooks
+  // invariant ("hooks called in the same order every render") holds.
+  const latestDetectedLanguage = React.useMemo(() => {
+    const msgs = data?.messages ?? []
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const m = msgs[i]
+      if (m.direction === 'incoming' && m.detectedLanguage) {
+        return m.detectedLanguage
+      }
+    }
+    return undefined
+  }, [data?.messages])
+
   // ----- Loading state -----
   if (loading && !data) {
     return (
@@ -800,6 +829,7 @@ export function ContactProfileView({
   const statusCls = STATUS_BADGE[contact.status as ContactStatus] ?? STATUS_BADGE.new
 
   return (
+    <TooltipProvider delayDuration={300}>
     <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6">
       {/* ---------- Header bar ---------- */}
       <motion.div
@@ -990,6 +1020,7 @@ export function ContactProfileView({
                 contactId={contactId}
                 contact={contact}
                 onChanged={() => void loadAll()}
+                latestDetectedLanguage={latestDetectedLanguage}
               />
             </TabsContent>
 
@@ -1064,6 +1095,7 @@ export function ContactProfileView({
         </Card>
       </motion.div>
     </div>
+    </TooltipProvider>
   )
 }
 
@@ -1418,6 +1450,64 @@ function ConversationTab({
   contactPhone: string
 }) {
   const grouped = groupByDay(messages)
+  const [showTranslations, setShowTranslations] = React.useState(true)
+  // Per-message manual translation cache (keyed by message id) — used
+  // when the user clicks "Translate" on a message that wasn't
+  // auto-translated.
+  const [manualTranslations, setManualTranslations] = React.useState<
+    Record<string, { text: string; from: string }>
+  >({})
+  const [translatingId, setTranslatingId] = React.useState<string | null>(null)
+  const [hiddenIds, setHiddenIds] = React.useState<Set<string>>(new Set())
+
+  const toggleHidden = (id: string) => {
+    setHiddenIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleManualTranslate = async (m: ProfileMessage) => {
+    // Auto-translation already present? Toggle visibility.
+    const auto = m.isTranslated && m.translatedText
+    if (auto) {
+      toggleHidden(m.id)
+      return
+    }
+    if (manualTranslations[m.id]) {
+      toggleHidden(m.id)
+      return
+    }
+    setTranslatingId(m.id)
+    try {
+      const res = await apiPost<{ translated: string; from: string; to: string }>(
+        '/api/translate',
+        { text: m.text, to: 'en' },
+      )
+      if (res?.translated) {
+        setManualTranslations((prev) => ({
+          ...prev,
+          [m.id]: { text: res.translated, from: res.from },
+        }))
+        // Make sure it's not hidden.
+        setHiddenIds((prev) => {
+          const next = new Set(prev)
+          next.delete(m.id)
+          return next
+        })
+      } else {
+        toast.error('No translation returned')
+      }
+    } catch (err) {
+      toast.error('Failed to translate message', {
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
+      setTranslatingId(null)
+    }
+  }
 
   const exportCsv = () => {
     const rows = messages.map((m) => ({
@@ -1427,6 +1517,9 @@ function ConversationTab({
       source: m.source,
       status: m.status,
       read: m.read ? 'yes' : 'no',
+      detectedLanguage: m.detectedLanguage ?? '',
+      isTranslated: m.isTranslated ? 'yes' : 'no',
+      translatedText: m.translatedText ?? '',
       text: m.text,
     }))
     const csv = toCsv(rows)
@@ -1450,6 +1543,12 @@ function ConversationTab({
     toast.success(`Exported ${messages.length} messages to JSON`)
   }
 
+  // Count of messages that have an auto-translation available — used
+  // to decide whether to show the "Show translations" toggle.
+  const hasAnyTranslation = messages.some(
+    (m) => m.isTranslated && m.translatedText,
+  ) || Object.keys(manualTranslations).length > 0
+
   if (messages.length === 0) {
     return (
       <div className="flex h-48 flex-col items-center justify-center gap-2 text-muted-foreground">
@@ -1461,25 +1560,60 @@ function ConversationTab({
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-muted-foreground">
           {messages.length} messages · read-only timeline
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="gap-1.5">
-              <Download className="h-3.5 w-3.5" /> Export
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={exportCsv} className="gap-2">
-              <FileText className="h-3.5 w-3.5" /> Export as CSV
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={exportJson} className="gap-2">
-              <Braces className="h-3.5 w-3.5" /> Export as JSON
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex items-center gap-1.5">
+          {hasAnyTranslation && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setShowTranslations((v) => !v)}
+                  className={cn(
+                    'flex h-8 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors',
+                    showTranslations
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                      : 'border-border/60 bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                  aria-pressed={showTranslations}
+                  aria-label={showTranslations ? 'Hide translations' : 'Show translations'}
+                >
+                  {showTranslations ? (
+                    <Eye className="h-3.5 w-3.5" aria-hidden />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                  <Languages className="h-3.5 w-3.5" aria-hidden />
+                  <span className="hidden sm:inline">
+                    {showTranslations ? 'Translations on' : 'Translations off'}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {showTranslations
+                  ? 'Showing inline translations for incoming messages'
+                  : 'Translations are hidden — click to reveal them'}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Download className="h-3.5 w-3.5" /> Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={exportCsv} className="gap-2">
+                <FileText className="h-3.5 w-3.5" /> Export as CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={exportJson} className="gap-2">
+                <Braces className="h-3.5 w-3.5" /> Export as JSON
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <div className="max-h-[600px] space-y-4 overflow-y-auto scrollbar-thin rounded-lg border bg-background/30 p-4">
@@ -1494,10 +1628,22 @@ function ConversationTab({
               {group.items.map((m) => {
                 const isOutgoing = m.direction === 'outgoing'
                 const showSentiment = !isOutgoing && m.sentiment && m.sentiment !== 'unknown'
+                const manual = manualTranslations[m.id]
+                const effectiveTranslated =
+                  m.isTranslated && m.translatedText
+                    ? m.translatedText
+                    : manual?.text ?? ''
+                const effectiveLang =
+                  m.isTranslated && m.translatedText
+                    ? (m.detectedLanguage ?? '')
+                    : (manual?.from ?? '')
+                const hasTranslation = Boolean(effectiveTranslated)
+                const renderTranslation =
+                  hasTranslation && showTranslations && !hiddenIds.has(m.id)
                 return (
                   <div
                     key={m.id}
-                    className={cn('flex flex-col gap-0.5', isOutgoing ? 'items-end' : 'items-start')}
+                    className={cn('group relative flex flex-col gap-0.5', isOutgoing ? 'items-end' : 'items-start')}
                   >
                     {showSentiment && (
                       <div className="px-1">
@@ -1520,7 +1666,42 @@ function ConversationTab({
                             <SourceBadge source={m.source as MessageSource} />
                           </div>
                         )}
+                        {/* Language badge row — incoming messages with a detected language */}
+                        {!isOutgoing && m.detectedLanguage && (
+                          <div className="mb-1 flex items-center gap-1">
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full border border-border/50 bg-background/60 px-1.5 py-0.5 text-[9px] font-medium leading-none text-muted-foreground"
+                              title={`Detected language: ${languageLabel(m.detectedLanguage).label} (${m.detectedLanguage})`}
+                            >
+                              <span aria-hidden>{languageLabel(m.detectedLanguage).flag}</span>
+                              <span className="uppercase">{m.detectedLanguage}</span>
+                            </span>
+                            {m.isTranslated && (
+                              <span className="inline-flex items-center gap-0.5 text-[9px] font-medium uppercase tracking-wider text-emerald-400/80">
+                                <Languages className="h-2.5 w-2.5" aria-hidden />
+                                Auto
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                        {/* Inline translation section */}
+                        {renderTranslation && (
+                          <div className="border-t border-dashed border-border/50 mt-1 pt-1 text-xs text-muted-foreground">
+                            <div className="mb-0.5 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider opacity-80">
+                              <Globe className="h-2.5 w-2.5" aria-hidden />
+                              <span>Translated</span>
+                              {effectiveLang && (
+                                <span className="opacity-70">
+                                  · {languageLabel(effectiveLang).label}
+                                </span>
+                              )}
+                            </div>
+                            <p className="whitespace-pre-wrap break-words leading-relaxed">
+                              {effectiveTranslated}
+                            </p>
+                          </div>
+                        )}
                         <div
                           className={cn(
                             'mt-1 flex items-center gap-1 text-[10px] opacity-70',
@@ -1532,6 +1713,46 @@ function ConversationTab({
                         </div>
                       </div>
                     </div>
+                    {/* Hover Translate button — incoming messages only */}
+                    {!isOutgoing && (
+                      <div className="pointer-events-none absolute top-0 left-0 flex items-center gap-0.5 rounded-md border bg-card/95 p-0.5 opacity-0 shadow-sm backdrop-blur transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => void handleManualTranslate(m)}
+                              disabled={translatingId === m.id}
+                              className={cn(
+                                'grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                                hasTranslation && !hiddenIds.has(m.id) && 'text-emerald-400 hover:text-emerald-300',
+                              )}
+                              aria-label={
+                                hasTranslation
+                                  ? hiddenIds.has(m.id)
+                                    ? 'Show translation'
+                                    : 'Hide translation'
+                                  : 'Translate this message'
+                              }
+                            >
+                              {translatingId === m.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : hasTranslation && !hiddenIds.has(m.id) ? (
+                                <EyeOff className="h-3 w-3" />
+                              ) : (
+                                <Globe className="h-3 w-3" />
+                              )}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            {hasTranslation
+                              ? hiddenIds.has(m.id)
+                                ? 'Show translation'
+                                : 'Hide translation'
+                              : 'Translate'}
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -1858,10 +2079,12 @@ function DetailsTab({
   contactId,
   contact,
   onChanged,
+  latestDetectedLanguage,
 }: {
   contactId: string
   contact: ProfileContact
   onChanged: () => void
+  latestDetectedLanguage?: string
 }) {
   const [name, setName] = React.useState(contact.name)
   const [phone, setPhone] = React.useState(contact.phone)
@@ -1918,7 +2141,10 @@ function DetailsTab({
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Language</Label>
+          <Label className="flex items-center gap-1.5 text-xs">
+            <Languages className="h-3 w-3 text-muted-foreground" />
+            Preferred Language
+          </Label>
           <Select value={language} onValueChange={setLanguage}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select language" />
@@ -1931,6 +2157,9 @@ function DetailsTab({
               ))}
             </SelectContent>
           </Select>
+          <p className="text-[10px] text-muted-foreground">
+            The language the AI uses when replying to this contact.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Status</Label>
@@ -1979,6 +2208,33 @@ function DetailsTab({
         />
         <MetaRow label="Created at" value={formatDateTime(contact.createdAt)} />
         <MetaRow label="Country code" value={contact.countryCode || '—'} />
+        {/* Detected language — derived from the most recent incoming
+            message that had its language auto-detected. Falls back to
+            the contact's stored language when no detection is on file. */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted-foreground">Detected language</span>
+          <span className="inline-flex items-center gap-1 truncate font-medium">
+            {latestDetectedLanguage ? (
+              <>
+                <span aria-hidden>{languageLabel(latestDetectedLanguage).flag}</span>
+                <span>{languageLabel(latestDetectedLanguage).label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  ({latestDetectedLanguage})
+                </span>
+              </>
+            ) : contact.language ? (
+              <>
+                <span aria-hidden>{languageLabel(contact.language).flag}</span>
+                <span>{languageLabel(contact.language).label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  ({contact.language})
+                </span>
+              </>
+            ) : (
+              '—'
+            )}
+          </span>
+        </div>
         <MetaRow label="Contact ID" value={contact.id} mono />
       </div>
     </div>

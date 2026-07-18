@@ -39,7 +39,9 @@ import {
 import { cn } from '@/lib/utils'
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client'
 import { formatDateTime, timeAgo, colorFromString, initials } from '@/lib/format'
-import type { ViewKey, ScheduledMessageRow, ChatListItem } from '@/lib/types'
+import type { ContactDetail, ViewKey, ScheduledMessageRow, ChatListItem } from '@/lib/types'
+import type { ContactVariableData } from '@/lib/template-variables'
+import { VariableHelper } from '@/components/variable-helper'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -747,6 +749,16 @@ function ScheduleDialog({
   const [scheduledAt, setScheduledAt] = React.useState('')
   const [saving, setSaving] = React.useState(false)
 
+  // Full contact record used for the live variable preview. We
+  // fetch it whenever the chosen recipient changes so the operator
+  // sees exactly what each {variable} will resolve to at send time.
+  const [previewContact, setPreviewContact] =
+    React.useState<ContactVariableData | null>(null)
+
+  // Ref to the message textarea — used so variable chips can be
+  // inserted at the caret instead of always at the end.
+  const messageRef = React.useRef<HTMLTextAreaElement>(null)
+
   // Reset form when dialog opens (with editing seed if provided).
   React.useEffect(() => {
     if (!open) return
@@ -762,7 +774,65 @@ function ScheduleDialog({
       setText('')
       setScheduledAt(toDatetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)))
     }
+    setPreviewContact(null)
   }, [open, editing])
+
+  // Fetch the full contact detail whenever the chosen recipient
+  // changes — needed for the live preview panel. We use the lighter
+  // /api/contacts/[id] endpoint which returns a ContactDetail.
+  React.useEffect(() => {
+    if (!open || !contactId) {
+      setPreviewContact(null)
+      return
+    }
+    let cancelled = false
+    apiGet<ContactDetail>(`/api/contacts/${encodeURIComponent(contactId)}`)
+      .then((c) => {
+        if (cancelled) return
+        setPreviewContact({
+          name: c.name,
+          phone: c.phone,
+          leadScore: c.leadScore,
+          detectedService: c.detectedService,
+          language: c.language,
+          status: c.status,
+          firstSeen: c.firstSeen,
+          lastSeen: c.lastSeen,
+          notes: c.notes,
+        })
+        // Keep the picker's displayed name in sync with the server
+        // (covers the editing case where the row only carried a
+        // name string + phone, not the full record).
+        if (c.name) setContactName(c.name)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewContact(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, contactId])
+
+  // Insert a `{variable}` token at the textarea caret position.
+  const handleInsertVariable = (variable: string) => {
+    const ta = messageRef.current
+    const max = MAX_MESSAGE
+    if (!ta) {
+      setText((prev) => (prev + variable).slice(0, max))
+      return
+    }
+    const start = ta.selectionStart ?? ta.value.length
+    const end = ta.selectionEnd ?? ta.value.length
+    const before = text.slice(0, start)
+    const after = text.slice(end)
+    const next = `${before}${variable}${after}`.slice(0, max)
+    setText(next)
+    const caret = Math.min(start + variable.length, max)
+    requestAnimationFrame(() => {
+      ta.focus()
+      ta.setSelectionRange(caret, caret)
+    })
+  }
 
   const canSubmit =
     !saving && !!contactId && !!text.trim() && !!scheduledAt
@@ -836,12 +906,23 @@ function ScheduleDialog({
             </div>
             <Textarea
               id="sched-text"
+              ref={messageRef}
               value={text}
               onChange={(e) => setText(e.target.value.slice(0, MAX_MESSAGE))}
-              placeholder="Type the message to send later…"
+              placeholder="Type the message to send later… · use {name}, {service}, etc."
               className="min-h-24 resize-none text-sm"
             />
           </div>
+
+          {/* Variables helper + live preview against the chosen
+              recipient. The API substitutes variables at send time
+              too, so what you see here is exactly what will go out. */}
+          <VariableHelper
+            text={text}
+            contact={previewContact}
+            onInsertVariable={handleInsertVariable}
+            compact
+          />
 
           {/* Schedule date/time */}
           <div className="flex flex-col gap-1.5">

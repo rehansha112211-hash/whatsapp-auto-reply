@@ -8,6 +8,7 @@ import { db } from '@/lib/db'
 import { generateReply } from '@/lib/ai-engine'
 import { dispatchWebhooks } from '@/lib/webhook-dispatcher'
 import { analyzeSentiment } from '@/lib/sentiment'
+import { detectLanguage, translateText } from '@/lib/translate'
 
 export interface ProcessIncomingResult {
   ok: boolean
@@ -275,6 +276,59 @@ export async function processIncomingMessage(opts: {
     })
   }
 
+  // 2c. Auto-translation — detect the incoming message language and,
+  // if it differs from the configured target (default "en"), translate
+  // the text so the OWNER can understand it. Non-blocking: failures
+  // are logged but the pipeline keeps going. The AI reply generator
+  // already replies in the customer's language; this just adds a
+  // readable translation beneath the original bubble in the UI.
+  try {
+    const translationEnabled = await getTranslationEnabled()
+    if (translationEnabled) {
+      const targetLang = await getTranslationTargetLang()
+      const detected = await detectLanguage(text)
+      if (detected && detected !== targetLang) {
+        const translated = await translateText(text, detected, targetLang)
+        // Only persist when the translation actually differs from the
+        // original — saves a no-op DB write and avoids rendering an
+        // empty translation section in the UI.
+        if (translated && translated !== text) {
+          await db.message.update({
+            where: { id: incoming.id },
+            data: {
+              detectedLanguage: detected,
+              translatedText: translated,
+              isTranslated: true,
+            },
+          })
+        } else if (detected) {
+          // Still record the detected language so the UI can show the
+          // language badge even when no translation was needed.
+          await db.message.update({
+            where: { id: incoming.id },
+            data: { detectedLanguage: detected },
+          })
+        }
+      } else if (detected) {
+        // Detected language === target: just store the detection.
+        await db.message.update({
+          where: { id: incoming.id },
+          data: { detectedLanguage: detected },
+        })
+      }
+    }
+  } catch (err) {
+    // Non-fatal: the message pipeline continues regardless.
+    await db.log.create({
+      data: {
+        category: 'ai',
+        level: 'warn',
+        message: `Auto-translation failed: ${(err as Error).message}`,
+        contactId: contact.id,
+      },
+    })
+  }
+
   // 3. Update contact lastSeen / lastMessageAt
   await db.contact.update({
     where: { id: contact.id },
@@ -536,4 +590,29 @@ export async function setHumanMode(contactId: string, on: boolean) {
       contactId,
     },
   })
+}
+
+// ------------------------------------------------------------
+// Translation settings helpers — read the toggle / target
+// language from the Setting table. Defaults: enabled=true,
+// target="en". Used by the incoming-message pipeline so each
+// translation is gated by the current owner preference.
+// ------------------------------------------------------------
+const SETTING_TRANSLATION_ENABLED = 'translation_enabled'
+const SETTING_TRANSLATION_TARGET = 'translation_target_lang'
+
+export async function getTranslationEnabled(): Promise<boolean> {
+  const row = await db.setting.findUnique({
+    where: { key: SETTING_TRANSLATION_ENABLED },
+  })
+  if (!row) return true // default ON
+  return row.value === 'true' || row.value === '1'
+}
+
+export async function getTranslationTargetLang(): Promise<string> {
+  const row = await db.setting.findUnique({
+    where: { key: SETTING_TRANSLATION_TARGET },
+  })
+  if (!row || !row.value) return 'en'
+  return row.value
 }
