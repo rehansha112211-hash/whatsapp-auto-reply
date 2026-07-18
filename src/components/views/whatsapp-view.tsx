@@ -261,8 +261,6 @@ export function WhatsAppView() {
               onRefresh={handleGenerateQr}
               error={session?.error ?? ''}
             />
-          ) : state === 'connecting' ? (
-            <ConnectingCard label="Connecting to WhatsApp servers…" />
           ) : (
             <DisconnectedCard
               isLoggedOut={state === 'logged_out'}
