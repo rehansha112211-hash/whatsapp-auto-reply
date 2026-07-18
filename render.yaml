@@ -1,0 +1,24 @@
+# ============================================================
+# Render.com Blueprint — FREE tier deployment for WhatsApp engine
+# ============================================================
+# How to use:
+# 1. Go to https://render.com → New → Blueprint
+# 2. Select your GitHub repo: rehansha112211-hash/whatsapp-auto-reply
+# 3. Render will detect this render.yaml file
+# 4. Click "Apply" — engine deploys for FREE
+# ============================================================
+services:
+  - type: web
+    name: whatsapp-engine
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    port: 3004
+    envVars:
+      - key: PORT
+        value: 3004
+    # Free tier: the service may sleep after 15 min of inactivity.
+    # Incoming WhatsApp messages will wake it up (Render pings on HTTP).
+    # For true 24/7, upgrade to a paid plan ($7/month) later.
