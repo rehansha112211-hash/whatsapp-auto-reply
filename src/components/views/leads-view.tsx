@@ -39,6 +39,7 @@ import {
   timeAgo,
 } from '@/lib/format'
 import { LeadBadge } from '@/components/status'
+import { AnimatedCounter } from '@/components/ui/animated-counter'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -176,13 +177,15 @@ function SummaryCard({
   hint?: string
 }) {
   return (
-    <div className="rounded-xl border bg-card/60 p-4 backdrop-blur transition-colors hover:bg-card/80">
+    <div className="rounded-xl border bg-card/60 p-4 backdrop-blur card-hover">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             {label}
           </div>
-          <div className="mt-1 text-2xl font-bold tabular-nums">{value}</div>
+          <div className="mt-1 text-2xl font-bold tabular-nums">
+            <AnimatedCounter value={value} />
+          </div>
           {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
         </div>
         <div
@@ -572,15 +575,16 @@ export function LeadsView({ onNavigate }: LeadsViewProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((row) => {
+                {items.map((row, idx) => {
                   const isHot = row.leadScore >= 90
                   return (
                     <TableRow
                       key={row.id}
                       className={cn(
-                        'group transition-colors',
+                        'group animate-slide-in transition-colors',
                         isHot && 'bg-rose-500/[0.04] hover:bg-rose-500/[0.08]',
                       )}
+                      style={{ animationDelay: `${Math.min(idx, 8) * 30}ms` }}
                     >
                       {/* Customer */}
                       <TableCell className="pl-4">

@@ -10,6 +10,7 @@ import {
   Clock,
   ShieldCheck,
   MessageCircle,
+  Search,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -37,6 +38,7 @@ interface AppShellProps {
   active: ViewKey
   onNavigate: (v: ViewKey) => void
   onLogout: () => void
+  onOpenPalette?: () => void
   children: React.ReactNode
 }
 
@@ -215,6 +217,7 @@ export function AppShell({
   active,
   onNavigate,
   onLogout,
+  onOpenPalette,
   children,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = React.useState(false)
@@ -237,7 +240,7 @@ export function AppShell({
         <NavLinks active={active} onNavigate={onNavigate} unread={unread} />
       </ScrollArea>
       <div className="border-t p-3">
-        <div className="rounded-lg bg-muted/40 p-3">
+        <div className="rounded-lg bg-muted/40 p-3 card-hover">
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
             <span>Encrypted session</span>
@@ -320,6 +323,20 @@ export function AppShell({
                 {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </div>
+            {onOpenPalette && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onOpenPalette}
+                className="hidden gap-1.5 text-xs text-muted-foreground md:flex"
+              >
+                <Search className="h-3.5 w-3.5" />
+                <span>Quick search</span>
+                <kbd className="ml-2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+                  ⌘K
+                </kbd>
+              </Button>
+            )}
             <NotificationsBell />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

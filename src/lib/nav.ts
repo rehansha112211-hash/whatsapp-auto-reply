@@ -11,6 +11,7 @@ import {
   Activity,
   FlaskConical,
   Megaphone,
+  BarChart3,
   type LucideIcon,
 } from 'lucide-react'
 import type { ViewKey } from '@/lib/types'
@@ -34,6 +35,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'company-settings', label: 'Company', icon: Building2, description: 'Company profile', group: 'settings' },
   { key: 'owner-settings', label: 'Owner', icon: UserCog, description: 'Owner & takeover', group: 'settings' },
   { key: 'autoreply-settings', label: 'Auto Reply', icon: Reply, description: 'Reply rules', group: 'settings' },
+  { key: 'analytics', label: 'Analytics', icon: BarChart3, description: 'Insights & metrics', group: 'system' },
   { key: 'logs', label: 'Logs', icon: ScrollText, description: 'System logs', group: 'system' },
   { key: 'system', label: 'System', icon: Activity, description: 'Health & status', group: 'system' },
 ]

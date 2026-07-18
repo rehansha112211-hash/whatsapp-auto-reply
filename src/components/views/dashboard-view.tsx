@@ -39,6 +39,7 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart'
 import { LeadBadge, StatusDot, WhatsAppStatusBadge } from '@/components/status'
+import { AnimatedCounter } from '@/components/ui/animated-counter'
 import { apiGet } from '@/lib/api-client'
 import {
   colorFromString,
@@ -87,7 +88,7 @@ function asArray<T>(data: unknown): T[] {
 }
 
 const CARD_CLS =
-  'rounded-xl border bg-card/60 backdrop-blur p-4 gap-3 hover:border-primary/40 transition-colors shadow-sm'
+  'rounded-xl border bg-card/60 backdrop-blur p-4 gap-3 card-hover shadow-sm'
 
 // ----------------------------------------------------------------
 // Stat card shell — consistent icon + label header
@@ -97,14 +98,16 @@ function StatCard({
   label,
   accent,
   children,
+  glow,
 }: {
   icon: React.ReactNode
   label: string
   accent?: string
   children: React.ReactNode
+  glow?: boolean
 }) {
   return (
-    <Card className={CARD_CLS}>
+    <Card className={cn(CARD_CLS, glow && 'glow-primary')}>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span
           className={cn(
@@ -507,7 +510,9 @@ function TodayMessagesCard({ stats }: { stats: DashboardStats }) {
   return (
     <StatCard icon={<Activity className="h-4 w-4" />} label="Today's Messages">
       <div className="flex flex-col gap-1">
-        <div className="text-3xl font-bold tabular-nums">{stats.todayMessages}</div>
+        <div className="text-3xl font-bold tabular-nums">
+          <AnimatedCounter value={stats.todayMessages} />
+        </div>
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Bot className="h-3 w-3 text-emerald-300" />
@@ -531,7 +536,9 @@ function TotalContactsCard({ stats }: { stats: DashboardStats }) {
       accent="bg-teal-500/15 text-teal-300"
     >
       <div className="flex flex-col gap-1">
-        <div className="text-3xl font-bold tabular-nums">{stats.totalContacts}</div>
+        <div className="text-3xl font-bold tabular-nums">
+          <AnimatedCounter value={stats.totalContacts} />
+        </div>
         <div className="inline-flex items-center gap-1 text-[11px] text-emerald-300/90">
           <TrendingUp className="h-3 w-3" />
           +{stats.newCustomersToday} new today
@@ -553,10 +560,13 @@ function HotLeadsCard({
       icon={<Flame className="h-4 w-4" />}
       label="Hot Leads"
       accent="bg-amber-500/15 text-amber-300"
+      glow
     >
       <div className="flex flex-col gap-2">
         <div className="flex items-baseline gap-2">
-          <span className="text-3xl font-bold tabular-nums">{stats.hotLeads}</span>
+          <span className="text-3xl font-bold tabular-nums">
+            <AnimatedCounter value={stats.hotLeads} />
+          </span>
           <span className="text-[11px] text-muted-foreground">score ≥ 70</span>
         </div>
         <Button
@@ -581,7 +591,9 @@ function AiRepliesCard({ stats }: { stats: DashboardStats }) {
       accent="bg-emerald-500/15 text-emerald-300"
     >
       <div className="flex flex-col gap-1">
-        <div className="text-3xl font-bold tabular-nums">{stats.aiReplies}</div>
+        <div className="text-3xl font-bold tabular-nums">
+          <AnimatedCounter value={stats.aiReplies} />
+        </div>
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <StatusDot state={AI_STATE_MAP[stats.aiStatus]} pulse={stats.aiStatus === 'ok'} />
           <span className="truncate font-mono">
@@ -819,7 +831,7 @@ export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
       {/* Header */}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-gradient-premium">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             Real-time overview of your WhatsApp AI auto-reply platform
           </p>

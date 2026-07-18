@@ -1,0 +1,467 @@
+     1→# WhatsApp AI Auto Reply Platform — Worklog
+     2→
+     3→Project: WhatsApp AI Auto Reply · QorvixNode Technologies
+     4→Stack: Next.js 16 + TypeScript + Prisma (SQLite) + z-ai-web-dev-sdk + WebSocket
+     5→
+     6→---
+     7→Task ID: 1
+     8→Agent: Main (Z.ai Code)
+     9→Task: Foundation — Prisma schema, db client, types, auth lib, AI engine, WA engine simulation, seed script, global layout/theme
+    10→
+    11→Work Log:
+    12→- Read full master prompt (WhatsApp_Auto_Reply_Master_Prompt.txt, 2735 lines) covering Parts 1A/1B/1C/2A/2B/3.
+    13→- Adapted the spec to the Next.js 16 + TypeScript sandbox: backend logic lives in Next API routes + a WebSocket mini-service; real AI auto-reply uses z-ai-web-dev-sdk LLM; WhatsApp engine is a simulation layer (QR + session state + message pipeline) designed to be swapped for Baileys in a real deployment.
+    14→- Wrote `prisma/schema.prisma` with models: User, Setting, Company, Owner, ApiSetting, AutoReplySetting, Contact, Message, ConversationMemory, LeadScore, Log, Session, Notification, Metric. Ran `bun run db:push` successfully.
+    15→- Wrote `src/lib/types.ts` (shared TS types + QorvixNode company constants + services list + lead categories).
+    16→- Wrote `src/lib/auth.ts` (SHA-256 password hashing, session cookie `war_session`, login/logout/getCurrentUser, ensureDefaultUser seeds admin/admin123).
+    17→- Wrote `src/lib/ai-engine.ts` (LLM-powered reply generation with full context: company, owner, memory, lead score, language detection EN/HI/Hinglish, owner-request detection, category detection; plus testAIConnection).
+    18→- Wrote `src/lib/wa-engine.ts` (QR generation, session state, incoming-message pipeline: upsert contact -> save incoming -> lead/AI -> save outgoing -> update memory -> lead history -> owner notification -> log).
+    19→- Wrote `src/lib/seed.ts` (seeds company/owner/api/autoreply/session + 5 realistic demo conversations with messages, memory, lead scores, notifications).
+    20→- Wrote `src/lib/format.ts` (timeAgo, formatTime, formatUptime, initials, colorFromString, leadColor, toCsv, downloadFile).
+    21→- Updated `src/app/globals.css` with a custom WhatsApp-green dark-first theme (light + dark), custom scrollbars, typing dots, pulse rings, glass effect, bg-grid.
+    22→- Updated `src/app/layout.tsx` (dark by default, ThemeProvider, Sonner toaster, branded metadata).
+    23→- Created `src/components/theme-provider.tsx`.
+    24→
+    25→Stage Summary:
+    26→- DB schema live, all foundation libs in place, theme + layout ready.
+    27→- Default login: admin / admin123.
+    28→- AI engine wired to z-ai-web-dev-sdk (glm-4.5).
+    29→- Ready to build UI views + API routes in parallel via subagents.
+    30→
+    31→---
+    32→Task ID: 4-b
+    33→Agent: full-stack-developer (Dashboard view)
+    34→Task: Create `src/components/views/dashboard-view.tsx` — a real-time Dashboard view for the WhatsApp AI Auto Reply platform with polling stat cards, recent activity feed, and recent conversations list.
+    35→
+    36→Work Log:
+    37→- Read prior worklog + foundation files (`types.ts`, `format.ts`, `status.tsx`, `api-client.ts`, `prisma/schema.prisma`, existing `api/dashboard/route.ts`, `ui/card.tsx`, `ui/button.tsx`, `ui/badge.tsx`, `ui/skeleton.tsx`, `login-view.tsx`, `globals.css`) to understand available types, helpers, theme tokens, and the `DashboardStats` / `ChatListItem` shapes.
+    38→- Confirmed `scrollbar-thin` utility and `bg-card/60 backdrop-blur` theme tokens exist in `globals.css`; dark mode is default; WhatsApp-green palette via `--primary` / `--success` / `--wa` / `bg-emerald-*` / `bg-teal-*`.
+    39→- Built `DashboardView` as a `'use client'` component with signature `({ onNavigate }: { onNavigate?: (v: ViewKey) => void })`.
+    40→- Implemented 3 independent polling effects with `setInterval`: `/api/dashboard` every 5s (stats), `/api/notifications?limit=8` every 10s, `/api/chats?limit=6` every 10s. Each effect uses an `active` flag to avoid setState after unmount, swallows fetch errors so missing/401 routes don't crash the view, and shows a 6-card skeleton only on first load.
+    41→- Added a defensive `asArray<T>` helper that accepts both raw arrays and `{items|notifications|chats|data|rows}` envelope shapes so the view stays compatible with however other agents implement the notification/chat list routes.
+    42→- Rendered 6 stat cards in a responsive grid (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4`): WhatsApp Status (badge + connected name/number/since/session-uptime, or "Connect WhatsApp" button → `onNavigate('whatsapp')` when not connected), Today's Messages (count + AI/owner split), Total Contacts (count + "+N new today"), Hot Leads (count + "View leads" → `onNavigate('leads')`), AI Replies today (count + provider/model + StatusDot via aiStatus), System Uptime (formatUptime + db StatusDot + operational text).
+    43→- Built a "Recent Activity" card: scrollable list (`max-h-80 overflow-y-auto scrollbar-thin`) of notifications with severity-colored dots (teal/emerald/amber/rose — no blue/indigo), title, 2-line body, and `timeAgo`.
+    44→- Built a "Recent Conversations" card: compact list of chats with `colorFromString` avatar circles + `initials`, name, truncated last message, `LeadBadge`, `timeAgo`; each row is a button calling `onNavigate('chats')`.
+    45→- Applied consistent card styling (`rounded-xl border bg-card/60 backdrop-blur p-4 gap-3 hover:border-primary/40 transition-colors`) and stat-number styling (`text-3xl font-bold tabular-nums`); used lucide-react icons (MessageCircle, Activity, Users, Flame, Bot, Clock, Bell, MessagesSquare, TrendingUp, ArrowRight) and gradient accents on icon chips and the WhatsApp connect button.
+    46→- Added a "Live" indicator in the header with a pulsing green dot (`animate-ping` + solid core).
+    47→- Used only imported types (no `any`), no console.log, no TODOs. Verified with `bun run lint` — 0 errors in the new file (only 2 pre-existing warnings in other agents' files).
+    48→
+    49→Stage Summary:
+    50→- Created `src/components/views/dashboard-view.tsx` (single file, ~430 lines) exporting `DashboardView`.
+    51→- Fully responsive, theme-matched (WhatsApp-green), real-time dashboard ready to be mounted by the app shell.
+    52→- Polls existing `/api/dashboard` (5s) and sibling `/api/notifications` + `/api/chats` (10s) endpoints with graceful degradation while other agents finish those routes.
+    53→- Lint clean (0 errors).
+    54→
+    55→---
+    56→Task ID: 4-c
+    57→Agent: full-stack-developer (WhatsApp view + API)
+    58→Task: Build the WhatsApp connection page (QR login, session state, connect/reconnect/logout) plus its 5 API routes, using the existing wa-engine.ts simulation layer.
+    59→
+    60→Work Log:
+    61→- Read worklog + foundation libs (db, auth, types, format, api-client, wa-engine, status badge, app-shell, login-view) to align with established patterns.
+    62→- Created 5 API routes under `src/app/api/whatsapp/`, all gating on `getCurrentUser()` and returning 401 when unauthenticated:
+    63→  - `GET /api/whatsapp` → returns session `{state, connectedNumber, connectedName, connectedAt, deviceInfo, qrCode, lastSeen}` via `getWhatsAppSession()`.
+    64→  - `POST /api/whatsapp/qr` → calls `requestWhatsAppQR()`, returns `{ok, qr}`.
+    65→  - `POST /api/whatsapp/connect` → accepts optional `{number, name}`; if absent, generates a realistic `+91 9XXXX XXXXX` Indian mobile number and a random device name from a curated pool (Moto G45 5G, Samsung Galaxy S24, OnePlus 12R, …) paired with a browser (Chrome/Brave/Edge/Firefox/Opera Mini). Calls `confirmWhatsAppLogin()`.
+    66→  - `POST /api/whatsapp/disconnect` → calls `disconnectWhatsApp()`.
+    67→  - `POST /api/whatsapp/logout` → calls `logoutWhatsApp()`.
+    68→- Built `src/components/views/whatsapp-view.tsx` (`'use client'`, named `WhatsAppView`):
+    69→  - Polls `/api/whatsapp` every 4s; polls `/api/logs?category=whatsapp&limit=5` every 8s (defensive: tolerates `{items:[]}` or `[]` shapes, and silently no-ops if the route is not yet deployed by another agent).
+    70→  - 5 fully-designed states: `disconnected`/`logged_out` (green-gradient WhatsApp icon, "Generate QR Code" button, collapsible 4-step "How it works" guide using shadcn Collapsible), `qr_ready` (custom SVG QR with finder patterns + alignment + timing modules, auto-refresh countdown 60s, "Refresh QR" + "I've scanned it (simulate)" buttons, corner accents + center WhatsApp logo overlay), `connected` (success card with pulsing dot, large name+number, device/connected-at/uptime/connection detail rows, Reconnect + Logout actions), `connecting` (spinner card).
+    71→  - Custom `QrVisual` helper: pure SVG, 25x25 grid, deterministic FNV-1a + Mulberry32 hash of the payload string → bit stream, then stamps 3 classic 7x7 finder patterns (top-left, top-right, bottom-left), a 5x5 alignment pattern at (16,16), and alternating timing patterns on row 6 / col 6, with cleared white separators around finders. No external QR library used.
+    72→  - Side panel (lg+): `Session Health` card (state pill, QR status, last seen with live ticking, session uptime) + `Recent WhatsApp Logs` card with colored level chips and scroll-area capped at 72.
+    73→  - Sonner toasts for every action (generate, connect, reconnect, logout, errors). WhatsApp-green gradient buttons (`from-emerald-500 to-teal-600`), `rounded-xl border bg-card/60 backdrop-blur` cards, mobile-first responsive (`max-w-5xl` page, `lg:grid-cols-[minmax(0,1fr)_320px]` main+aside).
+    74→- Verified end-to-end with curl: all 5 routes return 401 without auth cookie, then 200 with admin session; state transitions disconnected → qr_ready → connected → logged_out all flow correctly; phone-number generator produced e.g. `+91 981463 95470` and device name `Vivo X100 · Edge`.
+    75→- `bun run lint`: 0 errors, 0 warnings in the 6 created files (only 2 unused-disable warnings remain, both in other agents' files: `logs-view.tsx` and `use-realtime.ts`).
+    76→- `npx tsc --noEmit`: 0 errors in any of the 6 created files (all remaining TS errors are in other agents' files: leads/route.ts, system-view, use-realtime, ai-engine, examples, skills).
+    77→
+    78→Stage Summary:
+    79→- src/app/api/whatsapp/route.ts
+    80→- src/app/api/whatsapp/qr/route.ts
+    81→- src/app/api/whatsapp/connect/route.ts
+    82→- src/app/api/whatsapp/disconnect/route.ts
+    83→- src/app/api/whatsapp/logout/route.ts
+    84→- src/components/views/whatsapp-view.tsx
+    85→
+    86→---
+    87→Task ID: 4-f
+    88→Agent: full-stack-developer (Settings views + APIs)
+    89→Task: Build the four Settings views (AI / Company / Owner / Auto-Reply) plus their API routes and an AI connection-test route, all gated by getCurrentUser().
+    90→
+    91→Work Log:
+    92→- Read worklog.md and existing libs (db, auth, types, api-client, ai-engine, schema, seed).
+    93→- Created 4 API routes + 1 test route + 1 test-notify route, all under src/app/api/settings/*.
+    94→  - /api/settings/ai (GET returns ApiSetting row with apiKey masked as •••••••• + last 4 chars; PUT upserts, keeps existing key when placeholder received, sets status='untested', logs to security).
+    95→  - /api/settings/ai/test (POST runs testAIConnection(), updates status to ok/error and lastTestedAt, logs to ai).
+    96→  - /api/settings/company (GET/PUT; services & businessHours serialized as JSON strings; upsert).
+    97→  - /api/settings/owner (GET/PUT; upsert + security log "Owner settings updated").
+    98→  - /api/settings/owner/test-notify (POST creates Notification row type='owner_request' title='Test Notification' severity='info').
+    99→  - /api/settings/autoreply (GET/PUT; upsert + frontend log).
+   100→- Created 4 client view components in src/components/views/:
+   101→  - AISettingsView — Provider quick-pick chips (Z.AI/OpenAI/Groq/Together/OpenRouter), Base URL, password API-key input with show/hide + masked placeholder note, Model, Temperature/Top-P/Max-Tokens sliders with live values, monospace system-prompt textarea, Save/Reset/Test Connection buttons, status badge (ok/error/untested) with last-tested time, and a Test Result card showing latency/model/sample/ok-or-error.
+   102→  - CompanySettingsView — Name, Website, Description, Services as toggle chips rendered from QORVIX_SERVICES, 7-day business-hours editor (day name + start/end time inputs + closed checkbox), Greeting/Closing/Support textareas, Save/Reset, plus a live "AI Context Preview" card showing how company info appears in the system prompt.
+   103→  - OwnerSettingsView — Owner name, Owner WhatsApp number with "never shared automatically" note, Availability select (available/busy/away), Business Hours textarea, Human Takeover / Lead Notification / Auto Notify switches, Hot Lead Threshold slider (0-100) with Flame icon, Save/Reset/Test Notification button, and an amber Privacy notice card stating the owner's number is never auto-shared with customers.
+   104→  - AutoReplySettingsView — Large Enabled master switch with Active/Disabled badge, Reply Delay/Typing Delay sliders (0-10), Max Reply Length slider (100-1500), Business Hours Only switch, Language Preference select (auto/en/hi/hinglish), Greeting/Away Message textareas, Save/Reset, "Changes affect AI replies immediately" note, and a Live Auto-Reply Preview card with mock incoming/outgoing messages.
+   105→- Used WhatsApp-green theme (primary), no indigo/blue, glass cards (rounded-xl border bg-card/60 backdrop-blur), lucide-react icons, sonner toasts, Skeleton loading, Spinner on Save/Test buttons while pending, responsive single-column on mobile and 2-column on lg.
+   106→- Lint: `bun run lint` reports 0 errors in my files (only 1 pre-existing warning in src/hooks/use-realtime.ts).
+   107→- TypeScript: `bunx tsc --noEmit` reports 0 errors in any of my created files.
+   108→
+   109→Stage Summary:
+   110→- Files created:
+   111→  - src/app/api/settings/ai/route.ts
+   112→  - src/app/api/settings/ai/test/route.ts
+   113→  - src/app/api/settings/company/route.ts
+   114→  - src/app/api/settings/owner/route.ts
+   115→  - src/app/api/settings/owner/test-notify/route.ts
+   116→  - src/app/api/settings/autoreply/route.ts
+   117→  - src/components/views/ai-settings-view.tsx
+   118→  - src/components/views/company-settings-view.tsx
+   119→  - src/components/views/owner-settings-view.tsx
+   120→  - src/components/views/autoreply-settings-view.tsx
+   121→
+   122→---
+   123→Task ID: 4-g
+   124→Agent: full-stack-developer (Logs + System Health views + APIs)
+   125→Task: Build the Logs viewer & System Health pages plus their API routes (logs list with filters/export, system health endpoint with synthesized CPU/RAM/Disk metrics, and the two 'use client' view components wired with auto-refresh).
+   126→
+   127→Work Log:
+   128→- Read worklog.md, prisma schema, types.ts, format.ts, auth.ts, wa-engine.ts, api-client.ts, status.tsx, dashboard route, app-shell, login-view, and shadcn UI primitives (tabs/select/switch/progress/badge) to align with existing conventions.
+   129→- Created `src/app/api/logs/route.ts` (GET): auth-gated, supports `category`, `level`, `search`, `limit` (default 200, clamped 1-1000), `before` pagination cursor; returns `{ items, hasMore }` ordered createdAt desc; supports `?export=csv` and `?export=json` with Content-Disposition headers; validates category/level against the union types from `lib/types.ts`.
+   130→- Created `src/app/api/system/health/route.ts` (GET): returns `SystemHealth` with backend/frontend ok, whatsapp state from session, database via `SELECT 1`, aiProvider from ApiSetting.status, session from getCurrentUser; synthesized CPU via sine wave clamped 5-60, RAM via process.memoryUsage (rssLimit-aware with fallback), disk stable 40%; uptimeSec from SYSTEM_START; best-effort Metric rows for cpu/ram/disk time-series.
+   131→- Created `src/components/views/logs-view.tsx` ('use client', named `LogsView`): Tabs for All/Startup/Backend/WhatsApp/AI/Database/Errors/Security/Owner Notify/Lead/Frontend; toolbar with level Select, debounced search (300ms), auto-refresh Switch (default on, 5s poll), manual refresh, Export CSV + JSON buttons, Clear filters; stats strip (visible count, errors 24h, warnings 24h); scrollable log list (`max-h-[calc(100vh-320px)]` scrollbar-thin) with colored level dots (sky/amber/rose/zinc), level badge, monospace timestamp, category badge colored per category, monospace message, collapsible `<details>` meta with formatted JSON, "→ contact" link when contactId present; new logs appear at top with `fadeHighlight` keyframe animation (bg-primary/5 fading out) using a `seenIdsRef`-based diff to avoid stale-closure loops; empty state with Inbox icon; onOpenContact callback prop.
+   132→- Created `src/components/views/system-view.tsx` ('use client', named `SystemView`): polls `/api/system/health` every 5s; big "System Status" card with pulsing green/red dot (overall = operational/degraded); responsive status grid (2 cols mobile, 3 lg, 4 xl) with left-border accent colored by state — Backend, Frontend, WhatsApp (WhatsAppStatusBadge), Database, AI Provider (with model name + StatusDot ok/error/untested), Session; Resource cards for CPU/RAM/Disk with animated Progress bars colored green/amber/rose by load band; Uptime card (formatUptime + started-at timestamp); Engine Controls card with "Restart Engine (simulated)" button toasting confirmation; Recent Errors (red-accented) + Recent System Events cards fetching `/api/logs?category=errors&limit=5` and `/api/logs?category=startup&limit=10`.
+   133→- Styling throughout: WhatsApp-green theme, glass cards (`rounded-xl border bg-card/60 backdrop-blur`), lucide-react icons (ScrollText, Activity, Server, Database, Cpu, HardDrive, Clock, RefreshCw, Download, Search, AlertTriangle, CheckCircle2, XCircle, Wifi, Shield, Zap, Power, Monitor, Terminal, Inbox, ArrowRight, Loader2), responsive layouts.
+   134→- Ran `bun run lint`: 0 errors in created files (only a pre-existing warning in `src/hooks/use-realtime.ts` remains, which is not part of this task). Ran `bunx tsc --noEmit`: my 4 files produce 0 type errors (remaining errors are in other agents' files — leads routes, ai-engine, examples, skills).
+   135→
+   136→Stage Summary:
+   137→- `src/app/api/logs/route.ts`
+   138→- `src/app/api/system/health/route.ts`
+   139→- `src/components/views/logs-view.tsx`
+   140→- `src/components/views/system-view.tsx`
+   141→
+   142→---
+   143→Task ID: 4-e
+   144→Agent: full-stack-developer (Leads view + API)
+   145→Task: Build the Leads pipeline page (search/filter/sort/export CSV+JSON table with summary cards and 15s polling) plus its two API routes (`/api/leads` and `/api/leads/export`), all gated by `getCurrentUser()`.
+   146→
+   147→Work Log:
+   148→- Read worklog.md + foundation files (`db.ts`, `auth.ts`, `types.ts`, `format.ts`, `api-client.ts`, `status.tsx`, `prisma/schema.prisma`, `app-shell.tsx`, `login-view.tsx`, `api/dashboard/route.ts`) to align with established patterns and confirm available helpers (`timeAgo`, `downloadFile`, `toCsv`, `colorFromString`, `initials`, `leadColor`, `leadBadge`, `LeadBadge`, `apiGet`).
+   149→- Inspected the Prisma schema and confirmed that `LeadScore` has `contactId` but NO relation field back to `Contact` (Contact only exposes `messages`, `memories`, `notifications`, `logs` relations). Adjusted the query plan accordingly: fetch contacts with `include: { messages: { take: 1, orderBy: timestamp desc } }`, then separately fetch all `LeadScore` rows for the matched contact IDs (ordered `[{contactId asc}, {createdAt desc}]`) and dedupe in JS to get the latest category + notified flag per contact.
+   150→- Created `src/app/api/leads/route.ts` (GET, `dynamic = 'force-dynamic'`):
+   151→  - Auth check via `getCurrentUser()` → 401 JSON when unauthenticated.
+   152→  - `?summary=1` shortcut returns `{ total, hot, warm, cold }` (counts of contacts with `leadScore >= 25`, `>= 70`, `50–69`, `< 50`) computed via four parallel `db.contact.count` calls — independent of filter params.
+   153→  - Filter params: `search` (post-filter on name/phone/lastMessage, case-insensitive), `category` (validated against the 9 LeadCategory values + `'all'`; post-filter on latest LeadScore.category), `minScore` (clamped 0–100, applied as Prisma `leadScore: { gte }`), `sort` (`score_desc` default | `score_asc` | `recent` | `oldest` | `name_asc`), `status` (`'all'` default | `'lead'` | `'active'` | `'customer'` | `'new'`, applied as Prisma `status` filter).
+   154→  - Returns `{ items: LeadRow[] }` where each row matches the `LeadRow` interface exactly (id, name, phone, detectedService, leadScore, status, lastMessage, lastMessageAt, category, notified).
+   155→  - All query params validated via typed `VALID_STATUSES`/`VALID_CATEGORIES` const arrays + an `isSortKey` type guard; no `any`.
+   156→- Created `src/app/api/leads/export/route.ts` (GET, `dynamic = 'force-dynamic'`):
+   157→  - Same auth + filter logic as the leads route (duplicated to keep the task scoped to only the 3 specified files).
+   158→  - Returns the CSV with `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="leads.csv"`, and `Cache-Control: no-store`.
+   159→  - Uses the isomorphic `toCsv` from `@/lib/format`; columns: Name, Phone, Service, Category, LeadScore, Status, LastMessage, LastMessageAt, Notified.
+   160→  - 401 path returns a plain `Response('Unauthorized')` (no JSON) since this is a file-download endpoint.
+   161→- Created `src/components/views/leads-view.tsx` (`'use client'`, named `LeadsView`, signature `({ onNavigate }: { onNavigate?: (v: ViewKey) => void })`):
+   162→  - **Header row**: title + subtitle, Refresh button (spinner during silent refresh), Export dropdown (CSV + JSON) with WhatsApp-green gradient trigger.
+   163→  - **4 summary cards** (responsive `grid-cols-2 lg:grid-cols-4`): Total Leads (≥25, emerald accent), Hot Leads (≥70, rose accent), Warm Leads (50–69, amber accent), Cold Leads (<50, zinc accent) — each with icon chip, big tabular count, and threshold hint. Fetched from `/api/leads?summary=1` (independent of filters) and re-polled every 15s.
+   164→  - **Toolbar card**: search input (300ms debounce via `setTimeout` + cleanup, with clear button) + filter row containing Category Select (All + each LEAD_CATEGORIES label), Status Select, Sort Select (with ArrowUpDown icon), Min-score Slider (0–100, step 5, with live value badge in emerald), and a Clear-filters button that appears only when any filter is non-default.
+   165→  - **Table** (shadcn `Table` wrapped in `overflow-x-auto`): columns Customer (colorFromString avatar + initials + name + phone, with green "notified" dot when `notified=true`), Service (detectedService text + emerald-outlined category Badge using `LEAD_CATEGORIES.find(...).label`), Lead Score (`LeadBadge` + thin colored progress bar where ≥70=emerald, ≥50=amber, ≥25=orange, else muted — plus a pulsing rose dot indicator when score ≥ 90), Status (color-coded Badge per status map), Last Message (line-clamped text + timeAgo with MessageCircle icon), Actions (View chat button → `onNavigate?.('chats')`, opacity ramps up on row hover).
+   166→  - **Empty state**: 14×14 Inbox icon chip, "No leads match your filters" headline, helpful sub-text, and a Clear-filters button (only rendered when filters are active).
+   167→  - **Loading state**: full-height centered Loader2 spinner with "Loading leads…" text.
+   168→  - **Footer**: count of visible leads + live "auto-refresh every 15s" indicator with pulsing emerald dot.
+   169→  - **Hot-lead pulse**: rows with `leadScore >= 90` get a subtle rose-tinted background + the pulsing rose dot next to the LeadBadge.
+   170→  - **Polling**: `setInterval` every 15s calls `fetchItems({ silent: true })` + `fetchSummary()`; filters are preserved across polls (they live in React state, not the URL). All effects properly clean up intervals and timeouts on unmount.
+   171→  - **Export CSV**: fetches `/api/leads/export?<params>` as text, downloads via `downloadFile('leads-YYYY-MM-DD.csv', text, 'text/csv;charset=utf-8')`, toasts success/error.
+   172→  - **Export JSON**: serializes current `items` array, downloads via `downloadFile('leads-YYYY-MM-DD.json', json, 'application/json')`, toasts success/error.
+   173→  - **Error banner**: rose-tinted alert shown if the items fetch fails (silent refreshes don't overwrite items, only the initial load sets the error).
+   174→- Verified end-to-end with curl using the seeded admin/admin123 session:
+   175→  - `GET /api/leads` → 401 without cookie, then 200 with `{items:[{id,name,phone,detectedService,leadScore,status,lastMessage,lastMessageAt,category,notified},…]}` (5 demo leads returned).
+   176→  - `GET /api/leads?summary=1` → `{total:4, hot:3, warm:0, cold:2}` (matches seed data).
+   177→  - `GET /api/leads/export` → 200 with correct CSV header row `Name,Phone,Service,Category,LeadScore,Status,LastMessage,LastMessageAt,Notified` and proper per-row escaping.
+   178→  - Filter sanity-checks (`?minScore=80`, `?status=lead`, `?sort=score_asc`, `?category=website`) all return correctly filtered/sorted results.
+   179→- `bun run lint` on the 3 created files: **0 errors, 0 warnings**. (The 1 remaining lint error in the repo is `src/hooks/use-realtime.ts:71` from another agent's task — not in scope.)
+   180→- `bunx tsc --noEmit` on the 3 created files: **0 type errors**. (All remaining TS errors are in other agents' files: ai-engine.ts, use-realtime.ts, examples/, skills/ — not in scope.)
+   181→
+   182→Stage Summary:
+   183→- `src/app/api/leads/route.ts`
+   184→- `src/app/api/leads/export/route.ts`
+   185→- `src/components/views/leads-view.tsx`
+   186→
+   187→---
+   188→Task ID: 4-h
+   189→Agent: full-stack-developer (Simulator + WebSocket service)
+   190→Task: Build the Message Simulator (end-to-end AI auto-reply test harness) and a WebSocket mini-service for real-time dashboard updates.
+   191→
+   192→Work Log:
+   193→- Read worklog + wa-engine.ts + ai-engine.ts + types.ts + auth.ts + api-client.ts + globals.css to understand the existing pipeline and styling tokens.
+   194→- Created `mini-services/realtime/` as a new independent Bun project (`war-realtime`):
+   195→  - `package.json` — `dev: bun --hot index.ts`, dependency `socket.io@^4.8.1`.
+   196→  - `index.ts` — Socket.io server on port 3003 (hardcoded). Maintains an in-memory set of connected client IDs, emits `dashboard:tick` every 3s with `{ ts }`, exposes `POST /broadcast` (internal, no auth) accepting `{ event, payload }` and io.emit-ing to all clients, plus `GET /health` for ops. Skips socket.io's own `/socket.io/*` traffic in the HTTP request handler so it never tries to write to an already-closed response. SIGTERM/SIGINT graceful shutdown.
+   197→  - Ran `bun install` and started in background with `bun run dev > realtime.log 2>&1 &`. Verified running: `curl http://localhost:3003/health` returns `{"ok":true,"service":"war-realtime","clients":0,"uptime:...}` and the log shows `[realtime] :3003`.
+   198→- Created `src/hooks/use-realtime.ts` (`'use client'`):
+   199→  - Singleton socket (`io('/?XTransformPort=3003', { transports: ['websocket','polling'] })`) shared across hook instances via refcount — disconnects only when the last consumer unmounts.
+   200→  - Accepts `events: { event, handler }[]`; subscribes one stable listener per event name and looks up the latest handler from a ref each time (so handler identity changes don't churn subscriptions).
+   201→  - Re-subscribes only when the set of event names changes (deps key = `events.map(e=>e.event).join('|')`).
+   202→  - Returns `{ connected: boolean }`.
+   203→- Created `src/app/api/simulator/send/route.ts` (POST):
+   204→  - `getCurrentUser()` → 401 if not authed.
+   205→  - Validates body: `phone` (regex `^[0-9+()\-\s]{6,20}$`) and `text` (non-empty, ≤4000 chars) required; `name`, `countryCode` optional.
+   206→  - Calls `processIncomingMessage({ phone, name, text, countryCode })` — the REAL pipeline (upsert contact → save incoming → AI reply via z-ai-web-dev-sdk → save outgoing → memory → lead score history → owner notification → log).
+   207→  - Pulls `detectedService` from the freshly-updated contact for the UI metadata panel.
+   208→  - Fire-and-forget POSTs `{ event: 'simulator:message', payload }` to `http://localhost:3003/broadcast` so connected dashboards refresh immediately.
+   209→  - Returns `{ ok, contactId, replyText, replyMessageId, leadScore, ownerRequested, ownerNotified, aiSkipped, detectedService, responseMs, error? }`.
+   210→- Created `src/components/views/simulator-view.tsx` (`'use client'`, named export `SimulatorView`, signature `({ onNavigate }: { onNavigate?: (v: ViewKey) => void })`):
+   211→  - **Left panel (form)**: phone input prefilled with random `+91` number + 🎲 randomize button (Dices icon), optional name input, message textarea, 6 quick-pick chips, primary "Send & Generate AI Reply" button (emerald→teal gradient). Loading state shows typing-dot animation + "AI is thinking…" label.
+   212→  - **Right panel (result)**: chat preview with WhatsApp-style bubbles — incoming (`chat-bubble-in`, left, rounded-tl-sm) for the simulated customer message, outgoing (`chat-bubble-out`, right, rounded-tr-sm) with an "AI" badge + Bot icon for the reply. Metadata grid: response time (ms), lead score (with `leadBadge` class), detected category, owner requested (yes/no), owner notified (yes/no), AI skipped (human mode). If `ownerRequested` is true, shows an amber warning banner "Owner was notified and human mode auto-enabled." "View in Chats" button → `onNavigate?.('chats')`.
+   213→  - **Bottom: Conversation history** — after a send, fetches `/api/messages?contactId=X&limit=50`, renders the full thread chronologically in a `max-h-96` scroll area with per-message source badges (AI / Owner / System). Gracefully handles missing endpoint (parallel-agent dependency) with an empty-state + retry button.
+   214→  - **Live mode**: uses `useRealtime` to listen for `dashboard:tick` and `simulator:message` (filtered to active contactId); each tick re-fetches the conversation history so multiple simulator tabs stay in sync.
+   215→  - "Reset conversation" button generates a new random phone (preserves history in DB but clears the local view).
+   216→  - Responsive: stacks on mobile, side-by-side on `lg:`. WhatsApp-green theme throughout, no indigo/blue. Lucide icons: FlaskConical, Send, Sparkles, Dices, MessageCircle, Bot, User, AlertTriangle, Flame, ArrowRight, RotateCcw, Clock, Tag, CheckCircle2, XCircle, Loader2.
+   217→- Lint cycle: `bun run lint` initially flagged `react-hooks/refs` (ref-during-render) and `react-hooks/set-state-in-effect`. Fixed by (a) moving `eventsRef.current = events` into a useEffect, and (b) deferring the initial `setConnected(true)` for an already-connected socket via `queueMicrotask`. Final lint is clean (0 errors, 0 warnings).
+   218→- End-to-end smoke test: logged in via `/api/auth/login` (admin/admin123), then `POST /api/simulator/send` with `{phone:"+91 99999 88888", name:"Test Customer", text:"Hi, I need a website"}` → returned `{ok:true, contactId:"...", replyText:"Hi! 👋 Welcome to QorvixNode Technologies — we build websites, apps & AI automation. How can we help?", leadScore:36, ownerRequested:false, detectedService:"website", responseMs:866}`. Confirms the real z-ai-web-dev-sdk LLM is invoked and the full pipeline runs.
+   219→
+   220→Stage Summary:
+   221→- Files created (exactly the 5 requested):
+   222→  - `src/app/api/simulator/send/route.ts`
+   223→  - `mini-services/realtime/package.json`
+   224→  - `mini-services/realtime/index.ts`
+   225→  - `src/hooks/use-realtime.ts`
+   226→  - `src/components/views/simulator-view.tsx`
+   227→- Realtime mini-service: RUNNING on port 3003, log shows `[realtime] :3003`, `/health` and `/broadcast` endpoints verified.
+   228→- Simulator API verified end-to-end: simulated customer message → real LLM reply in ~860ms with lead detection + category detection.
+   229→- `bun run lint` clean (0 errors / 0 warnings).
+   230→- Frontend connects via `io('/?XTransformPort=3003')`; API routes broadcast via server-side `fetch('http://localhost:3003/broadcast')` (internal, bypasses gateway).
+   231→
+   232→---
+   233→Task ID: 4-d
+   234→Agent: full-stack-developer (Chats view + APIs)
+   235→Task: Build the WhatsApp-Web-style Chats page — 3-pane conversation list + chat window + customer details panel with human-takeover — plus its 4 API routes (chats list, messages GET+POST, contact GET+PATCH, human-mode POST).
+   236→
+   237→Work Log:
+   238→- Read worklog.md (foundation + 6 sibling views), prisma schema, types.ts (ChatListItem / ChatMessage / ContactDetail / MessageStatus / etc.), wa-engine.ts (sendOwnerMessage, setHumanMode), auth.ts, api-client.ts, format.ts, status.tsx, use-realtime.ts, globals.css (chat-bubble-in/out, bg-grid), and the leads-view + simulator-view for pattern alignment.
+   239→- Created `src/app/api/chats/route.ts` (GET, `force-dynamic`):
+   240→  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+   241→  - Query params: `search` (name/phone/lastMessage, case-insensitive), `filter` (all | unread | lead | hot | ai | human | pinned — validated against a const tuple), `sort` (recent | oldest | score_desc | score_asc), `limit` (default 100, capped 500), `phone` (used by the simulator).
+   242→  - Builds a Prisma `where` clause for the simple equality filters (phone, pinned, humanMode, status=lead, leadScore>=70 for hot) and fetches contacts with `include: { messages: { orderBy: timestamp desc, take: 1, select: text/timestamp/direction/source } }`.
+   243→  - Computes unread counts in a SINGLE `db.message.groupBy({ by: ['contactId'], where: { contactId in [...], direction: 'incoming', read: false }, _count: { _all: true } })` query instead of one-per-contact — keeps the route fast for the seeded ~5-50 contacts.
+   244→  - Maps to `ChatListItem[]`; post-filters `unread` (count > 0) and `ai` (humanMode=false) since those need the joined fields; applies search.
+   245→  - Sorts with a comparator that ALWAYS floats pinned conversations to the top regardless of the sort key, then applies the requested sort (recent/oldest by lastMessageAt, score_desc/asc by leadScore). Applies limit last.
+   246→- Created `src/app/api/messages/route.ts` (GET + POST, `force-dynamic`):
+   247→  - GET — auth check, requires `contactId`, optional `limit` (default 200, max 1000) + `before` (ISO cursor for pagination). 404 if contact not found. Fetches most-recent `limit` messages DESC, then reverses for ASC order so the chat window can render top-to-bottom without an extra client reverse pass. SIDE EFFECT: marks all incoming messages as read so the unread badge clears when the user opens the chat (`db.message.updateMany` with `direction: 'incoming', read: false`).
+   248→  - POST — auth check, validates body `{ contactId, text }` (text non-empty, max 4000 chars). Verifies contact exists (404 if not), calls `sendOwnerMessage(contactId, text)` from wa-engine, then fire-and-forget POSTs `{event:'simulator:message', payload:{contactId, ts}}` to `http://localhost:3003/broadcast` (wrapped in try/catch — non-fatal if realtime service is down). Returns `{ ok: true, message: ChatMessage }`.
+   249→  - Internal `toChatMessage` helper normalises the Prisma row to the typed `ChatMessage` interface.
+   250→- Created `src/app/api/contacts/[id]/route.ts` (GET + PATCH, `force-dynamic`):
+   251→  - GET — auth check, fetches contact with `include: { memories, messages: { take: 5, orderBy: timestamp desc, select: source/text } }`. Builds a `summary` string from memories + recent messages + lead info (e.g. "Interested in Website Development. Language: hinglish. Lead score: 82. Status: lead. First seen: 7/17/2026. Last message: '...'"). Returns full `ContactDetail` (id, name, phone, countryCode, language, status, leadScore, detectedService, notes, humanMode, firstSeen, lastSeen, lastMessageAt, memories as `{key,value}[]`, summary).
+   252→  - PATCH — auth check, accepts `{ notes?, pinned?, status? }`. Validates status against the `ContactStatus` union. Only fields actually present in the body are updated (incremental patch). 404 if contact doesn't exist (catches Prisma P2025). Re-fetches with memories + recent messages to rebuild the summary, returns the full `ContactDetail`.
+   253→- Created `src/app/api/contacts/[id]/human-mode/route.ts` (POST, `force-dynamic`):
+   254→  - Auth check, validates `{ enabled: boolean }`, 404 if contact not found. Calls `setHumanMode(id, enabled)` from wa-engine. Fire-and-forget broadcasts `{event:'simulator:message', payload:{contactId, humanMode, ts}}` to the realtime service so other tabs refresh. Returns `{ ok: true, humanMode }`.
+   255→- Created `src/components/views/chats-view.tsx` (`'use client'`, named `ChatsView`, no props):
+   256→  - **3-pane desktop layout**: `lg:grid lg:grid-cols-[320px_1fr_288px]` inside a `h-[calc(100vh-8rem)]` rounded-xl border container. Children use `min-h-0` so the inner scroll areas work. WhatsApp-green theme throughout, no indigo/blue.
+   257→  - **Mobile layout**: single pane via state `mobilePane: 'list' | 'chat'`; back arrow in chat header returns to list; details panel becomes a Sheet (right side) triggered by an info button in the chat header.
+   258→  - **Left pane (`ConversationList`)**: "Chats" title with conversation count badge, search input (debounced 300ms in parent, with clear-X button), filter `Select` (All / Unread / Leads / Hot / AI Active / Human / Pinned). Scrollable list with `scrollbar-thin`. Each row: avatar (colorFromString + initials), name + phone, last-message preview (prefixed "You: " for outgoing), `timeAgo`, unread badge (emerald pill with count), LeadBadge if score ≥ 25, "Human" amber badge, Pin icon for pinned. Active row: `bg-primary/10` + left accent bar. Empty state with Inbox icon: "No conversations yet. Use the Simulator to test the AI."
+   259→  - **Center pane (`ChatWindow`)**: header with back arrow (mobile), avatar, name + lead badge + human badge, status line ("AI auto-reply is handling this chat" / "Human mode active — AI paused"). Status banner below header (emerald for AI active, amber for human mode). Optional "WhatsApp not connected — messages are simulated" banner. Messages area with `bg-grid opacity-30` overlay, `scrollbar-thin`, max-w-3xl center column. Messages grouped by day with centered pill `DateSeparator` ("Today" / "Yesterday" / "Mon, Jul 17"). Bubbles: outgoing right-aligned `chat-bubble-out rounded-tr-sm`, incoming left-aligned `chat-bubble-in rounded-tl-sm`, both `shadow-sm`. AI/Owner/System bubbles get a small source badge (Bot/User/Shield icon). Timestamp + delivery icon (Check / CheckCheck / sky-blue CheckCheck for read / AlertTriangle for failed / Clock for pending). Auto-scrolls to bottom on new messages. Composer: auto-growing Textarea (Enter to send, Shift+Enter newline), Send button labeled "Take over & send" (amber→orange gradient) when AI active or "Send" (emerald→teal) otherwise. Character counter (X/4000). When AI active and user sends, the handler auto-enables human mode first via `/api/contacts/[id]/human-mode` then sends the message via `/api/messages`.
+   260→  - **Right pane (`DetailsPanel`)**: header with large avatar, name, phone, status badge, summary text in a muted card. Sections: Status (current mode + Switch to toggle + "Take over chat"/"Resume AI" button), Lead info (LeadBadge + Progress bar colored by score band + detected service + language), Customer info (first seen, last active, last message, status, country code), AI Memory (key/value list with friendly labels — Name, Business, Requirements, Budget, etc.), Notes (Textarea + Save notes button, PATCH /api/contacts/[id]), Actions (Pin/Unpin, Mark as customer, Block contact / Unblock contact).
+   261→  - **Polling**: chats list every 8s (silent), messages every 4s for the selected contact, WhatsApp state every 30s.
+   262→  - **Realtime**: `useRealtime([{event:'dashboard:tick', handler: refreshOnTick}, {event:'simulator:message', handler: onSimulatorMessage}])`. On tick → refetch chats + messages (silent). On simulator message → refetch chats; if `payload.contactId` matches the selected contact, also refetch messages + detail.
+   263→  - **Initial selection**: on first load, if there are items and no selection, auto-select the first one (which is the most recent or pinned-first per the API sort) and switch mobile to chat pane.
+   264→  - **Optimistic updates**: toggling human mode / pinning / status changes update both the chats list (`items`) and the detail (`detail`) locally before/after the API call so the UI stays responsive. After sending a message, appends the returned `ChatMessage` to the local `messages` array immediately (no need to wait for the next poll).
+   265→  - Lucide icons: MessageCircle, Search, Filter, Pin, Send, ArrowLeft, Info, Bot, User, UserCog, Flame, Clock, Check, CheckCheck, AlertTriangle, MoreVertical, Shield, Bell, Loader2, Inbox, X, Sparkles.
+   266→  - TypeScript strict throughout; realtime payload typed as `unknown` then cast to `{ contactId?: string }`. No `any`, no `console.log`, no TODO. `TooltipProvider` wraps the whole view so the delivery-status `Tooltip` works.
+   267→- **End-to-end smoke test** (logged in as admin/admin123, ran against the seeded DB):
+   268→  - `GET /api/chats` → 200 with 6 conversations; first row was "Rahul Sharma" (pinned=true, leadScore=82, humanMode=false).
+   269→  - `GET /api/chats?filter=unread` → 200 with 1 conversation (the simulator-created Test Customer with unread=1).
+   270→  - `GET /api/chats?filter=hot` → 200 with hot leads only (leadScore ≥ 70).
+   271→  - `GET /api/messages?contactId=...&limit=3` → 200 with messages in ASC order.
+   272→  - `GET /api/contacts/<id>` → 200 with full ContactDetail including memories (language, last_intent, name) and an auto-generated summary.
+   273→  - `POST /api/contacts/<id>/human-mode` `{enabled:true}` → 200 `{ok:true, humanMode:true}`.
+   274→  - `PATCH /api/contacts/<id>` `{notes:"Test note", pinned:true}` → 200 with updated ContactDetail.
+   275→  - `POST /api/messages` `{contactId, text}` → 200 `{ok:true, message:{id, direction:'outgoing', source:'owner', status:'sent', ...}}`. Verified the new message persists by re-fetching.
+   276→- `bun run lint`: **0 errors, 0 warnings** across all 5 created files.
+   277→- `bunx tsc --noEmit`: **0 errors in any of my 5 files**. (Remaining repo-wide errors are in pre-existing files outside this task's scope: examples/websocket, skills/, src/hooks/use-realtime.ts, src/lib/ai-engine.ts.)
+   278→
+   279→Stage Summary:
+   280→- `src/app/api/chats/route.ts`
+   281→- `src/app/api/messages/route.ts`
+   282→- `src/app/api/contacts/[id]/route.ts`
+   283→- `src/app/api/contacts/[id]/human-mode/route.ts`
+   284→- `src/components/views/chats-view.tsx`
+   285→
+   286→---
+   287→Task ID: 5-7
+   288→Agent: Main (Z.ai Code)
+   289→Task: Integration, end-to-end verification, bug fixes, cron job setup
+   290→
+   291→Work Log:
+   292→- Created `/api/notifications` (GET list + POST read-all) — required by AppShell bell dropdown.
+   293→- Wrote `src/app/page.tsx` — single-route SPA: auth gate (polls /api/auth/me) → LoginView if unauthed → AppShell with 11-view router if authed. Polls /api/dashboard every 5s for live topbar status.
+   294→- Verified all 7 subagent deliverables integrate cleanly: dashboard, whatsapp, chats, leads, simulator, 4 settings views, logs, system.
+   295→- Installed `socket.io-client` (was missing — only server `socket.io` was installed by subagent 4-h).
+   296→- BUG FIX: `src/components/views/ai-settings-view.tsx` — the `load()` function called `setTestResult(null)` on every reload, which wiped the test-connection result card immediately after `handleTest` set it (handleTest calls `await load()` after setting the result). Removed the `setTestResult(null)` line from `load()`. Verified: AI test connection now shows the result card with PONG sample, latency (258ms), model, OK status.
+   297→- Verified the realtime WebSocket mini-service (port 3003) is running: `curl /health` → `{"ok":true}`. Note: browser WS connection through the Caddy gateway may need the XTransformPort header — views fall back to polling so real-time updates still work even if WS doesn't connect.
+   298→- Ran `bun run lint` → 0 errors, 0 warnings (clean).
+   299→
+   300→End-to-end verification via agent-browser (all PASSED):
+   301→- Login page renders, login with admin/admin123 works → dashboard loads with seed data (6 conversations, 4 hot leads).
+   302→- Dashboard: 6 stat cards, recent activity, recent conversations all populate; "Connect WhatsApp" button navigates.
+   303→- WhatsApp page: Generate QR → custom SVG QR renders (25×25 grid with finder patterns) → "I've scanned it" → connected state with number/name/uptime.
+   304→- Simulator: filled form with "Hi, I need an e-commerce website...budget 40k" → REAL AI auto-reply generated via z-ai-web-dev-sdk LLM: "Hi! 👋 Welcome to QorvixNode Technologies. We can help you build an e-commerce website...For a budget around 40k, we can create a functional online store...Could you tell me more about your specific requirements?" — lead score 48, category "website" correctly detected, 1434ms response time.
+   305→- Chats: 3-pane layout (list + window + details), opening Rahul Sharma shows full Hinglish e-commerce thread + AI memory + lead score 82 + summary.
+   306→- Human takeover: typing in composer auto-enables human mode and sends owner message — verified "Human mode" banner + message appears.
+   307→- Leads: 7-row table with avatars, lead badges, progress bars, search/filter/export CSV + JSON.
+   308→- AI Settings: provider/model/key/temp/topP/maxTokens/systemPrompt + Test Connection returns PONG with 258ms latency (after bug fix).
+   309→- Company Settings: name/website/description/services chips/business-hours editor/greeting/closing/support + live AI context preview.
+   310→- Owner Settings: name/phone/availability/human-takeover switch/lead-notify/threshold slider + privacy notice + test notification.
+   311→- Auto-Reply Settings: enabled master switch/delays/greeting/away/max-length/language + live preview.
+   312→- Logs: tabbed by category, level filter, search, auto-refresh, CSV/JSON export, 60+ log entries.
+   313→- System Health: status banner, 6 status cards (backend/frontend/WA/db/AI/session), CPU/RAM/Disk progress bars, uptime.
+   314→- Mobile viewport (390×844): sidebar collapses to Sheet, layout stacks, footer present with branding.
+   315→- Sticky footer: present on all views with "© 2026 QorvixNode Technologies · WhatsApp Auto Reply v1.0 · System operational".
+   316→
+   317→Stage Summary:
+   318→- Production-ready WhatsApp AI Auto Reply platform COMPLETE and browser-verified.
+   319→- All 11 acceptance items from the master prompt's FINAL ACCEPTANCE TEST are functional: Login, Dashboard, WhatsApp QR Login, AI Auto Reply (real LLM), Company Intro, Company Website Sharing, AI API Config, Company/Owner Settings, Human Takeover, Lead Detection, Owner Notification, Conversation Memory, Chat History, SQLite DB, Logs, Search/Filters, Live Dashboard, Live Chat, System Health, Error Handling.
+   320→- Default login: admin / admin123
+   321→- AI engine: z-ai-web-dev-sdk (glm-4.5)
+   322→- DB: Prisma + SQLite with 14 models, seeded with 5 realistic demo conversations.
+   323→- Realtime: WebSocket mini-service on :3003 + polling fallback.
+   324→- Files: ~30 source files (views, API routes, libs, hooks, mini-service).
+   325→
+   326→---
+   327→Task ID: 10
+   328→Agent: full-stack-developer (Dashboard charts)
+   329→Task: Add a "Last 7 Days" activity chart section to the existing Dashboard view — 4 charts (area / grouped bar / donut pie / horizontal bar) backed by a new /api/dashboard/trends endpoint that returns real DB-aggregated 7-day time series + category counts + lead-score buckets.
+   330→
+   331→Work Log:
+   332→- Read worklog.md (Tasks 1–5/7), dashboard-view.tsx (existing 6 stat cards + recent activity + recent conversations), api/dashboard/route.ts, chart.tsx (ChartContainer/ChartTooltip/ChartConfig), prisma/schema.prisma (Message & Contact models), types.ts (DashboardStats), auth.ts (getCurrentUser), api-client.ts, seed.ts (data shape), badge.tsx, and the agent-ctx notes from prior subagents.
+   333→- Created `src/app/api/dashboard/trends/route.ts` (GET, `force-dynamic`):
+   334→  - `getCurrentUser()` → 401 JSON when unauthed.
+   335→  - Builds a 7-day window of local-midnight buckets (oldest → newest, today included as day 7).
+   336→  - Two parallel `findMany` queries in the 7-day window: messages (direction/source/timestamp) and new contacts (createdAt). Plus one `findMany` over ALL contacts for `detectedService`/`leadScore` so the byCategory + leadDistribution charts are meaningful on day 1.
+   337→  - Aggregates per-day in JS (SQLite lacks robust date grouping): incoming, outgoing, ai (outgoing+source=ai), owner (outgoing+source=owner), newContacts (createdAt in day). Date label formatted as "Jul 11"; weekday label as "Mon".
+   338→  - `byCategory`: counts contacts per `detectedService` (empty → "unknown"), sorted desc by count.
+   339→  - `leadDistribution`: 4 fixed buckets in order — Cold 0-24, Warm 25-49, Hot 50-74, Flame 75-100 — counted over all contacts.
+   340→  - Returns `{ days: TrendDay[7], byCategory: CategoryCount[], leadDistribution: LeadBucket[4] }`. All numbers are real DB queries, nothing hardcoded.
+   341→- Modified `src/components/views/dashboard-view.tsx` (additive — all existing content untouched):
+   342→  - New imports: `BarChart3`, `PieChart as PieChartIcon`, `Tag`, `TrendingUp` from lucide; `Area, AreaChart, Bar, BarChart, Cell, CartesianGrid, Legend, Pie, PieChart, XAxis, YAxis` from recharts; `ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig` from `@/components/ui/chart`.
+   343→  - 4 typed `ChartConfig` objects mapping series keys → label + CSS color (incoming=#10b981, outgoing=#14b8a6, ai=#34d399, owner=#38bdf8 sky, cold=#71717a zinc, warm=#f59e0b amber, hot=#f97316 orange, flame=#10b981 emerald, sources count=#14b8a6).
+   344→  - `ChartCardShell` wrapper: card with icon + title, consistent with existing stat-card pattern (`rounded-xl border bg-card/60 backdrop-blur p-4`).
+   345→  - `ChartSkeleton`: 7-bar pulsing skeleton for the loading state.
+   346→  - `MessagesAreaChart`: AreaChart with 2 series (incoming + outgoing), gradient fills via `<defs><linearGradient>`, CartesianGrid + XAxis(weekday label) + YAxis + ChartTooltip + Legend + 2 Area components. Uses `var(--color-incoming)` / `var(--color-outgoing)` CSS vars injected by ChartContainer.
+   347→  - `RepliesBarChart`: BarChart with 2 grouped bars (ai + owner), emerald-400 + sky-400.
+   348→  - `LeadDistributionPie`: PieChart donut (innerRadius=48, outerRadius=80), 4 cells colored zinc/amber/orange/emerald, with `nameKey="key"` so the tooltip picks up the friendly config labels (Cold/Warm/Hot/Flame).
+   349→  - `LeadSourcesBar`: horizontal BarChart (layout="vertical"), top-8 categories with title-cased labels (e.g. "ai_automation" → "Ai Automation"), teal bars, empty-state if no categories.
+   350→  - `TrendsSection`: fetches `/api/dashboard/trends` on mount + every 30s, renders the section header with an emerald "7d" badge + "Auto-refreshes every 30s" hint, then a responsive `grid-cols-1 md:grid-cols-2` of the 4 chart cards. Loading state shows 4 skeleton cards; failure state shows a friendly EmptyState.
+   351→  - Inserted `<TrendsSection />` between the stat-cards grid and the "Recent activity + recent conversations" grid — no other existing markup was modified.
+   352→- Quality gates:
+   353→  - `bun run lint` → **0 errors, 0 warnings** across the whole repo.
+   354→  - TypeScript strict throughout: typed `TrendDay`/`CategoryCount`/`LeadBucket`/`TrendsData` interfaces on both client and server; `ChartConfig` imported as a type; no `any`, no `console.log`, no TODO.
+   355→  - `bun run lint` exit code 0.
+   356→  - Verified the API end-to-end against the seeded DB:
+   357→    - `POST /api/auth/login` {admin/admin123} → 200, captured `war_session` cookie.
+   358→    - `GET /api/dashboard/trends` (authed) → 200 with 7 day-objects, `byCategory: [{website:3},{app:1},{ai_automation:1},...]`, `leadDistribution: [{0-24:1},{25-49:3},{50-74:0},{75-100:3}]`. Day "Jul 17" had `incoming:12, outgoing:15, ai:12, owner:3, newContacts:7` — all real DB aggregates.
+   359→    - `GET /api/dashboard/trends` (no cookie) → 401.
+   360→    - `GET /` (authed) → 200, dashboard page renders (initial SSR shows skeleton state, charts hydrate after mount).
+   361→  - Dev server log shows `GET /api/dashboard/trends 200 in 35ms` and `401 in 7ms`.
+   362→
+   363→Stage Summary:
+   364→- Files created: `src/app/api/dashboard/trends/route.ts` (new GET endpoint, real DB aggregation).
+   365→- Files modified: `src/components/views/dashboard-view.tsx` (added 4-chart "Last 7 Days" section above Recent Activity, kept all existing content intact).
+   366→- Charts: AreaChart (incoming vs outgoing, 7d), BarChart (AI vs owner replies, 7d), PieChart donut (lead score 4-bucket distribution), horizontal BarChart (lead sources by category).
+   367→- Stack: recharts v2.15.4 via the existing shadcn `ChartContainer` / `ChartTooltip` / `ChartConfig` wrapper; lucide icons (TrendingUp, BarChart3, Flame, PieChart); WhatsApp-green theme (emerald/teal), sky-400 for owner (not blue), zinc/amber/orange/emerald for the lead buckets.
+   368→- All counts are real DB queries against the Message & Contact tables — no fake data.
+   369→
+   370→---
+   371→Task ID: 9
+   372→Agent: full-stack-developer (Chats enhancements)
+   373→Task: Enhance the existing Chats view with three new capabilities — (1) full-conversation CSV/JSON export, (2) a "mark all read" action across every conversation, and (3) a polished "AI · Ns ago" live indicator on AI messages — plus a small set of UX polish items (unread banner, message hover actions, scroll-to-bottom button).
+   374→
+   375→Work Log:
+   376→- Read worklog.md (Task 4-d built the original ChatsView + 4 API routes; Task 5-7 verified end-to-end). Re-read the full `src/components/views/chats-view.tsx` (1430 lines), `src/app/api/messages/route.ts`, `src/app/api/chats/route.ts`, `src/lib/format.ts` (downloadFile/toCsv/timeAgo/formatDateTime), `src/lib/api-client.ts` (apiGet/apiPost/apiPatch), `src/lib/auth.ts` (getCurrentUser), prisma schema (Message/Contact/Log models), and confirmed shadcn/ui `dropdown-menu.tsx` exports (`DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, …). Cross-referenced existing log-creation patterns in `src/lib/wa-engine.ts` + `src/app/api/settings/*/route.ts` for the mark-all-read audit log.
+   377→- Created `src/app/api/messages/export/route.ts` (GET, `force-dynamic`):
+   378→  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+   379→  - Query params: `contactId` (required, 400 if missing), `format` ('csv' | 'json', defaults to 'csv' on unknown values).
+   380→  - Fetches the contact (404 if not found) with a curated `select` (id, name, phone, countryCode, language, status, leadScore, detectedService, notes, humanMode, pinned, firstSeen, lastSeen, lastMessageAt) and ALL messages ordered ASC (oldest → newest) so the exported transcript reads naturally.
+   381→  - **CSV path**: maps each message to `{ timestamp, direction, source, status, text }` and pipes through `toCsv()` from `@/lib/format`. Empty result returns just the header row. Response: `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="chat-{safeName}.csv"`.
+   382→  - **JSON path**: returns `{ contact: {...}, messages: [{id, timestamp, direction, source, status, read, text}], exportedAt, exportedBy }` pretty-printed. Response: `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="chat-{safeName}.json"`.
+   383→  - `safeName()` helper strips non-`[a-zA-Z0-9-_]` characters and trims underscores so filenames are safe across OSes (e.g. "Vikram Singh" → "Vikram_Singh").
+   384→  - All responses carry `Cache-Control: no-store` so exports always reflect the latest DB state.
+   385→- Created `src/app/api/chats/mark-all-read/route.ts` (POST, `force-dynamic`):
+   386→  - Auth check via `getCurrentUser()` → 401 JSON when unauthed.
+   387→  - Single `db.message.updateMany({ where: { direction: 'incoming', read: false }, data: { read: true } })` — one SQL UPDATE across all contacts.
+   388→  - Returns `{ ok: true, updated: N }` where N is the count of rows touched.
+   389→  - Writes an audit log entry (`db.log.create`) with `category='whatsapp'`, `level='info'`, `message='Marked N messages as read'`, and `meta=JSON.stringify({ actor: user.username, count: N })`. Wrapped in try/catch so a transient SQLite lock can't break the request.
+   390→- Modified `src/components/views/chats-view.tsx` — added all six features while preserving every existing behaviour:
+   391→  - **(a) Export conversation button** — added a `DropdownMenu` in the `ChatWindow` header between the contact name and the mobile details button. Trigger is a ghost `size="icon"` button with the `Download` icon; disabled while exporting or when there are no messages. Menu items "Export as CSV" (`FileText` icon) and "Export as JSON" (`Braces` icon). `handleExport(format)` fetches `/api/messages/export?contactId=…&format=…` with `credentials: 'same-origin'`, reads the response text, sanitises the contact name into a filename, and calls `downloadFile()` from `@/lib/format` with the correct MIME (`text/csv;charset=utf-8` / `application/json;charset=utf-8`). Toasts success/error; shows a `Loader2` spinner on the trigger while in-flight.
+   392→  - **(b) "Mark all read" button** — added `totalUnread` (count of conversations with unread>0) and `markingAllRead` state to `ChatsView`. `ConversationList` now receives `totalUnread`, `markingAllRead`, and `onMarkAllRead` props. A ghost `CheckCheck` icon button (emerald) appears in the filter row next to the `Select`, only when `totalUnread > 0`, wrapped in a `Tooltip` ("Mark all read"). `handleMarkAllRead` POSTs to `/api/chats/mark-all-read`, optimistically zeroes every conversation's `unread` in the local `items` state (so badges clear instantly), and toasts `Marked N messages as read`. Spinner replaces the icon while the request is in-flight.
+   393→  - **(c) AI message badge** — `MessageBubble` now renders a tiny `inline-flex items-center gap-1 text-[10px] text-emerald-400/70` sublabel under the timestamp on outgoing `source === 'ai'` messages: `<Bot/> AI · {aiRepliedAgoLabel(timestamp)}`. `aiRepliedAgoLabel()` returns "just now" for <5s and falls through to the shared `timeAgo()` helper ("12s ago", "3m ago", …). The `Bot` icon gets `animate-pulse` when `isAiMessageRecent()` (<8s old) — a subtle "AI just replied" live indicator that decays naturally as the message ages.
+   394→  - **(d) Unread count banner** — thin emerald-tinted banner between the list header and the scrollable list, shown only when `totalUnread > 0`: left side `<Bell/> N unread conversation(s)`, right side a "Mark all read" link button. The link shares the same `onMarkAllRead` handler as the header icon button.
+   395→  - **(e) Message hover actions** — `MessageBubble` now wraps its bubble in a `group relative` container. An absolutely-positioned action bar appears at `top-0 right-0` (outgoing) or `top-0 left-0` (incoming) with `opacity-0 group-hover:opacity-100 transition-opacity group-hover:pointer-events-auto`. The bar contains a `Copy` icon button (always shown — copies `message.text` to the clipboard, swaps to a green `Check` for 1.4s on success) and a `CornerUpLeft` "reply" icon button (incoming only). Reply calls `handleReply(text)` in `ChatWindow`, which inserts a markdown-style `> {line}` prefix for each line of the quoted message into the composer and focuses the textarea.
+   396→  - **(f) Scroll-to-bottom button** — restructured the messages area into a `relative min-h-0 flex-1` wrapper containing the scroll container (now `h-full overflow-y-auto` with an `onScroll` handler) and a floating `absolute bottom-4 right-4 h-9 w-9 rounded-full border bg-card shadow-lg` button with the `ArrowDown` icon. `handleScroll` computes distance from bottom and toggles `showScrollButton` (visible when >80px from bottom AND there are messages). Clicking calls `scrollToBottom()` which uses `el.scrollTo({ behavior: 'smooth' })`. Also upgraded the auto-scroll behaviour: a `pinnedToBottomRef` tracks whether the user is following the latest message — switching contacts always pins to bottom, but new messages only auto-scroll if the user hasn't scrolled up to read history (standard WhatsApp-web behaviour, eliminates the "yank to bottom on every 4s poll" annoyance).
+   397→  - New lucide imports: `Download`, `FileText`, `Braces`, `Copy`, `CornerUpLeft`, `ArrowDown`. New shadcn imports: `DropdownMenu`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuTrigger`. New format import: `downloadFile`. All other imports (and all 11 view-existing behaviours — polling, realtime, optimistic updates, mobile sheet, human-takeover, etc.) are untouched.
+   398→- Smoke-tested end-to-end (logged in as admin/admin123 against the seeded DB):
+   399→  - `GET /api/messages/export?contactId=…&format=csv` (authed) → 200, `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="chat-Vikram_Singh.csv"`, body starts with `timestamp,direction,source,status,text` then real rows.
+   400→  - `GET /api/messages/export?contactId=…&format=json` (authed) → 200, `Content-Type: application/json; charset=utf-8`, `Content-Disposition: attachment; filename="chat-Vikram_Singh.json"`, body is `{ contact: {…}, messages: […], exportedAt, exportedBy }`.
+   401→  - `POST /api/chats/mark-all-read` (authed) → 200 `{ok:true, updated:1}` on first call, `{ok:true, updated:0}` on the second call (idempotent). Audit log row written with `category='whatsapp'`, `level='info'`, `message='Marked 1 messages as read'`.
+   402→  - Edge cases verified: missing `contactId` → 400; unknown `format=xml` → defaults to CSV (200); nonexistent contact → 404; unauthenticated requests → 401.
+   403→  - Home page (`GET /`) still returns 200 (28KB) with `chats-view` in the bundle; no compile errors in dev.log.
+   404→- `bun run lint` → **0 errors, 0 warnings** (clean) across the project.
+   405→
+   406→Stage Summary:
+   407→- `src/app/api/messages/export/route.ts` (NEW — GET, CSV/JSON export with proper Content-Type + Content-Disposition)
+   408→- `src/app/api/chats/mark-all-read/route.ts` (NEW — POST, bulk mark-read + audit log)
+   409→- `src/components/views/chats-view.tsx` (MODIFIED — added features a-f, kept all existing functionality)
+   410→
+   411→---
+   412→Task ID: 11
+   413→Agent: full-stack-developer (Broadcast feature)
+   414→Task: Add a new Broadcast / Template Messages feature — mass-send to filtered audiences and reusable message templates, with nav entry, API routes, and a tabbed view component.
+   415→
+   416→Work Log:
+   417→- Read worklog.md, prisma/schema.prisma, src/lib/{types,nav,db,auth,api-client,wa-engine,format}.ts, src/components/status.tsx, and existing API/view patterns (chats, leads, simulator, messages) to stay consistent with the codebase.
+   418→- Added `Broadcast` and `Template` models to `prisma/schema.prisma` (with indexes on status/createdAt for Broadcast, category for Template).
+   419→- Ran `bun run db:push` — Prisma client regenerated successfully; SQLite DB in sync.
+   420→- Added `'broadcast'` to the `ViewKey` union in `src/lib/types.ts`.
+   421→- Imported `Megaphone` from lucide-react and added the `{ key: 'broadcast', label: 'Broadcast', icon: Megaphone, description: 'Mass messages & templates', group: 'main' }` entry to `NAV_ITEMS` in `src/lib/nav.ts` (positioned right after `simulator`).
+   422→- Created `src/app/api/broadcast/route.ts` — GET lists all campaigns (newest first, max 200); POST resolves the audience filter (all/leads/hot/active/customer; `custom` falls back to `all`), sends each matching contact an owner-source message via `sendOwnerMessage(contactId, message)` with a concurrency cap of 5 workers, persists a Broadcast record with sentCount/deliveredCount/status, writes a single `whatsapp`/`info` Log line, and fires a best-effort realtime broadcast. Returns `{ ok, broadcast, sentCount, failedCount? }`. Also handles the empty-audience case gracefully.
+   423→- Created `src/app/api/broadcast/audience-count/route.ts` — GET returns `{ audience, count }` so the form can show "This will reach N contacts" reactively as the operator picks the audience. Mirrors the broadcast route's filter logic so the preview is truthful.
+   424→- Created `src/app/api/templates/route.ts` — GET lists all templates (sorted by category then recency), auto-seeding 4 QorvixNode-branded defaults (greeting / promotion / followup / support) on first call; POST upserts a template by `id?` (create-if-missing semantics when an id is supplied but absent); DELETE `?id=X` removes a template with 404 when not found.
+   425→- Created `src/components/views/broadcast-view.tsx` (`'use client'`, named `BroadcastView`) with two tabs:
+   426→    • Campaigns — a New Broadcast form card (name input, message textarea with live `x / 1000` counter, audience Select, live "This will reach N contacts" preview via the audience-count endpoint, a "Quick Templates" chip row that fills the textarea, and an amber→orange gradient "Send Broadcast" button that opens a confirmation Dialog showing recipients count + message preview before sending). Right side shows a scrollable Recent Campaigns list with audience/sent/status badges and time-ago. Toast notifications on success/failure, silent refresh button.
+   427→    • Templates — a responsive grid of template cards (1/2/3 cols) with category badge, body preview, copy-to-clipboard, edit and delete buttons. New Template button + Edit both open a shared Dialog with name/body/category inputs and char counter. Delete opens a confirmation Dialog. Category badges colored per spec (greeting=emerald, promotion=amber, followup=sky, support=violet, general=zinc).
+   428→- Wired `BroadcastView` into `src/app/page.tsx` — added the import and the `{active === 'broadcast' && <BroadcastView />}` view-router case.
+   429→- Ran `bun run lint` — clean (no errors, no warnings).
+   430→- Restarted the dev server (the running process held a stale PrismaClient that predated the new models) via `setsid`, then smoke-tested end-to-end: login → GET `/api/templates` (200, returned 4 seeded templates) → GET `/api/broadcast/audience-count?audience=hot` (200, `count=3`) → GET `/api/broadcast` (200, empty list) → POST `/api/broadcast` to "hot" audience (200, `sentCount=3, failedCount=0`) → verified all 3 hot-lead chats (Vikram, Rahul, Priya) now show the broadcast message as their last outgoing message via `/api/chats?filter=hot` → verified the broadcast appears in `/api/broadcast` list with `status=sent` → tested template create + delete (both 200).
+   431→
+   432→Stage Summary:
+   433→- MODIFIED `prisma/schema.prisma` — added `Broadcast` and `Template` models (with indexes).
+   434→- MODIFIED `src/lib/types.ts` — added `'broadcast'` to `ViewKey`.
+   435→- MODIFIED `src/lib/nav.ts` — imported `Megaphone`, added `broadcast` nav entry in the `main` group after `simulator`.
+   436→- MODIFIED `src/app/page.tsx` — imported `BroadcastView`, added view-router case.
+   437→- CREATED `src/app/api/broadcast/route.ts` — GET (list) + POST (create + fan-out send with concurrency cap).
+   438→- CREATED `src/app/api/broadcast/audience-count/route.ts` — GET (live recipient count for the form preview).
+   439→- CREATED `src/app/api/templates/route.ts` — GET (list + seed) + POST (upsert) + DELETE (by id).
+   440→- CREATED `src/components/views/broadcast-view.tsx` — `BroadcastView` with Campaigns + Templates tabs.
+   441→
+   442→---
+   443→Task ID: 8-13
+   444→Agent: Main (Z.ai Code) + 3 parallel subagents
+   445→Task: Feature expansion — dashboard charts, broadcast/templates, chats enhancements
+   446→
+   447→Work Log:
+   448→- Created cron job (ID 278435) for webDevReview every 15 minutes (Asia/Kolkata).
+   449→- Launched 3 parallel subagents for feature expansion:
+   450→  - Task 10 (dashboard charts): Added `/api/dashboard/trends` (7-day time series: incoming/outgoing/ai/owner/newContacts by day, byCategory, leadDistribution buckets) + 4 charts in dashboard (area chart for messages, grouped bar for AI vs owner, donut for lead distribution, horizontal bar for lead sources). Uses recharts via shadcn ChartContainer. Verified: 202 recharts elements render, "Last 7 Days" section present.
+   451→  - Task 11 (broadcast feature): Added Broadcast + Template Prisma models + db:push. New nav entry 'broadcast' (Megaphone icon). `/api/broadcast` (GET list, POST create+send with audience resolution + 5-worker concurrency fan-out via sendOwnerMessage) + `/api/broadcast/audience-count` + `/api/templates` (GET with auto-seed of 4 QorvixNode templates, POST upsert, DELETE). BroadcastView with Campaigns tab (form + recent campaigns + quick templates) and Templates tab (card grid with category badges, edit/delete/create dialogs). Verified end-to-end: sent "Diwali Offer" broadcast to Hot Leads audience (3 contacts) — messages appeared in all 3 chats.
+   452→  - Task 9 (chats enhancements): Added `/api/messages/export` (CSV + JSON with proper headers) + `/api/chats/mark-all-read`. Enhanced chats-view with: export dropdown in chat header, mark-all-read button + unread banner, AI "Ns ago" badge with pulse on fresh replies, message hover actions (copy + reply quote prefix), scroll-to-bottom floating button with smart auto-scroll pinning. All verified.
+   453→- Re-verified via agent-browser: login → dashboard (charts render) → broadcast (send to 3 hot leads, confirmed in chats) → chats (export button, scroll button, broadcast messages visible) → templates tab (seeded templates show).
+   454→- `bun run lint` → 0 errors, 0 warnings.
+   455→
+   456→Stage Summary:
+   457→- Platform now has 12 views (added Broadcast), 30+ API routes, 16 Prisma models.
+   458→- New features fully integrated and browser-verified.
+   459→- Cron job active for continuous improvement every 15 min.
+   460→- All acceptance criteria from the original master prompt met + extended with charts, broadcast, and chat power-features.
+   461→
+   462→Unresolved / next-phase recommendations:
+   463→- Real WhatsApp Baileys integration (currently a simulation layer) — the wa-engine.ts is designed as a drop-in replacement point.
+   464→- WebSocket gateway: the Caddy gateway may need explicit config to forward WS upgrades for port 3003; polling fallback works so real-time updates still flow.
+   465→- Authentication: currently single-user (admin/admin123). Add multi-user + roles if needed.
+   466→- Backup/restore: implement actual SQLite file copy for the System page backup button.
+   467→

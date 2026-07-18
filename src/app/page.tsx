@@ -1,7 +1,10 @@
 'use client'
 
 import * as React from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { AppShell } from '@/components/app-shell'
+import { CommandPalette } from '@/components/command-palette'
+import { PageTransition } from '@/components/ui/page-transition'
 import { LoginView } from '@/components/views/login-view'
 import { DashboardView } from '@/components/views/dashboard-view'
 import { WhatsAppView } from '@/components/views/whatsapp-view'
@@ -15,6 +18,7 @@ import { LogsView } from '@/components/views/logs-view'
 import { SystemView } from '@/components/views/system-view'
 import { SimulatorView } from '@/components/views/simulator-view'
 import { BroadcastView } from '@/components/views/broadcast-view'
+import { AnalyticsView } from '@/components/views/analytics-view'
 import { apiGet, apiPost } from '@/lib/api-client'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
@@ -23,22 +27,23 @@ export default function Home() {
   const [authChecked, setAuthChecked] = React.useState(false)
   const [active, setActive] = React.useState<ViewKey>('dashboard')
   const [stats, setStats] = React.useState<DashboardStats | null>(null)
+  const [paletteOpen, setPaletteOpen] = React.useState(false)
 
   // Check auth on mount
   React.useEffect(() => {
-    let active = true
+    let cancelled = false
     apiGet<{ user: AuthUser | null }>('/api/auth/me')
       .then((d) => {
-        if (active) setUser(d.user)
+        if (!cancelled) setUser(d.user)
       })
       .catch(() => {
-        if (active) setUser(null)
+        if (!cancelled) setUser(null)
       })
       .finally(() => {
-        if (active) setAuthChecked(true)
+        if (!cancelled) setAuthChecked(true)
       })
     return () => {
-      active = false
+      cancelled = true
     }
   }, [])
 
@@ -64,6 +69,30 @@ export default function Home() {
       clearInterval(t)
     }
   }, [user])
+
+  // Global keyboard shortcut: Cmd+K / Ctrl+K to open the command palette.
+  // Also opens on "/" when not typing in an input/textarea.
+  React.useEffect(() => {
+    if (!user) return
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const isTyping =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable === true
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      } else if (e.key === '/' && !isTyping && !paletteOpen) {
+        e.preventDefault()
+        setPaletteOpen(true)
+      } else if (e.key === 'Escape' && paletteOpen) {
+        setPaletteOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [user, paletteOpen])
 
   const handleLogout = async () => {
     try {
@@ -97,19 +126,32 @@ export default function Home() {
       active={active}
       onNavigate={setActive}
       onLogout={handleLogout}
+      onOpenPalette={() => setPaletteOpen(true)}
     >
-      {active === 'dashboard' && <DashboardView onNavigate={setActive} />}
-      {active === 'whatsapp' && <WhatsAppView />}
-      {active === 'chats' && <ChatsView />}
-      {active === 'leads' && <LeadsView onNavigate={setActive} />}
-      {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
-      {active === 'broadcast' && <BroadcastView />}
-      {active === 'ai-settings' && <AISettingsView />}
-      {active === 'company-settings' && <CompanySettingsView />}
-      {active === 'owner-settings' && <OwnerSettingsView />}
-      {active === 'autoreply-settings' && <AutoReplySettingsView />}
-      {active === 'logs' && <LogsView />}
-      {active === 'system' && <SystemView />}
+      <AnimatePresence mode="wait">
+        <PageTransition viewKey={active}>
+          {active === 'dashboard' && <DashboardView onNavigate={setActive} />}
+          {active === 'whatsapp' && <WhatsAppView />}
+          {active === 'chats' && <ChatsView />}
+          {active === 'leads' && <LeadsView onNavigate={setActive} />}
+          {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
+          {active === 'broadcast' && <BroadcastView />}
+          {active === 'analytics' && <AnalyticsView />}
+          {active === 'ai-settings' && <AISettingsView />}
+          {active === 'company-settings' && <CompanySettingsView />}
+          {active === 'owner-settings' && <OwnerSettingsView />}
+          {active === 'autoreply-settings' && <AutoReplySettingsView />}
+          {active === 'logs' && <LogsView />}
+          {active === 'system' && <SystemView />}
+        </PageTransition>
+      </AnimatePresence>
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onNavigate={setActive}
+        onOpenContact={() => setActive('chats')}
+      />
     </AppShell>
   )
 }

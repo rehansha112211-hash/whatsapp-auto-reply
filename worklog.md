@@ -464,3 +464,133 @@ Unresolved / next-phase recommendations:
 - WebSocket gateway: the Caddy gateway may need explicit config to forward WS upgrades for port 3003; polling fallback works so real-time updates still flow.
 - Authentication: currently single-user (admin/admin123). Add multi-user + roles if needed.
 - Backup/restore: implement actual SQLite file copy for the System page backup button.
+
+---
+Task ID: F-3
+Agent: full-stack-developer (Analytics view + API)
+Task: Add a NEW Analytics view with deep insights (response times, AI vs owner ratio, peak hours, conversion funnel, contact growth) — net-new view + API route + nav entry.
+
+Work Log:
+- Read worklog.md (Tasks 1–11): 12 views already exist (dashboard, whatsapp, chats, leads, simulator, broadcast, ai-settings, company-settings, owner-settings, autoreply-settings, logs, system); dashboard already has a 7-day "Last 7 Days" trends section + `/api/dashboard/trends` endpoint.
+- Re-read `src/lib/types.ts` (ViewKey union), `src/lib/nav.ts` (NAV_ITEMS structure), `src/lib/auth.ts` (`getCurrentUser`), `src/lib/api-client.ts` (`apiGet`), `src/lib/format.ts` (`formatDateTime`, `timeAgo`, `initials`, `colorFromString`, `leadBadge`), `prisma/schema.prisma` (Contact/Message/Log/LeadScore models), `src/components/ui/chart.tsx` (ChartContainer/ChartTooltip/ChartConfig), `src/app/api/dashboard/trends/route.ts` (existing 7-day aggregation pattern), `src/components/views/dashboard-view.tsx` (existing chart-shell patterns + framer-motion usage precedent), `src/lib/wa-engine.ts` (line 370 — confirms the AI-engine log line is `AI replied to {name} in {responseMs}ms (model {model})` so the regex `/in (\d+)ms/` parses real responseMs).
+- MODIFIED `src/lib/types.ts` — appended `| 'analytics'` to the `ViewKey` union (now 13 views).
+- MODIFIED `src/lib/nav.ts` — imported `BarChart3` from lucide-react and added `{ key: 'analytics', label: 'Analytics', icon: BarChart3, description: 'Insights & metrics', group: 'system' }` in the `system` group immediately before `logs`.
+- CREATED `src/app/api/analytics/route.ts` (GET, `force-dynamic`):
+  - `getCurrentUser()` → 401 JSON when unauthed.
+  - 13 parallel `Promise.all` Prisma queries: counts (contacts, messages, aiReplies, ownerReplies, customers, hotLeads), all AI-category logs (for responseMs parsing), all messages (for peakHours + funnel engagement + topContacts message-count tally), all contacts (for funnel + category + language breakdowns), and 14-day-windowed newContacts/newMessages for growthTrend.
+  - `parseResponseMs(message, meta)` — primary path: regex `/in\s+(\d+)\s*ms/i` against the log message (matches the actual wa-engine log line `AI replied to {name} in {responseMs}ms (model {model})`). Fallback path: tries `JSON.parse(meta).responseMs` if it ever carries the field. Returns `null` on failure.
+  - `dayBuckets(n)` — local-midnight bucket builder (consistent with the existing dashboard/trends route). Builds 7-day and 14-day windows.
+  - `responseTimeTrend`: 7-day window of ai-log `avgMs` (0 when no AI logs in that day).
+  - `aiVsOwner`: 7-day window, weekday label, counts outgoing-source=ai vs outgoing-source=owner.
+  - `peakHours`: 24 buckets via `getHours(timestamp)` in JS, returns `[{ hour: '00', count: N }, …, { hour: '23', count: N }]`.
+  - `leadFunnel`: 5 stages — Total Contacts → Engaged (msg>1) → Leads (score≥25) → Hot Leads (≥70) → Customers. Engaged count is computed by tallying messages per `contactId` from the allMessages query and counting contacts with >1 messages.
+  - `categoryBreakdown`: groups contacts by `detectedService` (empty → 'unknown'), with `avgScore` per category, sorted desc by count.
+  - `topContacts`: top 5 contactIds by message count → second `db.contact.findMany({ where: { id: { in: [...] } } })` to enrich with name/phone/leadScore/lastMessageAt.
+  - `growthTrend`: 14-day window, per-day newContacts (createdAt in day) + newMessages (timestamp in day).
+  - `languageDistribution`: groups contacts by `language` field, sorted desc.
+  - Overview rates: `conversionRate = (customers / totalContacts) * 100` rounded to 1 decimal; `hotLeadRate = (leadScore≥70 / totalContacts) * 100` rounded to 1 decimal.
+  - All numbers are real DB aggregates — nothing hardcoded.
+- CREATED `src/components/views/analytics-view.tsx` (`'use client'`, named `AnalyticsView`, signature `export function AnalyticsView()`):
+  - Fetches `/api/analytics` on mount + every 30s. On error, sets `error` state and shows a toast via sonner.
+  - Loading state: full skeleton view (overview skeleton, two chart-card skeletons, funnel skeleton, etc.).
+  - Empty/error state: friendly card with `BarChart3` icon + message.
+  - **Section 1 — Overview KPIs** (6 cards in `grid-cols-2 sm:grid-cols-3 xl:grid-cols-6`): Total Contacts, Total Messages, AI Replies (with `% of total`), Owner Replies (with `% of total`), Avg Response Time (formatted as "1.2s" or "234ms" via `formatResponseTime`), Conversion Rate (with `% hot leads`). Each card has a large `text-3xl font-bold tabular-nums` number, small label, an icon in a colored rounded square, and a subtle gradient accent (`bg-emerald-500/15` etc. + a blurred radial glow in the corner).
+  - **Section 2 — Response Performance** (2-col on `lg`):
+    - **Response Time Trend** — `LineChart`, 7 days, emerald line with a vertical gradient stroke, Y-axis formatted as `1.2s` / `234ms` via `tickFormatter`, dot+activeDot. Empty state when no AI logs.
+    - **AI vs Owner Replies** — stacked `BarChart`, 7 days, emerald (ai) + sky (owner) — owner is the only sky-colored series in the app (allowed per spec; no indigo/blue).
+  - **Section 3 — Peak Hours** (full-width): `BarChart` with 24 hour-of-day buckets. The peak hour is highlighted with `#f59e0b` (amber); all other bars use `var(--color-count)` (teal). An amber callout chip "⚡ Peak: 3 PM (10 msgs)" sits above the chart. X-axis shows every 3rd hour label to avoid crowding. Tooltip reformats `15` → `3 PM` via `labelFormatter`.
+  - **Section 4 — Conversion Funnel** (full-width, custom divs — NOT recharts): 5 stages rendered as horizontal bars whose width is proportional to `count / totalContacts * 100`, with a 5-stop gradient (`from-emerald-500 to-emerald-600` → `from-cyan-500 to-cyan-700`). Each row shows the stage name on the left and `count` + `%` on the right.
+  - **Section 5 — Audience Breakdown** (2-col on `lg`):
+    - **Contacts by Service Category** — horizontal `BarChart` (top 8), teal bars, tooltip shows `N contacts · avg M` via custom formatter that reads `payload.avgScore`.
+    - **Language Distribution** — `PieChart` donut (innerRadius=48, outerRadius=80) with 8-color palette (emerald/teal/amber/orange/cyan/lime/zinc/rose), title-cased labels, `nameKey="label"`.
+  - **Section 6 — Contact Growth** (full-width): 14-day `AreaChart` with 2 series (newContacts emerald + newMessages amber), both with linear-gradient fills. Above the chart: 3 stat tiles showing 14-day totals (newContacts, newMessages) and a "Today vs yesterday" tile with a TrendingUp/TrendingDown indicator (emerald if up, rose if down).
+  - **Section 7 — Top Contacts** (full-width): `Table` of top-5 contacts by message count — rank (#), avatar (colorFromString + initials), name + phone, lead badge (leadBadge), message count (tabular-nums), last message time (timeAgo with full datetime tooltip via `formatDateTime`).
+  - Every section is wrapped in `<motion.div initial={{opacity:0, y:8}} animate={{opacity:1, y:0}} transition={{delay: N*0.05, duration: 0.25}}>` — staggered fade-in + slide-up.
+  - KPI cards within Section 1 also get individual `<motion.div>` with `delay: index * 0.05` for an extra micro-stagger.
+  - All icons from lucide-react: `Activity, Award, BarChart3, Bot, Clock, Flame, Globe, MessageSquare, Target, TrendingDown, TrendingUp, Users, Zap`.
+  - WhatsApp-green theme throughout (emerald/teal/amber/orange); sky-400 only for the owner series; no indigo/blue.
+  - Cards: `rounded-xl border bg-card/60 backdrop-blur p-5 shadow-sm`. Chart heights: 240px (`h-[240px] w-full`). Section headers: 9×9 emerald icon square + title + description with `border-b border-border/60 pb-3`.
+  - TypeScript strict throughout — typed interfaces for every API payload shape; `ChartConfig` imported as a type; no `any`, no `console.log`, no TODO.
+- MODIFIED `src/app/page.tsx` — added `import { AnalyticsView } from '@/components/views/analytics-view'` and the router case `{active === 'analytics' && <AnalyticsView />}` immediately after the broadcast case.
+- Quality gates:
+  - `bunx eslint src/lib/types.ts src/lib/nav.ts src/app/page.tsx src/app/api/analytics/route.ts src/components/views/analytics-view.tsx` → **0 errors, 0 warnings** (exit 0).
+  - `bunx tsc --noEmit` → **0 errors** in any of the 5 touched files. (Remaining repo-wide errors are pre-existing in `examples/websocket/server.ts`, `skills/...`, `src/lib/ai-engine.ts` — all outside this task's scope and unchanged.)
+  - Repo-wide `bun run lint` shows 1 pre-existing error in the unused `src/components/ui/animated-counter.tsx` file (untracked, not imported anywhere, not touched by this task).
+  - Smoke-tested the API end-to-end against the seeded DB:
+    - `POST /api/auth/login` {admin/admin123} → 200, captured `war_session` cookie.
+    - `GET /api/analytics` (authed) → 200 with comprehensive payload:
+      - overview: `{totalContacts:7, totalMessages:33, aiReplies:12, ownerReplies:9, avgResponseMs:1126, conversionRate:14.3, hotLeadRate:42.9}` — all real DB aggregates.
+      - responseTimeTrend: 7 day-objects; "Jul 17" had `avgMs: 1126` (matches the AI-engine log "AI replied to Vikram Singh in 1126ms" from the seed run).
+      - aiVsOwner: 7 day-objects; "Fri" had `ai:12, owner:3`; "Sat" had `ai:0, owner:6`.
+      - peakHours: 24 hour-objects; peak is hour "15" (3 PM) with `count: 10`.
+      - leadFunnel: `[Total:7, Engaged:7, Leads(≥25):6, Hot(≥70):3, Customers:1]`.
+      - categoryBreakdown: 5 categories — `website:3 avg=55, app:1 avg=76, ai_automation:1 avg=45, general:1 avg=22, high_priority:1 avg=90`.
+      - topContacts: 5 contacts — Rahul Sharma (10 msgs, score 82), Priya Patel (6 msgs, score 76), Vikram Singh (6 msgs, score 90), Amit Kumar (5 msgs, score 45), Sneha Reddy (2 msgs, score 22).
+      - growthTrend: 14 day-objects; "Jul 17" had `newContacts:7, newMessages:27`; "Jul 18" had `newContacts:0, newMessages:6`.
+      - languageDistribution: `en:5, hinglish:1, hi:1`.
+    - `GET /api/analytics` (no cookie) → 401 in 12ms.
+    - `GET /` (authed) → 200, 29626 bytes; HTML contains "Analytics" (nav entry rendered).
+  - Dev server log shows `GET /api/analytics 200 in 445ms (compile: 397ms, render: 48ms)` on first hit (route compile), then `200 in 37ms` / `200 in 40ms` on subsequent hits, and `401 in 12ms` for unauthed.
+
+Stage Summary:
+- MODIFIED `src/lib/types.ts` — added `'analytics'` to `ViewKey` union (13 views total).
+- MODIFIED `src/lib/nav.ts` — imported `BarChart3`, added `analytics` nav entry in the `system` group before `logs`.
+- MODIFIED `src/app/page.tsx` — imported `AnalyticsView`, added view-router case.
+- CREATED `src/app/api/analytics/route.ts` — GET, comprehensive real-DB analytics payload (overview + responseTimeTrend + aiVsOwner + peakHours + leadFunnel + categoryBreakdown + topContacts + growthTrend + languageDistribution).
+- CREATED `src/components/views/analytics-view.tsx` — `AnalyticsView` with 7 sections (Overview KPIs, Response Performance charts, Peak Hours, Conversion Funnel, Audience Breakdown, Contact Growth, Top Contacts table) + framer-motion staggered fade-in.
+
+---
+Task ID: cron-review-20260718
+Agent: Main (Z.ai Code) — scheduled dev review
+Task: QA sweep + new features (Analytics, Command Palette) + styling enhancements (animated counters, page transitions, card-hover)
+
+## Current Project Status Assessment
+The platform was stable at the start of this review: 12 views, 32 API routes, 16 Prisma models, lint clean, dev server running. A full agent-browser QA sweep across all 12 views found **zero console errors and zero page errors** — the platform is production-stable.
+
+## Work Completed This Round
+
+### 1. QA Sweep (all passed)
+- Visited every view (dashboard, whatsapp, chats, leads, simulator, broadcast, ai-settings, company-settings, owner-settings, autoreply-settings, logs, system).
+- Checked console + page errors after each navigation → clean.
+- Dashboard: 4 charts render (202 recharts elements). Leads: 7 rows + export button. Broadcast: campaigns + templates tabs work.
+- Server health: app 200, realtime service uptime 7331s, lint 0 errors.
+
+### 2. New Feature: Analytics View (Task F-3)
+- Created `/api/analytics` (GET) — 9-section payload computed from real DB queries: overview KPIs (totalContacts, totalMessages, aiReplies, ownerReplies, avgResponseMs, conversionRate, hotLeadRate), responseTimeTrend (7d), aiVsOwner (7d), peakHours (24 buckets), leadFunnel (5 stages), categoryBreakdown, topContacts, growthTrend (14d), languageDistribution. avgResponseMs parsed from AI log lines via regex.
+- Created `analytics-view.tsx` with 7 sections: Overview KPIs (6 cards), Response Performance (LineChart + stacked BarChart), Peak Hours (highlighted bar + callout), Conversion Funnel (custom div-based funnel with emerald→teal gradient), Audience Breakdown (horizontal BarChart + Donut), Contact Growth (14-day AreaChart), Top Contacts table. Each section wrapped in staggered framer-motion fade-in animations.
+- Added 'analytics' to ViewKey + nav entry (BarChart3 icon, system group).
+- Verified: 6 charts render, all sections present, API returns real data (totalContacts:7, conversionRate:14.3%, peak hour 3PM, funnel 7→7→6→3→1).
+
+### 3. New Feature: Global Command Palette (Task F-2)
+- Created `command-palette.tsx` using shadcn CommandDialog (cmdk). 4 groups: Navigation (all 13 views), Contacts (server-side debounced search via /api/chats?search=), Quick Actions (5 shortcuts), Recent notifications.
+- Global keyboard shortcuts: Cmd+K / Ctrl+K toggles palette, "/" opens when not typing, Escape closes.
+- Added "Quick search ⌘K" button in topbar (hidden on mobile).
+- Verified: Cmd+K opens palette, typing "rahul" finds Rahul Sharma contact, arrow-key navigation works.
+
+### 4. Styling Enhancements (Task S-1)
+- Created `animated-counter.tsx` — animates numbers from 0→target with easeOutQuart easing when scrolled into view (framer-motion useInView). SSR-safe, Intl.NumberFormat formatting.
+- Created `page-transition.tsx` — framer-motion fade+slide-up on view change, wrapped in AnimatePresence mode="wait".
+- Added 8 premium CSS utilities to globals.css: text-gradient-premium, glow-primary, shimmer, card-hover (lift on hover), animate-slide-in, gradient-border, stagger helpers.
+- Dashboard: replaced 5 stat numbers with AnimatedCounter, added card-hover to all stat cards, glow-primary on Hot Leads card, text-gradient-premium on "Dashboard" heading.
+- Leads: AnimatedCounter on 4 summary cards, card-hover on cards, animate-slide-in with staggered delays on 7 table rows.
+- App-shell: card-hover on sidebar info card.
+- Verified: 12 animated counters on dashboard, 1 glow card, 5 card-hover elements + 7 slide-in rows on leads page.
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200, realtime service healthy (uptime 7331s)
+- Browser E2E: login → dashboard (animated counters + charts + glow) → Cmd+K palette (search works) → Analytics (6 charts + funnel) → Leads (animated cards + slide-in rows) → mobile responsive (390×844)
+- 13 views total (added Analytics), 34 API routes, 16 Prisma models
+
+## Unresolved Issues / Risks
+- WebSocket gateway: Caddy may need explicit WS upgrade config for port 3003; polling fallback works so real-time updates still flow. clients=0 on realtime health check.
+- Real WhatsApp Baileys integration still a simulation layer (wa-engine.ts is the drop-in point).
+- Single-user auth (admin/admin123); multi-user + roles not implemented.
+- Backup/restore button on System page is simulated (no actual SQLite file copy).
+
+## Priority Recommendations for Next Phase
+1. Wire the WebSocket gateway properly so realtime push works without polling fallback.
+2. Add a dedicated Contact Profile page (full timeline, memory editor, lead score history chart).
+3. Implement actual SQLite backup/restore on the System page.
+4. Add notification sound + desktop notifications (Web Notifications API) for owner requests and hot leads.
+5. Add dark/light theme toggle in the topbar (theme is dark-only currently; next-themes is wired but no toggle UI).
