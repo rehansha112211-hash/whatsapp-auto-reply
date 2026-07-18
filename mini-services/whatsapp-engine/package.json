@@ -1,0 +1,13 @@
+{
+  "name": "war-whatsapp-engine",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "pino": "^9.0.0"
+  }
+}
