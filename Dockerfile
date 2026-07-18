@@ -1,14 +1,15 @@
 # ============================================================
-# WhatsApp Engine Dockerfile — Node.js with tsx
-# Baileys needs Node.js WebSocket (Bun's is incomplete).
+# WhatsApp Engine Dockerfile — Bun runtime
+# Uses Bun for fast TypeScript execution.
 # ============================================================
-FROM node:20-slim
+FROM oven/bun:1.1
 
 WORKDIR /app
 
-# Install dependencies
+# Copy package files and install dependencies
 COPY mini-services/whatsapp-engine/package.json ./
-RUN npm install --production && npm install tsx typescript
+COPY mini-services/whatsapp-engine/bun.lock* ./
+RUN bun install
 
 # Copy the engine source
 COPY mini-services/whatsapp-engine/index.ts ./
@@ -20,5 +21,5 @@ RUN mkdir -p /app/auth-state
 ENV PORT=3004
 EXPOSE 3004
 
-# Start with Node.js + tsx (NOT bun — bun's WebSocket crashes Baileys)
-CMD ["npx", "tsx", "index.ts"]
+# Start the engine
+CMD ["bun", "run", "index.ts"]
