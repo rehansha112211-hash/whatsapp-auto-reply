@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { db } from '@/lib/db'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
 // Send a REAL WhatsApp message to a contact.
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
 
   // Send via the REAL Baileys engine
   try {
-    const engineRes = await fetch('/send', {
+    const engineRes = await fetch(ENGINE_URL + '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone, text }),

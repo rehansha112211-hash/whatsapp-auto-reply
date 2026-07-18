@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { processIncomingMessage } from '@/lib/wa-engine'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
 // Incoming WhatsApp message callback — called by the REAL
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
   // If the AI generated a reply, send it back via the real WhatsApp engine
   if (result.ok && result.replyText) {
     try {
-      await fetch('/send-reply', {
+      await fetch(ENGINE_URL + '/send-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, text: result.replyText }),

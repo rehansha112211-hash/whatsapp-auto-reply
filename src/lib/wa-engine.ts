@@ -10,6 +10,7 @@ import { generateReply } from '@/lib/ai-engine'
 import { dispatchWebhooks } from '@/lib/webhook-dispatcher'
 import { analyzeSentiment } from '@/lib/sentiment'
 import { detectLanguage, translateText } from '@/lib/translate'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 export interface ProcessIncomingResult {
   ok: boolean
@@ -36,7 +37,7 @@ export const SYSTEM_START = new Date()
 // ============================================================
 export async function sendViaWhatsApp(phone: string, text: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch('/send', {
+    const res = await fetch(ENGINE_URL + '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone, text }),

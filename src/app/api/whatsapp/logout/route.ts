@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
 // Logout — proxies to the REAL Baileys engine.
@@ -14,7 +15,7 @@ export async function POST() {
   }
 
   try {
-    const engineRes = await fetch('/logout', {
+    const engineRes = await fetch(ENGINE_URL + '/logout', {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
     })

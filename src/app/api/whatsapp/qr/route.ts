@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
 // Generate QR — proxies to the REAL Baileys engine.
-// Calls POST /connect which starts the
+// Calls POST {ENGINE_URL}/connect which starts the
 // Baileys connection and generates a genuine WhatsApp QR.
 // ============================================================
 
@@ -14,9 +15,9 @@ export async function POST() {
   }
 
   try {
-    const engineRes = await fetch('/connect', {
+    const engineRes = await fetch(ENGINE_URL + '/connect', {
       method: 'POST',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(10000),
     })
 
     if (!engineRes.ok) {
@@ -32,7 +33,7 @@ export async function POST() {
   } catch {
     return NextResponse.json(
       {
-        error: 'WhatsApp engine not running. Start it: cd mini-services/whatsapp-engine && bun run dev',
+        error: 'WhatsApp engine not running at ' + ENGINE_URL,
       },
       { status: 503 },
     )
