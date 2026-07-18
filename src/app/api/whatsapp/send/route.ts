@@ -45,7 +45,7 @@ export async function POST(req: Request) {
 
   // Send via the REAL Baileys engine
   try {
-    const engineRes = await fetch('http://localhost:3004/send', {
+    const engineRes = await fetch('/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone, text }),

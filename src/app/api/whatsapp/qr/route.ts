@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 
 // ============================================================
 // Generate QR — proxies to the REAL Baileys engine.
-// Calls POST http://localhost:3004/connect which starts the
+// Calls POST /connect which starts the
 // Baileys connection and generates a genuine WhatsApp QR.
 // ============================================================
 
@@ -14,7 +14,7 @@ export async function POST() {
   }
 
   try {
-    const engineRes = await fetch('http://localhost:3004/connect', {
+    const engineRes = await fetch('/connect', {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
     })

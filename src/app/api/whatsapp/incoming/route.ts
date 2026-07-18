@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   // If the AI generated a reply, send it back via the real WhatsApp engine
   if (result.ok && result.replyText) {
     try {
-      await fetch('http://localhost:3004/send-reply', {
+      await fetch('/send-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, text: result.replyText }),

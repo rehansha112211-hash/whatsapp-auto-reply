@@ -12,7 +12,7 @@ export async function POST() {
   }
 
   try {
-    const engineRes = await fetch('http://localhost:3004/disconnect', {
+    const engineRes = await fetch('/disconnect', {
       method: 'POST',
       signal: AbortSignal.timeout(5000),
     })

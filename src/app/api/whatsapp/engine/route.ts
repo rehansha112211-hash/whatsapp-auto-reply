@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
 // WhatsApp Engine proxy — checks if the REAL Baileys engine
@@ -14,13 +15,13 @@ export async function GET() {
 
   try {
     // Check if the real engine is alive
-    const healthRes = await fetch('http://localhost:3004/health', {
+    const healthRes = await fetch(ENGINE_URL + '/health', {
       signal: AbortSignal.timeout(2000),
     })
     if (healthRes.ok) {
       const health = await healthRes.json()
       // Fetch full state
-      const stateRes = await fetch('http://localhost:3004/')
+      const stateRes = await fetch(ENGINE_URL + '/')
       if (stateRes.ok) {
         const engineState = await stateRes.json()
         return NextResponse.json({
@@ -56,7 +57,7 @@ export async function POST(req: Request) {
   else if (action === 'send') endpoint = 'send'
 
   try {
-    const engineRes = await fetch(`http://localhost:3004/${endpoint}`, {
+    const engineRes = await fetch(`${ENGINE_URL}/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body.action === 'send' ? { phone: body.phone, text: body.text } : {}),

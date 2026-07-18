@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
 import { SYSTEM_START } from '@/lib/wa-engine'
 import type { SystemHealth, WhatsAppState } from '@/lib/types'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v))
@@ -22,7 +23,7 @@ export async function GET() {
   // WhatsApp state — check the REAL Baileys engine
   let whatsapp: WhatsAppState = 'disconnected'
   try {
-    const engineRes = await fetch('http://localhost:3004/', {
+    const engineRes = await fetch(ENGINE_URL + '/', {
       signal: AbortSignal.timeout(2000),
     })
     if (engineRes.ok) {

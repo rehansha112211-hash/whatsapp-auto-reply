@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { ENGINE_URL } from '@/lib/engine-url'
 
 // ============================================================
-// WhatsApp session state — proxies to the REAL Baileys engine
-// on port 3004. No simulation.
+// WhatsApp session state — proxies to the REAL Baileys engine.
 // ============================================================
 
 export async function GET() {
@@ -13,7 +13,7 @@ export async function GET() {
   }
 
   try {
-    const engineRes = await fetch('http://localhost:3004/', {
+    const engineRes = await fetch(ENGINE_URL + '/', {
       signal: AbortSignal.timeout(3000),
     })
 
@@ -59,7 +59,7 @@ export async function GET() {
       qrCode: '',
       lastSeen: new Date().toISOString(),
       engineAvailable: false,
-      error: 'WhatsApp engine not running. Start it: cd mini-services/whatsapp-engine && bun run dev',
+      error: 'WhatsApp engine not running at ' + ENGINE_URL,
     })
   }
 }
