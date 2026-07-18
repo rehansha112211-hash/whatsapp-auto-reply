@@ -14,6 +14,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
+import { can } from '@/lib/permissions'
 import { SUPPORTED_EVENTS } from '@/lib/webhook-dispatcher'
 import type { WebhookListItem } from '@/lib/types'
 
@@ -101,6 +102,12 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  if (!can(user, 'canManageWebhooks')) {
+    return NextResponse.json(
+      { error: 'You need admin role to manage webhooks' },
+      { status: 403 },
+    )
+  }
 
   const rows = await db.webhook.findMany({
     orderBy: { createdAt: 'desc' },
@@ -131,6 +138,12 @@ export async function POST(req: Request) {
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!can(user, 'canManageWebhooks')) {
+    return NextResponse.json(
+      { error: 'You need admin role to manage webhooks' },
+      { status: 403 },
+    )
   }
 
   let body: CreateBody

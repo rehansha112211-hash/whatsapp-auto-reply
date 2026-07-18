@@ -16,6 +16,7 @@ import {
   Search,
   Database,
   Webhook,
+  Users,
   type LucideIcon,
 } from 'lucide-react'
 import type { ViewKey } from '@/lib/types'
@@ -46,4 +47,5 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'webhooks', label: 'Webhooks', icon: Webhook, description: 'API integrations', group: 'system' },
   { key: 'system', label: 'System', icon: Activity, description: 'Health & status', group: 'system' },
   { key: 'data-management', label: 'Data', icon: Database, description: 'Export & import', group: 'system' },
+  { key: 'users', label: 'Users', icon: Users, description: 'Manage team', group: 'system' },
 ]

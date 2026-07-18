@@ -18,6 +18,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
+import { can } from '@/lib/permissions'
 
 export const dynamic = 'force-dynamic'
 
@@ -231,6 +232,12 @@ export async function POST(req: Request) {
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!can(user, 'canManageData')) {
+    return NextResponse.json(
+      { error: 'You need admin role to import data' },
+      { status: 403 },
+    )
   }
 
   let body: ImportBody

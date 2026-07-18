@@ -15,6 +15,10 @@ import {
   VolumeX,
   Monitor,
   MonitorOff,
+  HelpCircle,
+  Keyboard,
+  Info,
+  Sparkles,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -23,6 +27,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { NAV_ITEMS } from '@/lib/nav'
+import { QORVIX_COMPANY } from '@/lib/types'
 import type { ViewKey, AuthUser, DashboardStats } from '@/lib/types'
 import { WhatsAppStatusBadge } from '@/components/status'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -36,7 +41,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import { formatUptime } from '@/lib/format'
+import { getVisibleNavItems, roleOf, type Role } from '@/lib/permissions'
 
 interface AppShellProps {
   user: AuthUser
@@ -45,6 +58,7 @@ interface AppShellProps {
   onNavigate: (v: ViewKey) => void
   onLogout: () => void
   onOpenPalette?: () => void
+  onStartTour?: () => void
   children: React.ReactNode
 }
 
@@ -67,59 +81,79 @@ function BrandMark() {
   )
 }
 
+// Maps a nav ViewKey to its data-tour attribute (used by the onboarding tour).
+const NAV_TOUR_ATTRS: Partial<Record<ViewKey, string>> = {
+  dashboard: 'nav-dashboard',
+  whatsapp: 'nav-whatsapp',
+  chats: 'nav-chats',
+  simulator: 'nav-simulator',
+  'ai-settings': 'nav-ai-settings',
+}
+
 function NavLinks({
   active,
   onNavigate,
   unread,
+  role,
 }: {
   active: ViewKey
   onNavigate: (v: ViewKey) => void
   unread: number
+  role: Role
 }) {
   const groups: { label: string; group: 'main' | 'settings' | 'system' }[] = [
     { label: 'Workspace', group: 'main' },
     { label: 'Settings', group: 'settings' },
     { label: 'System', group: 'system' },
   ]
+  const visible = React.useMemo(() => new Set(getVisibleNavItems(role)), [role])
   return (
     <nav className="flex flex-col gap-6 px-3 py-4">
-      {groups.map((g) => (
-        <div key={g.group} className="flex flex-col gap-1">
-          <div className="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            {g.label}
+      {groups.map((g) => {
+        const items = NAV_ITEMS.filter(
+          (n) => n.group === g.group && visible.has(n.key),
+        )
+        if (items.length === 0) return null
+        return (
+          <div key={g.group} className="flex flex-col gap-1">
+            <div className="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              {g.label}
+            </div>
+            {items.map((item) => {
+              const Icon = item.icon
+              const isActive = active === item.key
+              const tourAttr = NAV_TOUR_ATTRS[item.key]
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => onNavigate(item.key)}
+                  data-tour={tourAttr}
+                  className={cn(
+                    'group relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                  )}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+                  )}
+                  <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-primary')} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  {item.key === 'chats' && unread > 0 && (
+                    <Badge className="h-5 min-w-5 justify-center px-1 text-[10px]">
+                      {unread}
+                    </Badge>
+                  )}
+                  {item.key === 'leads' && (
+                    <span className="text-[10px] text-emerald-400/80">●</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
-          {NAV_ITEMS.filter((n) => n.group === g.group).map((item) => {
-            const Icon = item.icon
-            const isActive = active === item.key
-            return (
-              <button
-                key={item.key}
-                onClick={() => onNavigate(item.key)}
-                className={cn(
-                  'group relative flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-primary/15 text-primary'
-                    : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-                )}
-              >
-                {isActive && (
-                  <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
-                )}
-                <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-primary')} />
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.key === 'chats' && unread > 0 && (
-                  <Badge className="h-5 min-w-5 justify-center px-1 text-[10px]">
-                    {unread}
-                  </Badge>
-                )}
-                {item.key === 'leads' && (
-                  <span className="text-[10px] text-emerald-400/80">●</span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      ))}
+        )
+      })}
     </nav>
   )
 }
@@ -155,7 +189,7 @@ function NotificationsBell() {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative h-9 w-9">
+        <Button variant="ghost" size="icon" className="relative h-9 w-9" data-tour="notifications">
           <Bell className="h-4 w-4" />
           {unread > 0 && (
             <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
@@ -243,6 +277,163 @@ function NotificationsBell() {
   )
 }
 
+// ============================================================
+// Help menu — circle with "?" that opens a dropdown with
+// "Take the tour", "Keyboard shortcuts", and "About" actions.
+// ============================================================
+interface HelpMenuProps {
+  onStartTour?: () => void
+  onOpenPalette?: () => void
+}
+
+function HelpMenu({ onStartTour, onOpenPalette }: HelpMenuProps) {
+  const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
+  const [aboutOpen, setAboutOpen] = React.useState(false)
+
+  const handleStartTour = async () => {
+    try {
+      // Reset onboarding so the tour re-enables, then call the prop
+      // which flips showTour=true on the parent.
+      await apiPost('/api/onboarding', { action: 'reset' })
+    } catch {
+      /* best-effort — still try to open the tour */
+    }
+    onStartTour?.()
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            aria-label="Help"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+            <span>Help & Tips</span>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => void handleStartTour()}>
+            <Sparkles className="mr-2 h-4 w-4 text-emerald-400" />
+            Take the tour
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setShortcutsOpen(true)}>
+            <Keyboard className="mr-2 h-4 w-4" />
+            Keyboard shortcuts
+          </DropdownMenuItem>
+          {onOpenPalette && (
+            <DropdownMenuItem onClick={onOpenPalette}>
+              <Search className="mr-2 h-4 w-4" />
+              Open Quick Search
+              <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+                ⌘K
+              </kbd>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+            <Info className="mr-2 h-4 w-4" />
+            About QorvixNode
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* Keyboard shortcuts dialog */}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Keyboard className="h-4 w-4 text-emerald-400" />
+              Keyboard shortcuts
+            </DialogTitle>
+            <DialogDescription>
+              Speed up your workflow with these keyboard shortcuts.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            {[
+              { keys: ['⌘', 'K'], label: 'Open Quick Search (jump to any view, contact, or message)' },
+              { keys: ['/'], label: 'Open Quick Search (when not typing)' },
+              { keys: ['Esc'], label: 'Close dialogs, palette, or tour' },
+              { keys: ['→'], label: 'Next tour step (while tour is active)' },
+              { keys: ['←'], label: 'Previous tour step (while tour is active)' },
+              { keys: ['⌘', '/'], label: 'Open this shortcuts dialog (browser default)' },
+            ].map((row, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2"
+              >
+                <span className="text-sm text-muted-foreground">{row.label}</span>
+                <div className="flex items-center gap-1">
+                  {row.keys.map((k, j) => (
+                    <kbd
+                      key={j}
+                      className="rounded border bg-background px-1.5 py-0.5 text-[11px] font-mono shadow-sm"
+                    >
+                      {k}
+                    </kbd>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* About dialog */}
+      <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-md">
+                <MessageCircle className="h-4 w-4" />
+              </div>
+              About QorvixNode WhatsApp Auto Reply
+            </DialogTitle>
+            <DialogDescription>
+              AI-powered WhatsApp auto-reply platform for modern businesses.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 text-sm">
+            <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+              <span className="text-muted-foreground">Platform</span>
+              <span className="font-medium">WhatsApp Auto Reply</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+              <span className="text-muted-foreground">Version</span>
+              <span className="font-mono text-xs">v1.0.0</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+              <span className="text-muted-foreground">Built by</span>
+              <span className="font-medium">{QORVIX_COMPANY.name}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+              <span className="text-muted-foreground">Website</span>
+              <Link
+                href={QORVIX_COMPANY.website}
+                target="_blank"
+                className="font-medium text-emerald-400 hover:underline"
+              >
+                qorvixnodetechnologies.indevs.in
+              </Link>
+            </div>
+            <div className="rounded-md border bg-emerald-500/5 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+              {QORVIX_COMPANY.description}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 export function AppShell({
   user,
   stats,
@@ -250,6 +441,7 @@ export function AppShell({
   onNavigate,
   onLogout,
   onOpenPalette,
+  onStartTour,
   children,
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = React.useState(false)
@@ -262,6 +454,7 @@ export function AppShell({
 
   const waState = (stats?.whatsappState ?? 'disconnected') as any
   const unread = stats?.unreadNotifications ?? 0
+  const role = roleOf(user) ?? 'viewer'
 
   const sidebar = (
     <div className="flex h-full flex-col">
@@ -269,7 +462,7 @@ export function AppShell({
         <BrandMark />
       </div>
       <ScrollArea className="flex-1 scrollbar-thin">
-        <NavLinks active={active} onNavigate={onNavigate} unread={unread} />
+        <NavLinks active={active} onNavigate={onNavigate} unread={unread} role={role} />
       </ScrollArea>
       <div className="border-t p-3">
         <div className="rounded-lg bg-muted/40 p-3 card-hover">
@@ -360,6 +553,7 @@ export function AppShell({
                 variant="outline"
                 size="sm"
                 onClick={onOpenPalette}
+                data-tour="quick-search"
                 className="hidden gap-1.5 text-xs text-muted-foreground md:flex"
               >
                 <Search className="h-3.5 w-3.5" />
@@ -369,6 +563,7 @@ export function AppShell({
                 </kbd>
               </Button>
             )}
+            <HelpMenu onStartTour={onStartTour} onOpenPalette={onOpenPalette} />
             <ThemeToggle />
             <NotificationsBell />
             <DropdownMenu>

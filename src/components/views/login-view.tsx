@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { MessageCircle, Eye, EyeOff, Loader2, Lock, User, ShieldCheck, ArrowRight } from 'lucide-react'
+import { MessageCircle, Eye, EyeOff, Loader2, Lock, User, ShieldCheck, ArrowRight, Crown, ShieldCheck as ShieldIcon, Eye as EyeIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,6 +12,40 @@ import type { AuthUser } from '@/lib/types'
 interface LoginViewProps {
   onLoggedIn: (user: AuthUser) => void
 }
+
+const DEMO_ACCOUNTS: Array<{
+  username: string
+  password: string
+  role: 'admin' | 'operator' | 'viewer'
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  tint: string
+}> = [
+  {
+    username: 'admin',
+    password: 'admin123',
+    role: 'admin',
+    label: 'Full access',
+    icon: Crown,
+    tint: 'text-emerald-300',
+  },
+  {
+    username: 'operator',
+    password: 'operator123',
+    role: 'operator',
+    label: 'Send messages, no settings',
+    icon: ShieldIcon,
+    tint: 'text-sky-300',
+  },
+  {
+    username: 'viewer',
+    password: 'viewer123',
+    role: 'viewer',
+    label: 'Read-only',
+    icon: EyeIcon,
+    tint: 'text-zinc-300',
+  },
+]
 
 export function LoginView({ onLoggedIn }: LoginViewProps) {
   const [username, setUsername] = React.useState('admin')
@@ -37,6 +71,12 @@ export function LoginView({ onLoggedIn }: LoginViewProps) {
     } finally {
       setLoading(false)
     }
+  }
+
+  const pickDemo = (acct: (typeof DEMO_ACCOUNTS)[number]) => {
+    setUsername(acct.username)
+    setPassword(acct.password)
+    setError(null)
   }
 
   return (
@@ -193,9 +233,31 @@ export function LoginView({ onLoggedIn }: LoginViewProps) {
                 )}
               </Button>
 
-              <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-center text-[11px] text-muted-foreground">
-                Demo credentials: <span className="font-mono text-foreground">admin</span> /{' '}
-                <span className="font-mono text-foreground">admin123</span>
+              <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-center text-[11px] text-muted-foreground">
+                <div className="mb-1.5 font-medium">Demo accounts — click to fill</div>
+                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                  {DEMO_ACCOUNTS.map((acct) => {
+                    const Icon = acct.icon
+                    return (
+                      <button
+                        key={acct.username}
+                        type="button"
+                        onClick={() => pickDemo(acct)}
+                        className="group flex items-center gap-1.5 rounded-md border bg-background/60 px-2 py-1.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/60"
+                      >
+                        <Icon className={`h-3.5 w-3.5 shrink-0 ${acct.tint}`} />
+                        <div className="min-w-0 leading-tight">
+                          <div className="font-mono text-[11px] text-foreground">
+                            {acct.username}
+                          </div>
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {acct.label}
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </form>
           </div>

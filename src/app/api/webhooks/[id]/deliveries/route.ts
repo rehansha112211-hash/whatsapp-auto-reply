@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
+import { can } from '@/lib/permissions'
 import type { WebhookDeliveryRow } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,12 @@ export async function GET(
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!can(user, 'canManageWebhooks')) {
+    return NextResponse.json(
+      { error: 'You need admin role to manage webhooks' },
+      { status: 403 },
+    )
   }
 
   const { id } = await params

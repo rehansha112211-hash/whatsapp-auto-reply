@@ -7,6 +7,7 @@
 // ============================================================
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
+import { can } from '@/lib/permissions'
 import { processIncomingMessage } from '@/lib/wa-engine'
 import { db } from '@/lib/db'
 
@@ -24,6 +25,12 @@ export async function POST(req: Request) {
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!can(user, 'canUseSimulator')) {
+    return NextResponse.json(
+      { error: 'You need operator role to use the simulator' },
+      { status: 403 },
+    )
   }
 
   let body: SendBody

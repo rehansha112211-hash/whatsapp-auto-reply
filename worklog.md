@@ -1379,3 +1379,212 @@ Platform was stable at start: 17 views, 49 API routes, 20 Prisma models, lint cl
 6. Add a public API (with API keys) for external read access to contacts/leads/messages.
 7. Add conversation sentiment analysis (AI-powered) per message.
 8. Add a mobile app / PWA wrapper (installable, push notifications).
+
+---
+Task ID: F2-R6
+Agent: full-stack-developer (Onboarding Tour)
+Task: Build an interactive Onboarding/Help Tour — a spotlight-style walkthrough that guides first-time users through the platform's 8 key features (Dashboard, WhatsApp, Chats, Simulator, Quick Search, AI Settings, plus welcome/complete modals), persisted via a new onboarding state API with complete/skip/reset actions.
+
+Work Log:
+- Read prior worklog (19 views, 54+ API routes, 22 Prisma models, app-shell + sidebar+topbar with command palette + notifications bell, page.tsx view router).
+- Inspected existing API route pattern (`/api/settings/company/route.ts`) and auth lib (`getCurrentUser()`, `SESSION_COOKIE`) to mirror conventions; confirmed `Setting` model in `prisma/schema.prisma` is `key/value` (perfect for onboarding flags).
+- Created `src/app/api/onboarding/route.ts`:
+  - GET: returns `{ completed, skipped, steps }`. Reads `onboarding_completed` + `onboarding_skipped` Setting rows; if absent, returns false/false. Exposes canonical 8-step tour step ids as `steps` so the client tour and any future tooling agree on the order: `welcome, dashboard, whatsapp, chats, simulator, quick-search, ai-settings, complete`.
+  - POST: body `{ action: 'complete' | 'skip' | 'reset' }` — `complete` upserts `onboarding_completed=true` AND deletes `onboarding_skipped` (so re-triggering the tour after completion doesn't bail on a stale skip flag); `skip` upserts `onboarding_skipped=true`; `reset` deletes both keys so the tour re-enables. Writes a `frontend`-category audit Log row with action + user meta. Auth-gated via `getCurrentUser()` → 401 if not authed, 400 on invalid action.
+  - End-to-end verified with curl + cookie auth: GET fresh state → `{completed:false, skipped:false, steps:[8]}` ✓; POST skip → `skipped:true` ✓; POST complete → `completed:true, skipped:false` (skip cleared) ✓; POST reset → both false ✓; POST invalid action → 400 with proper error ✓.
+- Created `src/components/onboarding-tour.tsx` (`'use client'`, exported `OnboardingTour`):
+  - Defines 8 `TourStep`s with `id, title, description, target?, navigateTo?, centered?, icon, accent`. Welcome + Complete are `centered` (modal-style). The other 6 target a `data-tour` attribute on a sidebar nav button or topbar button.
+  - **Spotlight overlay** uses the box-shadow trick: a `position:absolute` div with `box-shadow: 0 0 0 9999px rgba(0,0,0,0.75)` + `rounded-lg border-2 border-primary`, positioned over the measured target rect (with 6px padding so it breathes).
+  - **Tooltip card** is `absolute z-[101] w-80 rounded-xl border bg-card p-5 shadow-2xl`. Position is chosen by `choosePlacement()` based on the available space (right > left > bottom > top) around the spotlight, then `clampTooltip()` ensures the tooltip stays within the viewport.
+  - Tooltip contains: gradient icon chip, "Step X of N" eyebrow, title, description, Skip link (rose), Back ghost button (hidden on step 0), Next emerald-gradient button (label changes to "Start tour" on step 0, "Done" on the last). Bottom progress bar = emerald→teal gradient width = `(stepIdx+1)/total*100%` (animated via framer-motion).
+  - **Step lifecycle**: `useEffect` on `[open, stepIdx, onNavigate]` — when step changes, calls `onNavigate(step.navigateTo)` first (so the target view is rendered), waits 1 RAF + 80ms, then `document.querySelector('[data-tour="..."]')`, `scrollIntoView({block:'center'})`, waits 200ms for smooth scroll, then measures `getBoundingClientRect()` and sets the spotlight rect + placement.
+  - **Window resize/scroll** listener re-measures the spotlight while a step is active.
+  - **Keyboard nav**: Escape → skip; ArrowRight → next; ArrowLeft → back.
+  - On `complete` or `skip`: POST to `/api/onboarding` then close the tour.
+  - Click outside the tooltip (on the dark backdrop) also skips the tour.
+  - Framer-motion: outer fade-in/out, inner `AnimatePresence mode="wait"` slides tooltip 12px horizontally + fades between steps.
+- Modified `src/components/app-shell.tsx`:
+  - Imported `HelpCircle, Keyboard, Info, Sparkles` from lucide-react; imported `QORVIX_COMPANY` from `@/lib/types`; imported `Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription` from shadcn/ui dialog.
+  - Added `onStartTour?: () => void` to `AppShellProps`.
+  - Added `NAV_TOUR_ATTRS` map: `dashboard→nav-dashboard`, `whatsapp→nav-whatsapp`, `chats→nav-chats`, `simulator→nav-simulator`, `ai-settings→nav-ai-settings`. The `NavLinks` buttons now carry `data-tour={tourAttr}` (only set for these 5 keys; other nav items get `data-tour="undefined"` which is harmless — querySelector uses the explicit values).
+  - Added `data-tour="quick-search"` to the topbar Quick Search ⌘K button.
+  - Added `data-tour="notifications"` to the `NotificationsBell` trigger button.
+  - Added new `HelpMenu` component — a `HelpCircle` ghost icon button that opens a `DropdownMenu`:
+    - "Take the tour" → POST `/api/onboarding {action:'reset'}` then calls `onStartTour?.()` so the parent page mounts the tour.
+    - "Keyboard shortcuts" → opens a `Dialog` listing ⌘K (search), / (search), Esc (close), → (next tour step), ← (prev tour step), ⌘/ (shortcuts). Each row has the description on the left and styled `<kbd>` keys on the right.
+    - "Open Quick Search" (only when `onOpenPalette` is provided) — convenience duplicate of the ⌘K button.
+    - "About QorvixNode" → opens a `Dialog` with platform name, version (v1.0.0), built-by, website link, and the company description (from `QORVIX_COMPANY`).
+  - Inserted `<HelpMenu onStartTour={onStartTour} onOpenPalette={onOpenPalette} />` in the topbar between Quick Search and ThemeToggle.
+- Modified `src/app/page.tsx`:
+  - Imported `OnboardingTour`.
+  - Added `const [showTour, setShowTour] = React.useState(false)`.
+  - Added a new `useEffect` on `[user]` that, after auth check, fetches `/api/onboarding` and — if `completed===false && skipped===false` — sets `showTour=true` after a 400ms delay (lets the app shell finish its first paint so the target elements exist in the DOM).
+  - Passed `onStartTour={() => setShowTour(true)}` to `<AppShell>`.
+  - Rendered `<OnboardingTour open={showTour} onOpenChange={setShowTour} onNavigate={setActive} />` inside the AppShell (after CommandPalette).
+- Code quality: refactored the keyboard handler to put `next/back/skip/complete` declarations before the `useEffect` that references them (avoiding "accessed before declaration" errors). Extracted `targetSelector` consts in the two effects that use `step.target` so TS keeps the `string | undefined` narrowing across `await` boundaries.
+- Lint: `bun run lint` is clean on all 4 of my touched files. The single remaining error is `react-hooks/rules-of-hooks` in `contact-profile-view.tsx` (line 2101) — a pre-existing issue from another agent's task (sentiment tab), not in scope for F2-R6.
+- TypeScript: `bunx tsc --noEmit` is clean on all 4 of my files (0 errors introduced).
+- End-to-end API verification (curl + cookie auth): login → 200 ✓; GET onboarding fresh → `{completed:false, skipped:false, steps:[8 ids]}` ✓; POST complete → `{ok:true, completed:true, skipped:false}` ✓; POST skip → `{ok:true, completed:false, skipped:true}` ✓; POST reset → `{ok:true, completed:false, skipped:false}` ✓; POST invalid action → 400 `{error:"Invalid action. Expected complete | skip | reset."}` ✓.
+
+Stage Summary:
+- Created: `src/app/api/onboarding/route.ts` (GET onboarding state + POST complete/skip/reset, auth-gated, audit-logged, sets/clears Setting keys `onboarding_completed` + `onboarding_skipped`, exposes canonical 8-step `ONBOARDING_STEPS`).
+- Created: `src/components/onboarding-tour.tsx` (`OnboardingTour` client component — 8 steps, spotlight via box-shadow trick, smart placement right/left/bottom/top + viewport clamping, framer-motion slide+fade transitions, keyboard nav, progress bar, skip/complete POST to API, click-outside-to-skip, re-exports `TOUR_ICONS`).
+- Modified: `src/components/app-shell.tsx` (added `onStartTour` prop, `HelpCircle/Keyboard/Info/Sparkles` icons, `QORVIX_COMPANY` import, shadcn `Dialog` import, `NAV_TOUR_ATTRS` map, `data-tour` attributes on 5 nav buttons + Quick Search + NotificationsBell, new `HelpMenu` component with dropdown + 2 dialogs, inserted `<HelpMenu>` in topbar).
+- Modified: `src/app/page.tsx` (imported `OnboardingTour`, added `showTour` state, onboarding-fetch effect with auto-start for first-time users, passed `onStartTour` to AppShell, rendered `<OnboardingTour>` after CommandPalette).
+
+Result: First-time users now see a polished spotlight tour auto-launch ~400ms after login, walking them through Dashboard → WhatsApp → Chats → Simulator → Quick Search → AI Settings with smooth framer-motion transitions. Completing or skipping persists the choice via the `/api/onboarding` API (using the existing `Setting` table), so the tour never bothers them again. The HelpCircle button in the topbar always lets users re-trigger the tour (via reset), view keyboard shortcuts, or read about the platform — making the tour an evergreen help resource, not just a one-shot onboarding.
+
+---
+Task ID: F1-R6
+Agent: full-stack-developer (AI Sentiment Analysis)
+Task: Add AI-powered sentiment & intent analysis to every incoming WhatsApp customer message; surface sentiment analytics on the dashboard + per-contact profile.
+
+Work Log:
+- Read worklog + existing files (schema.prisma, wa-engine.ts, ai-engine.ts, dashboard-view.tsx, contact-profile-view.tsx, profile route, simulator send route) to understand the pipeline + UI conventions.
+- Edited prisma/schema.prisma: added sentiment / sentimentScore / intent fields to the Message model + @@index([sentiment]); added the new SentimentAnalysis model (id, contactId, messageId, sentiment, score, intent, summary, createdAt + indexes on contactId and sentiment).
+- Ran `bun run db:push` — schema synced, Prisma client regenerated.
+- Created src/lib/sentiment.ts: `analyzeSentiment(text)` calls z-ai-web-dev-sdk LLM (glm-4.5) with a focused JSON-only system prompt, races it against a 5-second timeout, parses JSON (handles code fences + raw {...} extraction), and falls back to a heuristic keyword scan (negative/urgent/positive/neutral word lists + intent detection) on timeout/error/unparseable response. Returns { sentiment, score (-1..1), intent, summary }. Never throws — safe to call on every incoming message.
+- Modified src/lib/wa-engine.ts: imported analyzeSentiment; in `processIncomingMessage`, after step 2 (save incoming message), call analyzeSentiment(text); update the Message row with sentiment/score/intent; create a SentimentAnalysis history record; if sentiment is "urgent" or "negative", create an owner_request Notification (severity=warning) + log it + fire the owner.requested webhook. Wrapped in try/catch so the pipeline continues even if sentiment analysis fails. Added sentiment/sentimentScore/intent to the ProcessIncomingResult return shape (and to all 3 early-return paths).
+- Modified src/app/api/contacts/[id]/profile/route.ts to select + return sentiment / sentimentScore / intent on each message so the contact profile UI can render per-message badges.
+- Created src/app/api/sentiment/route.ts (GET): auth-gated; returns { overview (counts + positivePct/negativePct for last 7 days), trend (7-day stacked daily breakdown), recentNegative (last 5 negative/urgent messages with contact name + summary), byIntent (top 8 intents across all history) }.
+- Modified src/components/views/dashboard-view.tsx: added Brain/Smile/Meh/Frown/Heart icons to imports; added a SentimentSection component (framer-motion entrance) with 4 cards: SentimentOverviewDonut (PieChart with center AnimatedCounter total + legend tiles), SentimentTrendArea (4-series stacked AreaChart for 7 days), SentimentAlertList (clickable list of recent negative/urgent messages with sentiment pill + summary + time-ago → onNavigate('chats')), SentimentByIntentBar (horizontal bar of top intents). Fetches /api/sentiment every 30s. Placed the new section after the Live Activity Feed row.
+- Modified src/components/views/contact-profile-view.tsx: extended ProfileMessage interface with sentiment/sentimentScore/intent; added Smile/Meh/Frown/Heart icons; added a SentimentBadge component (small colored dot + emoji + label pill) and SENTIMENT_META color map; rendered the badge above each incoming message bubble in the ConversationTab timeline; added a SentimentSummaryCard to the Statistics tab (stacked split bar + per-label count/percent tiles + dominant-tone chip + AI-tone footer line). Hook (useMemo for sentimentCounts) placed before any early return to satisfy rules-of-hooks.
+
+Stage Summary:
+- Files created:
+  · src/lib/sentiment.ts
+  · src/app/api/sentiment/route.ts
+- Files modified:
+  · prisma/schema.prisma (Message sentiment fields + SentimentAnalysis model)
+  · src/lib/wa-engine.ts (sentiment step in pipeline + ProcessIncomingResult fields)
+  · src/app/api/contacts/[id]/profile/route.ts (return sentiment fields on messages)
+  · src/components/views/dashboard-view.tsx (new Sentiment Analysis section: donut + trend + alert list + intent bar)
+  · src/components/views/contact-profile-view.tsx (per-message sentiment badges + Sentiment Summary mini-card in stats)
+- `bun run db:push` ✅ — schema synced
+- `bun run lint` ✅ — no errors / warnings
+- Quality gates: TypeScript strict, no `any`, no console.log, no TODO.
+
+---
+Task ID: F3-R6
+Agent: full-stack-developer (Multi-user Auth)
+Task: Multi-user Authentication with Roles — three roles (admin / operator / viewer) with distinct permission sets; User Management screen for admins; permission enforcement on every mutating API route; nav filtering by role; friendly "You don't have permission" card if a viewer/operator lands on a gated page.
+
+Work Log:
+- Read prior worklog (19 views, 54 API routes, 22 Prisma models, single-user auth) and the existing auth.ts / types.ts / nav.ts / app-shell.tsx / login-view.tsx / page.tsx to understand the integration surface.
+- Created `src/lib/permissions.ts` — Role union (admin/operator/viewer), 14-flag Permission interface, ROLE_PERMISSIONS table (admin=all true, operator=view everything + send/schedule/simulator but no settings/users/webhooks/data, viewer=read-only), `can(user, action)` helper, `getVisibleNavItems(role)`, `permissionForView(view)` + `canView(user, view)`, `roleOf(user)`.
+- Modified `src/lib/auth.ts` — exported `hashPassword()` for reuse by users API; rewrote `ensureDefaultUser()` to seed 3 demo accounts (admin/admin123, operator/operator123, viewer/viewer123) idempotently. `login()` already returned `role` in the user object.
+- Modified `src/lib/types.ts` — added `| 'users'` to ViewKey (now 19 views); added `UserListRow` interface (id, username, displayName, role, lastLoginAt, createdAt); annotated `AuthUser.role` with role comment.
+- Modified `src/lib/nav.ts` — imported `Users` icon; added `{ key: 'users', label: 'Users', icon: Users, description: 'Manage team', group: 'system' }` at the end of the system group.
+- Created `src/app/api/users/route.ts` — GET (admin only) lists all users without passwordHash, sorted by createdAt ASC; POST (admin only) creates a new user with strict validation (username 3–32 chars `[a-zA-Z0-9_.-]`, password ≥6, displayName ≤80, role defaults to viewer), unique-username check (409 on conflict), security audit log on success.
+- Created `src/app/api/users/[id]/route.ts` — PATCH (admin only) updates displayName/role/optional-password with two self-lockout guards (can't change own role, can't demote last admin); DELETE (admin only) removes user with guards (can't delete self, can't delete last admin), security audit log on success.
+- Created `src/components/views/users-view.tsx` (~700 lines) — UsersView with role legend (3 cards with live counts), users table (avatar initials, role-colored badges: admin=emerald/Crown, operator=sky/ShieldCheck, viewer=zinc/Eye), last-login + created tooltips, "You" badge for current user, last-admin warning banner, New/Edit dialog (shared, mode-aware), Delete confirmation (AlertDialog blocking self-delete client-side), skeleton/error/empty states, framer-motion entrance, footer permission-model explainer.
+- Created `src/hooks/use-current-user.tsx` — CurrentUserProvider + useCurrentUser() + useCan(action) React context so any client view can ask "can the current user do X?" without prop-drilling or re-fetching /api/auth/me.
+- Created `src/components/permission-denied.tsx` — friendly 403 card with Lock icon, role label, view label, amber warning panel, and a "Back to dashboard" button. Framer-motion entrance.
+- Modified `src/components/app-shell.tsx` — `NavLinks` now accepts a `role: Role` prop; filters items via `new Set(getVisibleNavItems(role))` (memoised); groups with no visible items are skipped (viewers never see an empty "Settings" or "System" header). `AppShell` computes `role = roleOf(user) ?? 'viewer'`.
+- Modified `src/components/views/login-view.tsx` — replaced single-line demo hint with a 3-card clickable grid (admin/operator/viewer) showing role icon, mono username, and one-line description. Click fills both fields and clears errors.
+- Modified `src/app/page.tsx` — wrapped entire AppShell in `<CurrentUserProvider user={user}>`; added view-level permission gate (`if (!canView(user, active)) render <PermissionDenied view={active} role={user.role} onBack={...} />`); added `{active === 'users' && <UsersView />}` router case.
+- Patched 16 API routes to enforce permissions (403 + clear error message): messages POST (canSendMessages), broadcast POST (canSendMessages), scheduled POST (canScheduleMessages), simulator/send POST (canUseSimulator), settings/ai PUT (canManageSettings), settings/company PUT (canManageSettings), settings/owner PUT (canManageSettings), settings/autoreply PUT (canManageSettings), export GET (canManageData), import POST (canManageData), webhooks GET+POST (canManageWebhooks), webhooks/[id] PATCH+DELETE (canManageWebhooks), webhooks/[id]/test POST (canManageWebhooks), webhooks/[id]/deliveries GET (canManageWebhooks), webhooks/[id]/secret POST (canManageWebhooks).
+- Modified `src/components/views/chats-view.tsx` — `ChatWindow` calls `useCan('canSendMessages')` + `useCan('canScheduleMessages')`; Send button wrapped in Tooltip, disabled when `!canSend` with "You need operator role to send messages" tooltip; Schedule button disabled when `!canSchedule`; `handleSubmit` early-returns on no permission so Enter key can't bypass.
+- Verified end-to-end with curl against the running dev server:
+  · Operator login works; /api/users, /api/settings/ai (PUT), /api/webhooks (GET) all return 403 with correct messages; /api/messages POST passes auth+permission (returns 404 for nonexistent contact, as expected).
+  · Viewer login works; /api/messages POST, /api/scheduled POST, /api/simulator/send POST, /api/broadcast POST, /api/export GET, /api/users GET all return 403.
+  · Admin login works; /api/users GET returns the 3 seeded users; /api/users POST creates a new operator (200); duplicate username returns 409; short password returns 400; PATCH self → demote to viewer returns 400 ("You cannot change your own role"); DELETE self returns 400 ("You cannot delete your own account"); DELETE other user returns 200.
+  · Page compiles and renders (GET / returns 200).
+- Lint: `bun run lint` → **0 errors, 0 warnings** (exit 0). `bunx tsc --noEmit` → my touched files produce 0 type errors (remaining TS errors are all pre-existing in other agents' files: examples/websocket/server.ts, skills/*, src/lib/ai-engine.ts, src/lib/sentiment.ts).
+
+Stage Summary:
+Files created:
+- `src/lib/permissions.ts` — Role, Permission, ROLE_PERMISSIONS, can(), getVisibleNavItems(), canView(), permissionForView(), roleOf()
+- `src/app/api/users/route.ts` — GET list + POST create (admin only, audit-logged)
+- `src/app/api/users/[id]/route.ts` — PATCH update + DELETE (admin only, self-lockout + last-admin guards, audit-logged)
+- `src/components/views/users-view.tsx` — UsersView (role legend, table, new/edit dialog, delete confirmation, current-user "You" badge)
+- `src/components/permission-denied.tsx` — friendly 403 card with Lock icon + back button
+- `src/hooks/use-current-user.tsx` — CurrentUserProvider + useCurrentUser() + useCan()
+
+Files modified:
+- `src/lib/auth.ts` — exported `hashPassword()`; rewrote `ensureDefaultUser()` to seed 3 demo accounts
+- `src/lib/types.ts` — added `'users'` to ViewKey; added `UserListRow` interface
+- `src/lib/nav.ts` — imported `Users` icon; added users nav entry in 'system' group
+- `src/components/app-shell.tsx` — `NavLinks` accepts `role` prop and filters items via `getVisibleNavItems()`; empty groups hidden
+- `src/components/views/login-view.tsx` — replaced single demo hint with clickable 3-account grid
+- `src/app/page.tsx` — wrapped in `CurrentUserProvider`; added view-level permission gate + `PermissionDenied` fallback; added UsersView router case
+- `src/components/views/chats-view.tsx` — disabled Send + Schedule buttons for viewers with explanatory tooltips; `handleSubmit` early-returns on no permission
+- `src/app/api/messages/route.ts` — POST now requires `canSendMessages`
+- `src/app/api/broadcast/route.ts` — POST now requires `canSendMessages`
+- `src/app/api/scheduled/route.ts` — POST now requires `canScheduleMessages`
+- `src/app/api/simulator/send/route.ts` — POST now requires `canUseSimulator`
+- `src/app/api/settings/ai/route.ts` — PUT now requires `canManageSettings`
+- `src/app/api/settings/company/route.ts` — PUT now requires `canManageSettings`
+- `src/app/api/settings/owner/route.ts` — PUT now requires `canManageSettings`
+- `src/app/api/settings/autoreply/route.ts` — PUT now requires `canManageSettings`
+- `src/app/api/export/route.ts` — GET now requires `canManageData`
+- `src/app/api/import/route.ts` — POST now requires `canManageData`
+- `src/app/api/webhooks/route.ts` — GET + POST now require `canManageWebhooks`
+- `src/app/api/webhooks/[id]/route.ts` — PATCH + DELETE now require `canManageWebhooks`
+- `src/app/api/webhooks/[id]/test/route.ts` — POST now requires `canManageWebhooks`
+- `src/app/api/webhooks/[id]/deliveries/route.ts` — GET now requires `canManageWebhooks`
+- `src/app/api/webhooks/[id]/secret/route.ts` — POST now requires `canManageWebhooks`
+
+Result: 20 views, 60+ API routes. The platform now supports a real team — admin (full), operator (operate but no admin/settings), viewer (read-only). All three demo accounts are auto-seeded on first request. Self-lockout is impossible (can't demote/delete self or the last admin — blocked client-side AND server-side). Every mutating API route returns 403 with a clear message if the user lacks the required permission, so even a crafted request can't bypass the gate.
+
+---
+Task ID: cron-review-20260718-1215
+Agent: Main (Z.ai Code) — scheduled dev review (round 6)
+Task: QA sweep + AI Sentiment Analysis + Onboarding Tour + Multi-user Auth with Roles
+
+## Current Project Status Assessment
+Platform was stable at start: 19 views, 57 API routes, 22 Prisma models, lint clean. QA sweep confirmed zero errors. Continued with 3 high-impact features focusing on intelligence, UX, and access control.
+
+## Work Completed This Round
+
+### 1. AI Sentiment Analysis (Task F1-R6 — via subagent)
+- Added sentiment/sentimentScore/intent fields to Message model + new SentimentAnalysis model.
+- Created `src/lib/sentiment.ts` — `analyzeSentiment(text)` uses z-ai-web-dev-sdk LLM with 5s timeout, JSON response parsing, heuristic keyword fallback. Never throws.
+- Integrated into wa-engine pipeline: after saving incoming message, runs sentiment analysis, updates message, creates SentimentAnalysis record. Urgent/negative messages auto-create owner notifications.
+- New `/api/sentiment` route — overview (positive/neutral/negative/urgent counts + %), 7-day trend, recent negative messages, top intents.
+- Dashboard: new Sentiment section with donut chart (sentiment split), stacked area chart (7-day trend), negative/urgent alert list, top intents bar chart. Auto-refreshes every 30s.
+- Contact profile: sentiment badges (😊😐😟⚠️) on each incoming message + Sentiment Summary card in Statistics tab.
+- Verified: sent "I am very frustrated... urgent... refund" via Simulator → classified as "urgent" + "high priority" + owner requested.
+
+### 2. Onboarding/Help Tour (Task F2-R6 — via subagent)
+- New `/api/onboarding` route (GET state, POST complete/skip/reset) using Setting table.
+- New `onboarding-tour.tsx` — 8-step interactive walkthrough (Welcome → Dashboard → WhatsApp → Chats → Simulator → Quick Search → AI Settings → Complete). Spotlight overlay via box-shadow trick, smart tooltip placement with viewport clamping, framer-motion slide+fade transitions, keyboard nav (Esc/→/←), progress bar.
+- Auto-starts for new users (checks onboarding state on mount). Can be re-triggered from Help menu.
+- Added `data-tour` attributes to nav buttons + Quick Search button in app-shell.
+- New HelpMenu in topbar (HelpCircle icon) with: "Take the tour", "Keyboard shortcuts" dialog, "About QorvixNode" dialog.
+- Verified: tour auto-started on login, skip button works, Help menu accessible.
+
+### 3. Multi-user Authentication with Roles (Task F3-R6 — via subagent)
+- New `src/lib/permissions.ts` — 3 roles (admin/operator/viewer) with 14-flag permission matrix. `can(user, action)` for server+client checks, `getVisibleNavItems(role)` for sidebar filtering, `canView(user, view)` for view-level gates.
+- Seeded 3 demo accounts: admin/admin123, operator/operator123, viewer/viewer123.
+- 2 new API routes: `/api/users` (GET list, POST create — admin only), `/api/users/[id]` (PATCH, DELETE — admin only). Self-lockout guards (can't change own role, can't delete last admin).
+- New `UsersView` (20th view) — users table with role badges (admin=emerald/Crown, operator=sky/ShieldCheck, viewer=zinc/Eye), "You" badge, New/Edit/Delete dialogs, role legend with counts.
+- Nav filtering in AppShell — sidebar hides items the user can't access. Empty groups skipped.
+- Login view updated with 3 clickable demo account cards.
+- View-level permission gate in page.tsx — PermissionDenied card if user lacks access.
+- API enforcement on 16 routes — 403 for unauthorized mutations.
+- Button-level gating in chats — viewer's Send/Schedule disabled with tooltips.
+- Verified: viewer/viewer123 login returns role=viewer via API. Admin can see Users page.
+
+## Verification Results
+- `bun run lint` → 0 errors, 0 warnings
+- Dev server: 200
+- Browser E2E: Onboarding tour (auto-started + skip), Users page (table + heading), Sentiment analysis (urgent message detected), Login page (3 demo accounts), Dashboard (7 charts including sentiment donut/trend/intent)
+- 20 views total (added Users), 61 API routes, 23 Prisma models
+
+## Unresolved Issues / Risks
+- WebSocket gateway: still polling fallback.
+- Real WhatsApp Baileys integration still simulation.
+- Scheduled message processing relies on frontend polling.
+- Sentiment analysis adds latency to message pipeline (5s timeout, but usually <1s).
+- Multi-user: session management is simple (single token per user). No concurrent session limit.
+
+## Priority Recommendations for Next Phase
+1. Add a server-side background worker for scheduled messages + webhook delivery queue.
+2. Wire WebSocket gateway for true real-time push.
+3. Add SQLite FTS5 for full-text search performance.
+4. Add a public API (with API keys) for external read access.
+5. Add PWA wrapper (installable, push notifications).
+6. Add conversation auto-translation (real-time translation for non-English messages).
+7. Add a knowledge base / FAQ page that the AI can reference.
+8. Add message templates with variables (e.g. "Hi {name}, your {product} is ready").

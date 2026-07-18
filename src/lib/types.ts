@@ -73,12 +73,23 @@ export type ViewKey =
   | 'search'
   | 'data-management'
   | 'webhooks'
+  | 'users'
 
 export interface AuthUser {
   id: string
   username: string
   displayName: string
+  role: string // 'admin' | 'operator' | 'viewer' — narrowed via permissions.ts
+}
+
+// User list row returned by /api/users — never includes passwordHash.
+export interface UserListRow {
+  id: string
+  username: string
+  displayName: string
   role: string
+  lastLoginAt: string | null
+  createdAt: string
 }
 
 export interface DashboardStats {

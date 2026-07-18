@@ -157,6 +157,9 @@ model Message {
   read         Boolean  @default(false)
   retryCount   Int      @default(0)
   leadDelta    Int      @default(0)
+  sentiment    String   @default("unknown") // positive | neutral | negative | urgent | unknown
+  sentimentScore Float  @default(0) // -1.0 to 1.0
+  intent       String   @default("") // e.g. "pricing_inquiry", "complaint", "greeting", "purchase_intent"
   timestamp    DateTime @default(now())
   createdAt    DateTime @default(now())
 
@@ -165,6 +168,7 @@ model Message {
   @@index([contactId])
   @@index([timestamp])
   @@index([direction])
+  @@index([sentiment])
 }
 
 // ---------------- Conversation memory (AI) ----------------
@@ -193,6 +197,21 @@ model LeadScore {
 
   @@index([contactId])
   @@index([score])
+}
+
+// ---------------- Sentiment analysis history ----------------
+model SentimentAnalysis {
+  id        String   @id @default(cuid())
+  contactId String
+  messageId String
+  sentiment String   // positive | neutral | negative | urgent
+  score     Float    // -1.0 to 1.0
+  intent    String
+  summary   String   @default("") // 1-line AI summary of the message's emotional tone
+  createdAt DateTime @default(now())
+
+  @@index([contactId])
+  @@index([sentiment])
 }
 
 // ---------------- Logs ----------------

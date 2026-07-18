@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
+import { can } from '@/lib/permissions'
 import { sendOwnerMessage } from '@/lib/wa-engine'
 import type { ChatMessage, MessageDirection, MessageSource, MessageStatus } from '@/lib/types'
 
@@ -124,6 +125,12 @@ export async function POST(req: Request) {
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!can(user, 'canSendMessages')) {
+    return NextResponse.json(
+      { error: 'You need operator role to send messages' },
+      { status: 403 },
+    )
   }
 
   let body: PostBody

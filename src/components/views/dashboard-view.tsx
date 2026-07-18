@@ -9,12 +9,17 @@ import {
   BarChart3,
   Bell,
   Bot,
+  Brain,
   Clock,
   Flame,
+  Frown,
+  Heart,
+  Meh,
   MessageCircle,
   MessagesSquare,
   PieChart as PieChartIcon,
   Radio,
+  Smile,
   Tag,
   TrendingUp,
   UserCog,
@@ -1116,6 +1121,455 @@ function LiveActivityFeed({
 }
 
 // ----------------------------------------------------------------
+// Sentiment Analysis section — donut + trend + alert list
+// ----------------------------------------------------------------
+type SentimentLabel = 'positive' | 'neutral' | 'negative' | 'urgent' | 'unknown'
+
+interface SentimentOverview {
+  totalAnalyzed: number
+  positive: number
+  neutral: number
+  negative: number
+  urgent: number
+  positivePct: number
+  negativePct: number
+}
+
+interface SentimentTrendPoint {
+  date: string
+  positive: number
+  neutral: number
+  negative: number
+  urgent: number
+}
+
+interface RecentNegativeItem {
+  messageId: string
+  contactId: string
+  contactName: string
+  text: string
+  sentiment: string
+  summary: string
+  timestamp: string
+}
+
+interface IntentCount {
+  intent: string
+  count: number
+}
+
+interface SentimentPayload {
+  overview: SentimentOverview
+  trend: SentimentTrendPoint[]
+  recentNegative: RecentNegativeItem[]
+  byIntent: IntentCount[]
+}
+
+const SENTIMENT_CONFIG: ChartConfig = {
+  positive: { label: 'Positive', color: '#10b981' }, // emerald-500
+  neutral: { label: 'Neutral', color: '#a1a1aa' }, // zinc-400
+  negative: { label: 'Negative', color: '#f43f5e' }, // rose-500
+  urgent: { label: 'Urgent', color: '#f59e0b' }, // amber-500
+}
+
+const SENTIMENT_PIE_COLORS: Record<SentimentLabel, string> = {
+  positive: '#10b981',
+  neutral: '#a1a1aa',
+  negative: '#f43f5e',
+  urgent: '#f59e0b',
+  unknown: '#52525b',
+}
+
+const SENTIMENT_META: Record<
+  SentimentLabel,
+  { label: string; emoji: string; chip: string; dot: string }
+> = {
+  positive: {
+    label: 'Positive',
+    emoji: '😊',
+    chip: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+    dot: 'bg-emerald-500',
+  },
+  neutral: {
+    label: 'Neutral',
+    emoji: '😐',
+    chip: 'bg-zinc-500/15 text-zinc-300 border-zinc-500/30',
+    dot: 'bg-zinc-400',
+  },
+  negative: {
+    label: 'Negative',
+    emoji: '😟',
+    chip: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+    dot: 'bg-rose-500',
+  },
+  urgent: {
+    label: 'Urgent',
+    emoji: '⚠️',
+    chip: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    dot: 'bg-amber-500',
+  },
+  unknown: {
+    label: 'Unknown',
+    emoji: '·',
+    chip: 'bg-muted text-muted-foreground border-border',
+    dot: 'bg-muted-foreground',
+  },
+}
+
+function sentimentMeta(s: string) {
+  return SENTIMENT_META[s as SentimentLabel] ?? SENTIMENT_META.unknown
+}
+
+function SentimentOverviewDonut({ data }: { data: SentimentOverview }) {
+  const rows: { key: SentimentLabel; value: number }[] = [
+    { key: 'positive', value: data.positive },
+    { key: 'neutral', value: data.neutral },
+    { key: 'negative', value: data.negative },
+    { key: 'urgent', value: data.urgent },
+  ]
+  const chartData = rows
+    .filter((r) => r.value > 0)
+    .map((r) => ({ key: r.key, value: r.value, label: SENTIMENT_META[r.key].label }))
+
+  const total = data.totalAnalyzed
+
+  return (
+    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+          <Brain className="h-4 w-4" />
+        </span>
+        Sentiment Overview
+      </div>
+      <div className="mt-3 grid grid-cols-1 items-center gap-4 sm:grid-cols-2">
+        <div className="relative mx-auto h-[180px] w-[180px]">
+          {chartData.length === 0 ? (
+            <div className="flex h-full w-full items-center justify-center rounded-full border border-dashed border-border/60 text-xs text-muted-foreground">
+              No data
+            </div>
+          ) : (
+            <>
+              <ChartContainer config={SENTIMENT_CONFIG} className="h-[180px] w-[180px]">
+                <PieChart>
+                  <ChartTooltip content={<ChartTooltipContent nameKey="key" indicator="dot" />} />
+                  <Pie
+                    data={chartData}
+                    dataKey="value"
+                    nameKey="key"
+                    innerRadius={56}
+                    outerRadius={84}
+                    paddingAngle={2}
+                    stroke="none"
+                  >
+                    {chartData.map((entry) => (
+                      <Cell key={entry.key} fill={SENTIMENT_PIE_COLORS[entry.key]} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ChartContainer>
+              {/* Center label overlay */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-2xl font-bold tabular-nums leading-none">
+                  <AnimatedCounter value={total} />
+                </span>
+                <span className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  analyzed
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {rows.map((r) => {
+            const meta = SENTIMENT_META[r.key]
+            const pct = total > 0 ? Math.round((r.value / total) * 100) : 0
+            return (
+              <div
+                key={r.key}
+                className="flex items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-2 py-1.5"
+              >
+                <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', meta.dot)} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{meta.emoji} {meta.label}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {r.value} · {pct}%
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function SentimentTrendArea({ data }: { data: SentimentTrendPoint[] }) {
+  return (
+    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-teal-500/15 text-teal-300">
+            <TrendingUp className="h-4 w-4" />
+          </span>
+          Sentiment Trend
+        </div>
+        <span className="text-[10px] text-muted-foreground">last 7 days</span>
+      </div>
+      <div className="mt-3">
+        <ChartContainer config={SENTIMENT_CONFIG} className="h-[220px] w-full">
+          <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+            <defs>
+              <linearGradient id="sentPositive" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="var(--color-positive)" stopOpacity={0.45} />
+                <stop offset="95%" stopColor="var(--color-positive)" stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="sentNeutral" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="var(--color-neutral)" stopOpacity={0.4} />
+                <stop offset="95%" stopColor="var(--color-neutral)" stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="sentNegative" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="var(--color-negative)" stopOpacity={0.45} />
+                <stop offset="95%" stopColor="var(--color-negative)" stopOpacity={0.05} />
+              </linearGradient>
+              <linearGradient id="sentUrgent" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="var(--color-urgent)" stopOpacity={0.45} />
+                <stop offset="95%" stopColor="var(--color-urgent)" stopOpacity={0.05} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} fontSize={10} />
+            <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} fontSize={10} />
+            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <Legend />
+            <Area dataKey="positive" type="monotone" stroke="var(--color-positive)" fill="url(#sentPositive)" strokeWidth={2} stackId="a" />
+            <Area dataKey="neutral" type="monotone" stroke="var(--color-neutral)" fill="url(#sentNeutral)" strokeWidth={2} stackId="a" />
+            <Area dataKey="negative" type="monotone" stroke="var(--color-negative)" fill="url(#sentNegative)" strokeWidth={2} stackId="a" />
+            <Area dataKey="urgent" type="monotone" stroke="var(--color-urgent)" fill="url(#sentUrgent)" strokeWidth={2} stackId="a" />
+          </AreaChart>
+        </ChartContainer>
+      </div>
+    </Card>
+  )
+}
+
+function SentimentAlertList({
+  items,
+  onNavigate,
+}: {
+  items: RecentNegativeItem[]
+  onNavigate?: (v: ViewKey) => void
+}) {
+  return (
+    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-rose-500/15 text-rose-300">
+            <AlertTriangle className="h-4 w-4" />
+          </span>
+          Negative / Urgent Messages
+        </div>
+        <span className="text-[10px] text-muted-foreground">
+          {items.length} recent
+        </span>
+      </div>
+      <div className="-mr-2 mt-3 max-h-80 overflow-y-auto pr-2 scrollbar-thin">
+        {items.length === 0 ? (
+          <EmptyState
+            icon={<Heart className="h-5 w-5" />}
+            text="No negative or urgent messages — all good!"
+          />
+        ) : (
+          <ul className="space-y-2">
+            {items.map((m) => {
+              const meta = sentimentMeta(m.sentiment)
+              return (
+                <li key={m.messageId}>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate?.('chats')}
+                    className="flex w-full items-start gap-3 rounded-lg border border-transparent p-2.5 text-left transition-colors hover:border-primary/30 hover:bg-background/60"
+                  >
+                    <span className={cn('mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full', meta.dot)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium">{m.contactName}</p>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {timeAgo(m.timestamp)}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                        {m.text}
+                      </p>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                            meta.chip,
+                          )}
+                        >
+                          {meta.emoji} {meta.label}
+                        </span>
+                        {m.summary && (
+                          <span className="truncate text-[10px] text-muted-foreground">
+                            · {m.summary}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function SentimentByIntentBar({ data }: { data: IntentCount[] }) {
+  if (data.length === 0) {
+    return (
+      <Card className={cn(CARD_CLS, 'flex flex-col')}>
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-violet-500/15 text-violet-300">
+            <BarChart3 className="h-4 w-4" />
+          </span>
+          Top Intents
+        </div>
+        <div className="mt-3 flex h-[180px] items-center justify-center text-xs text-muted-foreground">
+          No intent data yet
+        </div>
+      </Card>
+    )
+  }
+  const labelled = data.map((r) => ({
+    ...r,
+    label: r.intent
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase()),
+  }))
+  const cfg: ChartConfig = { count: { label: 'Messages', color: '#14b8a6' } }
+  return (
+    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-violet-500/15 text-violet-300">
+          <BarChart3 className="h-4 w-4" />
+        </span>
+        Top Intents
+      </div>
+      <div className="mt-3">
+        <ChartContainer config={cfg} className="h-[180px] w-full">
+          <BarChart data={labelled} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 0 }}>
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} />
+            <YAxis
+              type="category"
+              dataKey="label"
+              tickLine={false}
+              axisLine={false}
+              width={100}
+              tick={{ fontSize: 10 }}
+            />
+            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} />
+          </BarChart>
+        </ChartContainer>
+      </div>
+    </Card>
+  )
+}
+
+function SentimentSection({
+  onNavigate,
+}: {
+  onNavigate?: (v: ViewKey) => void
+}) {
+  const [data, setData] = React.useState<SentimentPayload | null>(null)
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        const payload = await apiGet<SentimentPayload>('/api/sentiment')
+        if (active) {
+          setData(payload)
+          setLoading(false)
+        }
+      } catch {
+        if (active) setLoading(false)
+      }
+    }
+    void load()
+    const id = setInterval(() => void load(), 30_000)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [])
+
+  return (
+    <motion.section
+      aria-label="Sentiment analysis"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="flex flex-col gap-4"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">Sentiment Analysis</h2>
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+            <Brain className="h-3 w-3" /> AI
+          </span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          Auto-refreshes every 30s
+        </span>
+      </div>
+
+      {loading && !data ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Skeleton className="h-64 rounded-xl" />
+          <Skeleton className="h-64 rounded-xl" />
+          <Skeleton className="h-72 rounded-xl" />
+          <Skeleton className="h-72 rounded-xl" />
+        </div>
+      ) : data ? (
+        <>
+          {data.overview.totalAnalyzed === 0 ? (
+            <Card className={cn(CARD_CLS, 'col-span-full')}>
+              <EmptyState
+                icon={<Brain className="h-5 w-5" />}
+                text="No sentiment data yet. Send a test message via the Simulator to see AI-powered sentiment analysis appear here."
+              />
+            </Card>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <SentimentOverviewDonut data={data.overview} />
+            <SentimentTrendArea data={data.trend} />
+          </div>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <SentimentAlertList items={data.recentNegative} onNavigate={onNavigate} />
+            <SentimentByIntentBar data={data.byIntent} />
+          </div>
+        </>
+      ) : (
+        <Card className={cn(CARD_CLS, 'col-span-full')}>
+          <EmptyState
+            icon={<AlertTriangle className="h-5 w-5" />}
+            text="Sentiment analytics unavailable — try again in a moment."
+          />
+        </Card>
+      )}
+    </motion.section>
+  )
+}
+
+// ----------------------------------------------------------------
 // Main dashboard view
 // ----------------------------------------------------------------
 export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
@@ -1243,6 +1697,9 @@ export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
           <RecentConversationsCard conversations={conversations} onNavigate={onNavigate} />
         </div>
       </section>
+
+      {/* Sentiment Analysis — donut + trend + alert list + intents */}
+      <SentimentSection onNavigate={onNavigate} />
     </div>
   )
 }

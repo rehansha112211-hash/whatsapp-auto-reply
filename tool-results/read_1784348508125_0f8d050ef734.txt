@@ -1,0 +1,1249 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { AnimatePresence, motion } from 'framer-motion'
+     5→import {
+     6→  Activity,
+     7→  AlertTriangle,
+     8→  ArrowRight,
+     9→  BarChart3,
+    10→  Bell,
+    11→  Bot,
+    12→  Clock,
+    13→  Flame,
+    14→  MessageCircle,
+    15→  MessagesSquare,
+    16→  PieChart as PieChartIcon,
+    17→  Radio,
+    18→  Tag,
+    19→  TrendingUp,
+    20→  UserCog,
+    21→  UserPlus,
+    22→  Users,
+    23→} from 'lucide-react'
+    24→import {
+    25→  Area,
+    26→  AreaChart,
+    27→  Bar,
+    28→  BarChart,
+    29→  Cell,
+    30→  CartesianGrid,
+    31→  Legend,
+    32→  Pie,
+    33→  PieChart,
+    34→  XAxis,
+    35→  YAxis,
+    36→} from 'recharts'
+    37→import { Button } from '@/components/ui/button'
+    38→import { Card } from '@/components/ui/card'
+    39→import { Skeleton } from '@/components/ui/skeleton'
+    40→import {
+    41→  ChartContainer,
+    42→  ChartTooltip,
+    43→  ChartTooltipContent,
+    44→  type ChartConfig,
+    45→} from '@/components/ui/chart'
+    46→import { LeadBadge, StatusDot, WhatsAppStatusBadge } from '@/components/status'
+    47→import { AnimatedCounter } from '@/components/ui/animated-counter'
+    48→import { apiGet } from '@/lib/api-client'
+    49→import {
+    50→  colorFromString,
+    51→  formatDateTime,
+    52→  formatUptime,
+    53→  initials,
+    54→  timeAgo,
+    55→} from '@/lib/format'
+    56→import type { ChatListItem, DashboardStats, ViewKey } from '@/lib/types'
+    57→import { cn } from '@/lib/utils'
+    58→
+    59→// Local type for notification list items returned by /api/notifications
+    60→interface NotificationItem {
+    61→  id: string
+    62→  type: string
+    63→  title: string
+    64→  body: string
+    65→  severity: 'info' | 'success' | 'warning' | 'error'
+    66→  read: boolean
+    67→  createdAt: string
+    68→}
+    69→
+    70→const SEVERITY_DOT: Record<NotificationItem['severity'], string> = {
+    71→  info: 'bg-teal-400',
+    72→  success: 'bg-emerald-500',
+    73→  warning: 'bg-amber-500',
+    74→  error: 'bg-rose-500',
+    75→}
+    76→
+    77→const AI_STATE_MAP: Record<DashboardStats['aiStatus'], 'ok' | 'error' | 'untested'> = {
+    78→  ok: 'ok',
+    79→  error: 'error',
+    80→  untested: 'untested',
+    81→}
+    82→
+    83→// Defensive array extraction — supports plain arrays or { items | notifications | chats | data | rows }
+    84→function asArray<T>(data: unknown): T[] {
+    85→  if (Array.isArray(data)) return data as T[]
+    86→  if (data && typeof data === 'object') {
+    87→    const obj = data as Record<string, unknown>
+    88→    for (const key of ['items', 'notifications', 'chats', 'data', 'rows']) {
+    89→      if (Array.isArray(obj[key])) return obj[key] as T[]
+    90→    }
+    91→  }
+    92→  return []
+    93→}
+    94→
+    95→const CARD_CLS =
+    96→  'rounded-xl border bg-card/60 backdrop-blur p-4 gap-3 card-hover shadow-sm'
+    97→
+    98→// ----------------------------------------------------------------
+    99→// Stat card shell — consistent icon + label header
+   100→// ----------------------------------------------------------------
+   101→function StatCard({
+   102→  icon,
+   103→  label,
+   104→  accent,
+   105→  children,
+   106→  glow,
+   107→}: {
+   108→  icon: React.ReactNode
+   109→  label: string
+   110→  accent?: string
+   111→  children: React.ReactNode
+   112→  glow?: boolean
+   113→}) {
+   114→  return (
+   115→    <Card className={cn(CARD_CLS, glow && 'glow-primary')}>
+   116→      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+   117→        <span
+   118→          className={cn(
+   119→            'grid h-8 w-8 place-items-center rounded-lg',
+   120→            accent ?? 'bg-emerald-500/15 text-emerald-300',
+   121→          )}
+   122→        >
+   123→          {icon}
+   124→        </span>
+   125→        <span className="truncate">{label}</span>
+   126→      </div>
+   127→      {children}
+   128→    </Card>
+   129→  )
+   130→}
+   131→
+   132→function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
+   133→  return (
+   134→    <div className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">
+   135→      <span className="opacity-40">{icon}</span>
+   136→      <p className="text-xs">{text}</p>
+   137→    </div>
+   138→  )
+   139→}
+   140→
+   141→// ----------------------------------------------------------------
+   142→// Last 7 Days — trends section (4 charts)
+   143→// ----------------------------------------------------------------
+   144→interface TrendDay {
+   145→  date: string
+   146→  label: string
+   147→  incoming: number
+   148→  outgoing: number
+   149→  ai: number
+   150→  owner: number
+   151→  newContacts: number
+   152→}
+   153→interface CategoryCount {
+   154→  category: string
+   155→  count: number
+   156→}
+   157→interface LeadBucket {
+   158→  range: string
+   159→  count: number
+   160→}
+   161→interface TrendsData {
+   162→  days: TrendDay[]
+   163→  byCategory: CategoryCount[]
+   164→  leadDistribution: LeadBucket[]
+   165→}
+   166→
+   167→// Chart configs — map each series key to a label + CSS color.
+   168→// ChartContainer injects `--color-<key>` CSS vars for use in strokes/fills.
+   169→const AREA_CONFIG: ChartConfig = {
+   170→  incoming: { label: 'Incoming', color: '#10b981' }, // emerald-500
+   171→  outgoing: { label: 'Outgoing', color: '#14b8a6' }, // teal-500
+   172→}
+   173→const BAR_CONFIG: ChartConfig = {
+   174→  ai: { label: 'AI Replies', color: '#34d399' }, // emerald-400
+   175→  owner: { label: 'Owner Replies', color: '#38bdf8' }, // sky-400
+   176→}
+   177→const LEAD_PIE_CONFIG: ChartConfig = {
+   178→  cold: { label: 'Cold (0-24)', color: '#71717a' }, // zinc-500
+   179→  warm: { label: 'Warm (25-49)', color: '#f59e0b' }, // amber-500
+   180→  hot: { label: 'Hot (50-74)', color: '#f97316' }, // orange-500
+   181→  flame: { label: 'Flame (75-100)', color: '#10b981' }, // emerald-500
+   182→}
+   183→const SOURCES_CONFIG: ChartConfig = {
+   184→  count: { label: 'Contacts', color: '#14b8a6' }, // teal-500
+   185→}
+   186→
+   187→const LEAD_PIE_COLORS = ['#71717a', '#f59e0b', '#f97316', '#10b981']
+   188→const LEAD_PIE_KEYS = ['cold', 'warm', 'hot', 'flame'] as const
+   189→
+   190→function ChartCardShell({
+   191→  icon,
+   192→  title,
+   193→  children,
+   194→}: {
+   195→  icon: React.ReactNode
+   196→  title: string
+   197→  children: React.ReactNode
+   198→}) {
+   199→  return (
+   200→    <Card className={cn(CARD_CLS, 'flex flex-col')}>
+   201→      <div className="flex items-center gap-2 text-sm font-medium">
+   202→        <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   203→          {icon}
+   204→        </span>
+   205→        <span className="truncate">{title}</span>
+   206→      </div>
+   207→      <div className="mt-2 flex-1">{children}</div>
+   208→    </Card>
+   209→  )
+   210→}
+   211→
+   212→function ChartSkeleton() {
+   213→  return (
+   214→    <div className="flex h-[220px] w-full items-end justify-around gap-2 px-2">
+   215→      {Array.from({ length: 7 }).map((_, i) => (
+   216→        <Skeleton
+   217→          key={i}
+   218→          className="w-full rounded-md"
+   219→          style={{ height: `${30 + ((i * 13) % 70)}%` }}
+   220→        />
+   221→      ))}
+   222→    </div>
+   223→  )
+   224→}
+   225→
+   226→function MessagesAreaChart({ data }: { data: TrendDay[] }) {
+   227→  return (
+   228→    <ChartContainer config={AREA_CONFIG} className="h-[220px] w-full">
+   229→      <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+   230→        <defs>
+   231→          <linearGradient id="fillIncoming" x1="0" y1="0" x2="0" y2="1">
+   232→            <stop offset="5%" stopColor="var(--color-incoming)" stopOpacity={0.45} />
+   233→            <stop offset="95%" stopColor="var(--color-incoming)" stopOpacity={0.05} />
+   234→          </linearGradient>
+   235→          <linearGradient id="fillOutgoing" x1="0" y1="0" x2="0" y2="1">
+   236→            <stop offset="5%" stopColor="var(--color-outgoing)" stopOpacity={0.45} />
+   237→            <stop offset="95%" stopColor="var(--color-outgoing)" stopOpacity={0.05} />
+   238→          </linearGradient>
+   239→        </defs>
+   240→        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   241→        <XAxis
+   242→          dataKey="label"
+   243→          tickLine={false}
+   244→          axisLine={false}
+   245→          tickMargin={8}
+   246→        />
+   247→        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+   248→        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+   249→        <Legend />
+   250→        <Area
+   251→          dataKey="incoming"
+   252→          type="monotone"
+   253→          stroke="var(--color-incoming)"
+   254→          fill="url(#fillIncoming)"
+   255→          strokeWidth={2}
+   256→          dot={false}
+   257→        />
+   258→        <Area
+   259→          dataKey="outgoing"
+   260→          type="monotone"
+   261→          stroke="var(--color-outgoing)"
+   262→          fill="url(#fillOutgoing)"
+   263→          strokeWidth={2}
+   264→          dot={false}
+   265→        />
+   266→      </AreaChart>
+   267→    </ChartContainer>
+   268→  )
+   269→}
+   270→
+   271→function RepliesBarChart({ data }: { data: TrendDay[] }) {
+   272→  return (
+   273→    <ChartContainer config={BAR_CONFIG} className="h-[220px] w-full">
+   274→      <BarChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+   275→        <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-muted" />
+   276→        <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+   277→        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} />
+   278→        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+   279→        <Legend />
+   280→        <Bar dataKey="ai" fill="var(--color-ai)" radius={[4, 4, 0, 0]} />
+   281→        <Bar dataKey="owner" fill="var(--color-owner)" radius={[4, 4, 0, 0]} />
+   282→      </BarChart>
+   283→    </ChartContainer>
+   284→  )
+   285→}
+   286→
+   287→function LeadDistributionPie({ data }: { data: LeadBucket[] }) {
+   288→  // The API returns buckets in fixed order: 0-24, 25-49, 50-74, 75-100.
+   289→  // Re-map to friendly keys so the legend + tooltip pick up our config.
+   290→  const chartData = data.map((b, i) => ({
+   291→    range: b.range,
+   292→    count: b.count,
+   293→    key: LEAD_PIE_KEYS[i] ?? 'cold',
+   294→  }))
+   295→
+   296→  return (
+   297→    <ChartContainer config={LEAD_PIE_CONFIG} className="h-[220px] w-full">
+   298→      <PieChart>
+   299→        <ChartTooltip content={<ChartTooltipContent nameKey="key" indicator="dot" />} />
+   300→        <Pie
+   301→          data={chartData}
+   302→          dataKey="count"
+   303→          nameKey="key"
+   304→          innerRadius={48}
+   305→          outerRadius={80}
+   306→          paddingAngle={2}
+   307→          stroke="none"
+   308→        >
+   309→          {chartData.map((entry, i) => (
+   310→            <Cell key={entry.range} fill={LEAD_PIE_COLORS[i] ?? LEAD_PIE_COLORS[0]} />
+   311→          ))}
+   312→        </Pie>
+   313→        <Legend />
+   314→      </PieChart>
+   315→    </ChartContainer>
+   316→  )
+   317→}
+   318→
+   319→function LeadSourcesBar({ data }: { data: CategoryCount[] }) {
+   320→  // Horizontal bar — show up to 8 categories so the chart stays legible.
+   321→  const rows = data.slice(0, 8)
+   322→  // Friendly labels: title-case the snake_case category names.
+   323→  const labelled = rows.map((r) => ({
+   324→    ...r,
+   325→    label: r.category
+   326→      .replace(/_/g, ' ')
+   327→      .replace(/\b\w/g, (c) => c.toUpperCase()),
+   328→  }))
+   329→
+   330→  if (labelled.length === 0) {
+   331→    return (
+   332→      <div className="flex h-[220px] w-full items-center justify-center text-xs text-muted-foreground">
+   333→        No categories detected yet
+   334→      </div>
+   335→    )
+   336→  }
+   337→
+   338→  return (
+   339→    <ChartContainer config={SOURCES_CONFIG} className="h-[220px] w-full">
+   340→      <BarChart
+   341→        data={labelled}
+   342→        layout="vertical"
+   343→        margin={{ left: 8, right: 16, top: 8, bottom: 0 }}
+   344→      >
+   345→        <CartesianGrid horizontal={false} strokeDasharray="3 3" className="stroke-muted" />
+   346→        <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} />
+   347→        <YAxis
+   348→          type="category"
+   349→          dataKey="label"
+   350→          tickLine={false}
+   351→          axisLine={false}
+   352→          width={92}
+   353→          tick={{ fontSize: 11 }}
+   354→        />
+   355→        <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+   356→        <Bar dataKey="count" fill="var(--color-count)" radius={[0, 4, 4, 0]} />
+   357→      </BarChart>
+   358→    </ChartContainer>
+   359→  )
+   360→}
+   361→
+   362→function TrendsSection() {
+   363→  const [trends, setTrends] = React.useState<TrendsData | null>(null)
+   364→  const [loading, setLoading] = React.useState(true)
+   365→
+   366→  React.useEffect(() => {
+   367→    let active = true
+   368→    const load = async () => {
+   369→      try {
+   370→        const data = await apiGet<TrendsData>('/api/dashboard/trends')
+   371→        if (active) {
+   372→          setTrends(data)
+   373→          setLoading(false)
+   374→        }
+   375→      } catch {
+   376→        if (active) setLoading(false)
+   377→      }
+   378→    }
+   379→    void load()
+   380→    const id = setInterval(() => void load(), 30_000)
+   381→    return () => {
+   382→      active = false
+   383→      clearInterval(id)
+   384→    }
+   385→  }, [])
+   386→
+   387→  return (
+   388→    <section aria-label="Last 7 days trends" className="flex flex-col gap-4">
+   389→      <div className="flex items-center justify-between">
+   390→        <div className="flex items-center gap-2">
+   391→          <h2 className="text-lg font-semibold tracking-tight">Last 7 Days</h2>
+   392→          <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+   393→            7d
+   394→          </span>
+   395→        </div>
+   396→        <span className="text-[11px] text-muted-foreground">
+   397→          Auto-refreshes every 30s
+   398→        </span>
+   399→      </div>
+   400→
+   401→      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+   402→        {loading && !trends ? (
+   403→          Array.from({ length: 4 }).map((_, i) => (
+   404→            <Card key={i} className={cn(CARD_CLS, 'flex flex-col')}>
+   405→              <div className="flex items-center gap-2">
+   406→                <Skeleton className="h-8 w-8 rounded-lg" />
+   407→                <Skeleton className="h-4 w-32" />
+   408→              </div>
+   409→              <div className="mt-3">
+   410→                <ChartSkeleton />
+   411→              </div>
+   412→            </Card>
+   413→          ))
+   414→        ) : trends ? (
+   415→          <>
+   416→            <ChartCardShell
+   417→              icon={<TrendingUp className="h-4 w-4" />}
+   418→              title="Messages — Incoming vs Outgoing"
+   419→            >
+   420→              <MessagesAreaChart data={trends.days} />
+   421→            </ChartCardShell>
+   422→
+   423→            <ChartCardShell
+   424→              icon={<BarChart3 className="h-4 w-4" />}
+   425→              title="Replies — AI vs Owner"
+   426→            >
+   427→              <RepliesBarChart data={trends.days} />
+   428→            </ChartCardShell>
+   429→
+   430→            <ChartCardShell
+   431→              icon={<Flame className="h-4 w-4" />}
+   432→              title="Lead Score Distribution"
+   433→            >
+   434→              <LeadDistributionPie data={trends.leadDistribution} />
+   435→            </ChartCardShell>
+   436→
+   437→            <ChartCardShell
+   438→              icon={<PieChartIcon className="h-4 w-4" />}
+   439→              title="Lead Sources by Category"
+   440→            >
+   441→              <LeadSourcesBar data={trends.byCategory} />
+   442→            </ChartCardShell>
+   443→          </>
+   444→        ) : (
+   445→          <Card className={cn(CARD_CLS, 'col-span-full')}>
+   446→            <EmptyState
+   447→              icon={<Tag className="h-5 w-5" />}
+   448→              text="Trends unavailable — try again in a moment."
+   449→            />
+   450→          </Card>
+   451→        )}
+   452→      </div>
+   453→    </section>
+   454→  )
+   455→}
+   456→
+   457→// ----------------------------------------------------------------
+   458→// Individual stat cards
+   459→// ----------------------------------------------------------------
+   460→function WhatsAppStatusCard({
+   461→  stats,
+   462→  onNavigate,
+   463→}: {
+   464→  stats: DashboardStats
+   465→  onNavigate?: (v: ViewKey) => void
+   466→}) {
+   467→  const connected = stats.whatsappState === 'connected'
+   468→  const sessionUptimeSec = stats.connectedAt
+   469→    ? Math.max(
+   470→        0,
+   471→        Math.floor((Date.now() - new Date(stats.connectedAt).getTime()) / 1000),
+   472→      )
+   473→    : 0
+   474→  return (
+   475→    <Card className={CARD_CLS}>
+   476→      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+   477→        <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-emerald-500/25 to-teal-500/15 text-emerald-300">
+   478→          <MessageCircle className="h-4 w-4" />
+   479→        </span>
+   480→        <span className="truncate">WhatsApp Status</span>
+   481→      </div>
+   482→      <div className="flex flex-col gap-2">
+   483→        <WhatsAppStatusBadge state={stats.whatsappState} />
+   484→        {connected ? (
+   485→          <div className="space-y-0.5 text-xs text-muted-foreground">
+   486→            {stats.connectedName && (
+   487→              <div className="truncate font-medium text-foreground/80">
+   488→                {stats.connectedName}
+   489→              </div>
+   490→            )}
+   491→            {stats.connectedNumber && (
+   492→              <div className="font-mono text-[11px]">{stats.connectedNumber}</div>
+   493→            )}
+   494→            <div>Since {formatDateTime(stats.connectedAt)}</div>
+   495→            <div className="text-emerald-300/80">
+   496→              Session {formatUptime(sessionUptimeSec)}
+   497→            </div>
+   498→          </div>
+   499→        ) : (
+   500→          <Button
+   501→            size="sm"
+   502→            onClick={() => onNavigate?.('whatsapp')}
+   503→            className="mt-1 w-full gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700"
+   504→          >
+   505→            Connect WhatsApp
+   506→            <ArrowRight className="h-3.5 w-3.5" />
+   507→          </Button>
+   508→        )}
+   509→      </div>
+   510→    </Card>
+   511→  )
+   512→}
+   513→
+   514→function TodayMessagesCard({ stats }: { stats: DashboardStats }) {
+   515→  return (
+   516→    <StatCard icon={<Activity className="h-4 w-4" />} label="Today's Messages">
+   517→      <div className="flex flex-col gap-1">
+   518→        <div className="text-3xl font-bold tabular-nums">
+   519→          <AnimatedCounter value={stats.todayMessages} />
+   520→        </div>
+   521→        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+   522→          <span className="inline-flex items-center gap-1">
+   523→            <Bot className="h-3 w-3 text-emerald-300" />
+   524→            AI {stats.aiReplies}
+   525→          </span>
+   526→          <span className="inline-flex items-center gap-1">
+   527→            <Users className="h-3 w-3 text-teal-300" />
+   528→            Owner {stats.ownerReplies}
+   529→          </span>
+   530→        </div>
+   531→      </div>
+   532→    </StatCard>
+   533→  )
+   534→}
+   535→
+   536→function TotalContactsCard({ stats }: { stats: DashboardStats }) {
+   537→  return (
+   538→    <StatCard
+   539→      icon={<Users className="h-4 w-4" />}
+   540→      label="Total Contacts"
+   541→      accent="bg-teal-500/15 text-teal-300"
+   542→    >
+   543→      <div className="flex flex-col gap-1">
+   544→        <div className="text-3xl font-bold tabular-nums">
+   545→          <AnimatedCounter value={stats.totalContacts} />
+   546→        </div>
+   547→        <div className="inline-flex items-center gap-1 text-[11px] text-emerald-300/90">
+   548→          <TrendingUp className="h-3 w-3" />
+   549→          +{stats.newCustomersToday} new today
+   550→        </div>
+   551→      </div>
+   552→    </StatCard>
+   553→  )
+   554→}
+   555→
+   556→function HotLeadsCard({
+   557→  stats,
+   558→  onNavigate,
+   559→}: {
+   560→  stats: DashboardStats
+   561→  onNavigate?: (v: ViewKey) => void
+   562→}) {
+   563→  return (
+   564→    <StatCard
+   565→      icon={<Flame className="h-4 w-4" />}
+   566→      label="Hot Leads"
+   567→      accent="bg-amber-500/15 text-amber-300"
+   568→      glow
+   569→    >
+   570→      <div className="flex flex-col gap-2">
+   571→        <div className="flex items-baseline gap-2">
+   572→          <span className="text-3xl font-bold tabular-nums">
+   573→            <AnimatedCounter value={stats.hotLeads} />
+   574→          </span>
+   575→          <span className="text-[11px] text-muted-foreground">score ≥ 70</span>
+   576→        </div>
+   577→        <Button
+   578→          size="sm"
+   579→          variant="outline"
+   580→          onClick={() => onNavigate?.('leads')}
+   581→          className="w-full gap-1.5 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200"
+   582→        >
+   583→          View leads
+   584→          <ArrowRight className="h-3.5 w-3.5" />
+   585→        </Button>
+   586→      </div>
+   587→    </StatCard>
+   588→  )
+   589→}
+   590→
+   591→function AiRepliesCard({ stats }: { stats: DashboardStats }) {
+   592→  return (
+   593→    <StatCard
+   594→      icon={<Bot className="h-4 w-4" />}
+   595→      label="AI Replies (today)"
+   596→      accent="bg-emerald-500/15 text-emerald-300"
+   597→    >
+   598→      <div className="flex flex-col gap-1">
+   599→        <div className="text-3xl font-bold tabular-nums">
+   600→          <AnimatedCounter value={stats.aiReplies} />
+   601→        </div>
+   602→        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+   603→          <StatusDot state={AI_STATE_MAP[stats.aiStatus]} pulse={stats.aiStatus === 'ok'} />
+   604→          <span className="truncate font-mono">
+   605→            {stats.aiProvider}/{stats.aiModel}
+   606→          </span>
+   607→        </div>
+   608→      </div>
+   609→    </StatCard>
+   610→  )
+   611→}
+   612→
+   613→function SystemUptimeCard({ stats }: { stats: DashboardStats }) {
+   614→  const operational = stats.dbStatus === 'ok'
+   615→  return (
+   616→    <StatCard
+   617→      icon={<Clock className="h-4 w-4" />}
+   618→      label="System Uptime"
+   619→      accent="bg-teal-500/15 text-teal-300"
+   620→    >
+   621→      <div className="flex flex-col gap-1">
+   622→        <div className="text-3xl font-bold tabular-nums">
+   623→          {formatUptime(stats.uptimeSec)}
+   624→        </div>
+   625→        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+   626→          <StatusDot state={stats.dbStatus} pulse={operational} />
+   627→          <span className={operational ? 'text-emerald-300/90' : 'text-rose-300'}>
+   628→            {operational ? 'System operational' : 'Database issue'}
+   629→          </span>
+   630→        </div>
+   631→      </div>
+   632→    </StatCard>
+   633→  )
+   634→}
+   635→
+   636→// ----------------------------------------------------------------
+   637→// Recent activity (notifications)
+   638→// ----------------------------------------------------------------
+   639→function RecentActivityCard({ notifications }: { notifications: NotificationItem[] }) {
+   640→  return (
+   641→    <Card className={CARD_CLS}>
+   642→      <div className="flex items-center justify-between">
+   643→        <div className="flex items-center gap-2 text-sm font-medium">
+   644→          <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   645→            <Bell className="h-4 w-4" />
+   646→          </span>
+   647→          Recent Activity
+   648→        </div>
+   649→        <span className="text-[11px] text-muted-foreground">
+   650→          {notifications.length} recent
+   651→        </span>
+   652→      </div>
+   653→      <div className="-mr-2 max-h-80 overflow-y-auto pr-2 scrollbar-thin">
+   654→        {notifications.length === 0 ? (
+   655→          <EmptyState icon={<Bell className="h-5 w-5" />} text="No recent notifications" />
+   656→        ) : (
+   657→          <ul className="space-y-2">
+   658→            {notifications.map((n) => (
+   659→              <li
+   660→                key={n.id}
+   661→                className="flex gap-3 rounded-lg border border-border/50 bg-background/40 p-2.5 transition-colors hover:bg-background/70"
+   662→              >
+   663→                <span
+   664→                  className={cn(
+   665→                    'mt-1.5 h-2 w-2 shrink-0 rounded-full',
+   666→                    SEVERITY_DOT[n.severity] ?? 'bg-zinc-400',
+   667→                  )}
+   668→                />
+   669→                <div className="min-w-0 flex-1">
+   670→                  <div className="flex items-center justify-between gap-2">
+   671→                    <p className="truncate text-sm font-medium">{n.title}</p>
+   672→                    <span className="shrink-0 text-[10px] text-muted-foreground">
+   673→                      {timeAgo(n.createdAt)}
+   674→                    </span>
+   675→                  </div>
+   676→                  {n.body && (
+   677→                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+   678→                      {n.body}
+   679→                    </p>
+   680→                  )}
+   681→                </div>
+   682→              </li>
+   683→            ))}
+   684→          </ul>
+   685→        )}
+   686→      </div>
+   687→    </Card>
+   688→  )
+   689→}
+   690→
+   691→// ----------------------------------------------------------------
+   692→// Recent conversations
+   693→// ----------------------------------------------------------------
+   694→function RecentConversationsCard({
+   695→  conversations,
+   696→  onNavigate,
+   697→}: {
+   698→  conversations: ChatListItem[]
+   699→  onNavigate?: (v: ViewKey) => void
+   700→}) {
+   701→  return (
+   702→    <Card className={CARD_CLS}>
+   703→      <div className="flex items-center justify-between">
+   704→        <div className="flex items-center gap-2 text-sm font-medium">
+   705→          <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   706→            <MessagesSquare className="h-4 w-4" />
+   707→          </span>
+   708→          Recent Conversations
+   709→        </div>
+   710→        <button
+   711→          type="button"
+   712→          onClick={() => onNavigate?.('chats')}
+   713→          className="text-[11px] text-emerald-300 transition-colors hover:text-emerald-200"
+   714→        >
+   715→          View all
+   716→        </button>
+   717→      </div>
+   718→      <div className="-mr-2 max-h-80 overflow-y-auto pr-2 scrollbar-thin">
+   719→        {conversations.length === 0 ? (
+   720→          <EmptyState
+   721→            icon={<MessageCircle className="h-5 w-5" />}
+   722→            text="No conversations yet"
+   723→          />
+   724→        ) : (
+   725→          <ul className="space-y-1.5">
+   726→            {conversations.map((c) => (
+   727→              <li key={c.contactId}>
+   728→                <button
+   729→                  type="button"
+   730→                  onClick={() => onNavigate?.('chats')}
+   731→                  className="flex w-full items-center gap-3 rounded-lg border border-transparent p-2 text-left transition-colors hover:border-primary/30 hover:bg-background/60"
+   732→                >
+   733→                  <span
+   734→                    className={cn(
+   735→                      'grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold',
+   736→                      colorFromString(c.name),
+   737→                    )}
+   738→                  >
+   739→                    {initials(c.name)}
+   740→                  </span>
+   741→                  <div className="min-w-0 flex-1">
+   742→                    <div className="flex items-center justify-between gap-2">
+   743→                      <p className="truncate text-sm font-medium">{c.name}</p>
+   744→                      <span className="shrink-0 text-[10px] text-muted-foreground">
+   745→                        {timeAgo(c.lastMessageAt)}
+   746→                      </span>
+   747→                    </div>
+   748→                    <div className="flex items-center justify-between gap-2">
+   749→                      <p className="truncate text-xs text-muted-foreground">
+   750→                        {c.lastMessage || '—'}
+   751→                      </p>
+   752→                      <LeadBadge score={c.leadScore} />
+   753→                    </div>
+   754→                  </div>
+   755→                </button>
+   756→              </li>
+   757→            ))}
+   758→          </ul>
+   759→        )}
+   760→      </div>
+   761→    </Card>
+   762→  )
+   763→}
+   764→
+   765→// ----------------------------------------------------------------
+   766→// Live Activity Feed — unified real-time timeline
+   767→// ----------------------------------------------------------------
+   768→type ActivityType =
+   769→  | 'ai_reply'
+   770→  | 'owner_message'
+   771→  | 'new_contact'
+   772→  | 'new_lead'
+   773→  | 'owner_request'
+   774→  | 'whatsapp_event'
+   775→  | 'ai_error'
+   776→  | 'scheduled_sent'
+   777→
+   778→type Severity = 'info' | 'success' | 'warning' | 'error'
+   779→
+   780→type IconKey =
+   781→  | 'bot'
+   782→  | 'user'
+   783→  | 'user-plus'
+   784→  | 'flame'
+   785→  | 'bell'
+   786→  | 'message-circle'
+   787→  | 'alert'
+   788→  | 'clock'
+   789→
+   790→interface ActivityItem {
+   791→  id: string
+   792→  type: ActivityType
+   793→  title: string
+   794→  description: string
+   795→  timestamp: string
+   796→  contactId: string | null
+   797→  contactName: string | null
+   798→  contactPhone: string | null
+   799→  severity: Severity
+   800→  icon: IconKey
+   801→  meta: {
+   802→    replyMs?: number
+   803→    leadScore?: number
+   804→    category?: string
+   805→  }
+   806→}
+   807→
+   808→interface ActivityResponse {
+   809→  items: ActivityItem[]
+   810→}
+   811→
+   812→// Icon → lucide element + accent color for the trailing icon chip.
+   813→const ACTIVITY_ICON: Record<
+   814→  IconKey,
+   815→  { node: React.ReactNode; chip: string }
+   816→> = {
+   817→  bot: {
+   818→    node: <Bot className="h-3.5 w-3.5" />,
+   819→    chip: 'bg-emerald-500/15 text-emerald-300',
+   820→  },
+   821→  user: {
+   822→    node: <UserCog className="h-3.5 w-3.5" />,
+   823→    chip: 'bg-sky-500/15 text-sky-300',
+   824→  },
+   825→  'user-plus': {
+   826→    node: <UserPlus className="h-3.5 w-3.5" />,
+   827→    chip: 'bg-teal-500/15 text-teal-300',
+   828→  },
+   829→  flame: {
+   830→    node: <Flame className="h-3.5 w-3.5" />,
+   831→    chip: 'bg-amber-500/15 text-amber-300',
+   832→  },
+   833→  bell: {
+   834→    node: <Bell className="h-3.5 w-3.5" />,
+   835→    chip: 'bg-amber-500/15 text-amber-300',
+   836→  },
+   837→  'message-circle': {
+   838→    node: <MessageCircle className="h-3.5 w-3.5" />,
+   839→    chip: 'bg-emerald-500/15 text-emerald-300',
+   840→  },
+   841→  alert: {
+   842→    node: <AlertTriangle className="h-3.5 w-3.5" />,
+   843→    chip: 'bg-rose-500/15 text-rose-300',
+   844→  },
+   845→  clock: {
+   846→    node: <Clock className="h-3.5 w-3.5" />,
+   847→    chip: 'bg-violet-500/15 text-violet-300',
+   848→  },
+   849→}
+   850→
+   851→// Severity → dot color (timeline marker on the left rail).
+   852→const SEVERITY_DOT_COLOR: Record<Severity, string> = {
+   853→  info: 'bg-sky-500',
+   854→  success: 'bg-emerald-500',
+   855→  warning: 'bg-amber-500',
+   856→  error: 'bg-rose-500',
+   857→}
+   858→
+   859→// Severity → meta badge text color (for "1.2s reply" / "score 82" chips).
+   860→const SEVERITY_BADGE: Record<Severity, string> = {
+   861→  info: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
+   862→  success: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+   863→  warning: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+   864→  error: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+   865→}
+   866→
+   867→// Format replyMs (e.g. 1240) as "1.2s" or "240ms" if sub-second.
+   868→function formatReplyMs(ms: number): string {
+   869→  if (ms < 1000) return `${Math.round(ms)}ms`
+   870→  return `${(ms / 1000).toFixed(1)}s`
+   871→}
+   872→
+   873→// Title-case a snake_case category for display.
+   874→function prettyCategory(cat?: string): string | null {
+   875→  if (!cat) return null
+   876→  return cat
+   877→    .replace(/_/g, ' ')
+   878→    .replace(/\b\w/g, (c) => c.toUpperCase())
+   879→}
+   880→
+   881→function LiveActivityFeed({
+   882→  onNavigate,
+   883→}: {
+   884→  onNavigate?: (v: ViewKey) => void
+   885→}) {
+   886→  const [items, setItems] = React.useState<ActivityItem[]>([])
+   887→  const [loading, setLoading] = React.useState(true)
+   888→  const [error, setError] = React.useState(false)
+   889→  const firstLoadRef = React.useRef(true)
+   890→
+   891→  // Poll /api/dashboard/activity every 8s.
+   892→  React.useEffect(() => {
+   893→    let active = true
+   894→    const load = async () => {
+   895→      try {
+   896→        const data = await apiGet<ActivityResponse | ActivityItem[]>(
+   897→          '/api/dashboard/activity',
+   898→        )
+   899→        if (!active) return
+   900→        const next = Array.isArray(data)
+   901→          ? (data as ActivityItem[])
+   902→          : (data as ActivityResponse).items ?? []
+   903→        setItems(next)
+   904→        setLoading(false)
+   905→        setError(false)
+   906→      } catch {
+   907→        if (active) {
+   908→          // Keep showing previous items on transient errors.
+   909→          setLoading(false)
+   910→          setError(true)
+   911→        }
+   912→      } finally {
+   913→        if (active) firstLoadRef.current = false
+   914→      }
+   915→    }
+   916→    void load()
+   917→    const id = setInterval(() => void load(), 8_000)
+   918→    return () => {
+   919→      active = false
+   920→      clearInterval(id)
+   921→    }
+   922→  }, [])
+   923→
+   924→  return (
+   925→    <Card
+   926→      className={cn(
+   927→        CARD_CLS,
+   928→        'flex flex-col gap-0 overflow-hidden p-0',
+   929→      )}
+   930→    >
+   931→      {/* Header */}
+   932→      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-gradient-to-r from-emerald-500/5 to-transparent px-5 py-4">
+   933→        <div className="flex items-center gap-2">
+   934→          <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-300">
+   935→            <Activity className="h-4 w-4" />
+   936→          </span>
+   937→          <div className="flex flex-col">
+   938→            <span className="text-sm font-semibold leading-tight">
+   939→              Live Activity
+   940→            </span>
+   941→            <span className="text-[10px] text-muted-foreground">
+   942→              AI replies · leads · owner actions · system events
+   943→            </span>
+   944→          </div>
+   945→        </div>
+   946→        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+   947→          <span className="relative flex h-1.5 w-1.5">
+   948→            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+   949→            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+   950→          </span>
+   951→          LIVE
+   952→        </span>
+   953→      </div>
+   954→
+   955→      {/* Body — scrollable timeline */}
+   956→      <div className="flex-1">
+   957→        {loading && items.length === 0 ? (
+   958→          <div className="space-y-3 p-5">
+   959→            {Array.from({ length: 4 }).map((_, i) => (
+   960→              <div key={i} className="flex gap-3">
+   961→                <Skeleton className="h-2.5 w-2.5 shrink-0 rounded-full" />
+   962→                <div className="flex-1 space-y-2">
+   963→                  <Skeleton className="h-3.5 w-2/3" />
+   964→                  <Skeleton className="h-3 w-full" />
+   965→                </div>
+   966→              </div>
+   967→            ))}
+   968→          </div>
+   969→        ) : items.length === 0 ? (
+   970→          <EmptyState
+   971→            icon={<Radio className="h-5 w-5" />}
+   972→            text="No activity yet. Send a test message via the Simulator to see AI replies appear here."
+   973→          />
+   974→        ) : (
+   975→          <ol
+   976→            className="relative max-h-[500px] overflow-y-auto p-3 scrollbar-thin"
+   977→            aria-live="polite"
+   978→          >
+   979→            <AnimatePresence initial={firstLoadRef.current}>
+   980→              {items.map((item, i) => {
+   981→                const isLatest = i === 0
+   982→                const icon = ACTIVITY_ICON[item.icon] ?? ACTIVITY_ICON.bot
+   983→                const dotColor =
+   984→                  SEVERITY_DOT_COLOR[item.severity] ?? 'bg-emerald-500'
+   985→                const badgeCls =
+   986→                  SEVERITY_BADGE[item.severity] ?? SEVERITY_BADGE.info
+   987→                const clickable = !!item.contactId
+   988→                return (
+   989→                  <motion.li
+   990→                    key={item.id}
+   991→                    layout
+   992→                    initial={{ opacity: 0, height: 0 }}
+   993→                    animate={{
+   994→                      opacity: 1,
+   995→                      height: 'auto',
+   996→                      transition: {
+   997→                        opacity: { duration: 0.25 },
+   998→                        height: { duration: 0.25 },
+   999→                        delay: firstLoadRef.current
+  1000→                          ? Math.min(i * 0.04, 0.3)
+  1001→                          : 0,
+  1002→                      },
+  1003→                    }}
+  1004→                    exit={{ opacity: 0, height: 0, transition: { duration: 0.2 } }}
+  1005→                    className="relative"
+  1006→                  >
+  1007→                    <button
+  1008→                      type="button"
+  1009→                      disabled={!clickable}
+  1010→                      onClick={() => clickable && onNavigate?.('chats')}
+  1011→                      className={cn(
+  1012→                        'group flex w-full items-start gap-3 rounded-lg border border-transparent px-2 py-2.5 text-left transition-colors',
+  1013→                        clickable
+  1014→                          ? 'cursor-pointer hover:border-primary/30 hover:bg-background/60'
+  1015→                          : 'cursor-default',
+  1016→                      )}
+  1017→                    >
+  1018→                      {/* Timeline rail */}
+  1019→                      <span className="relative flex w-4 shrink-0 flex-col items-center self-stretch">
+  1020→                        <span
+  1021→                          className={cn(
+  1022→                            'mt-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-background',
+  1023→                            dotColor,
+  1024→                            isLatest && 'pulse-ring',
+  1025→                          )}
+  1026→                          aria-hidden
+  1027→                        />
+  1028→                        {i < items.length - 1 && (
+  1029→                          <span className="mt-1 w-px flex-1 bg-border" />
+  1030→                        )}
+  1031→                      </span>
+  1032→
+  1033→                      {/* Content */}
+  1034→                      <div className="min-w-0 flex-1">
+  1035→                        <div className="flex items-start justify-between gap-2">
+  1036→                          <p className="truncate text-sm font-medium leading-snug">
+  1037→                            {item.title}
+  1038→                          </p>
+  1039→                          <span
+  1040→                            className={cn(
+  1041→                              'grid h-6 w-6 shrink-0 place-items-center rounded-md',
+  1042→                              icon.chip,
+  1043→                            )}
+  1044→                            aria-hidden
+  1045→                          >
+  1046→                            {icon.node}
+  1047→                          </span>
+  1048→                        </div>
+  1049→                        {item.description && (
+  1050→                          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+  1051→                            {item.description}
+  1052→                          </p>
+  1053→                        )}
+  1054→                        {/* Meta row */}
+  1055→                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+  1056→                          {item.contactName && (
+  1057→                            <span className="inline-flex items-center gap-1 truncate font-medium text-foreground/70">
+  1058→                              <Users className="h-3 w-3 opacity-70" />
+  1059→                              <span className="truncate">{item.contactName}</span>
+  1060→                            </span>
+  1061→                          )}
+  1062→                          <span className="opacity-60">·</span>
+  1063→                          <span>{timeAgo(item.timestamp)}</span>
+  1064→                          {item.meta.replyMs !== undefined && (
+  1065→                            <span
+  1066→                              className={cn(
+  1067→                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+  1068→                                badgeCls,
+  1069→                              )}
+  1070→                            >
+  1071→                              <Clock className="h-2.5 w-2.5" />
+  1072→                              {formatReplyMs(item.meta.replyMs)} reply
+  1073→                            </span>
+  1074→                          )}
+  1075→                          {item.meta.leadScore !== undefined && (
+  1076→                            <span
+  1077→                              className={cn(
+  1078→                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+  1079→                                badgeCls,
+  1080→                              )}
+  1081→                            >
+  1082→                              <Flame className="h-2.5 w-2.5" />
+  1083→                              score {item.meta.leadScore}
+  1084→                            </span>
+  1085→                          )}
+  1086→                          {item.meta.category && (
+  1087→                            <span
+  1088→                              className={cn(
+  1089→                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-medium',
+  1090→                                badgeCls,
+  1091→                              )}
+  1092→                            >
+  1093→                              <Tag className="h-2.5 w-2.5" />
+  1094→                              {prettyCategory(item.meta.category)}
+  1095→                            </span>
+  1096→                          )}
+  1097→                        </div>
+  1098→                      </div>
+  1099→                    </button>
+  1100→                  </motion.li>
+  1101→                )
+  1102→              })}
+  1103→            </AnimatePresence>
+  1104→          </ol>
+  1105→        )}
+  1106→      </div>
+  1107→
+  1108→      {/* Footer */}
+  1109→      {error && items.length > 0 && (
+  1110→        <div className="border-t border-border/60 px-5 py-2 text-[10px] text-muted-foreground">
+  1111→          Showing last cached activity (refresh failed)
+  1112→        </div>
+  1113→      )}
+  1114→    </Card>
+  1115→  )
+  1116→}
+  1117→
+  1118→// ----------------------------------------------------------------
+  1119→// Main dashboard view
+  1120→// ----------------------------------------------------------------
+  1121→export function DashboardView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
+  1122→  const [stats, setStats] = React.useState<DashboardStats | null>(null)
+  1123→  const [notifications, setNotifications] = React.useState<NotificationItem[]>([])
+  1124→  const [conversations, setConversations] = React.useState<ChatListItem[]>([])
+  1125→  const [loading, setLoading] = React.useState(true)
+  1126→
+  1127→  // Poll dashboard stats every 5s
+  1128→  React.useEffect(() => {
+  1129→    let active = true
+  1130→    const load = async () => {
+  1131→      try {
+  1132→        const data = await apiGet<DashboardStats>('/api/dashboard')
+  1133→        if (active) {
+  1134→          setStats(data)
+  1135→          setLoading(false)
+  1136→        }
+  1137→      } catch {
+  1138→        if (active) setLoading(false)
+  1139→      }
+  1140→    }
+  1141→    void load()
+  1142→    const id = setInterval(() => void load(), 5000)
+  1143→    return () => {
+  1144→      active = false
+  1145→      clearInterval(id)
+  1146→    }
+  1147→  }, [])
+  1148→
+  1149→  // Poll recent notifications every 10s
+  1150→  React.useEffect(() => {
+  1151→    let active = true
+  1152→    const load = async () => {
+  1153→      try {
+  1154→        const data = await apiGet<unknown>('/api/notifications?limit=8')
+  1155→        if (active) setNotifications(asArray<NotificationItem>(data))
+  1156→      } catch {
+  1157→        // route may not yet be deployed by another agent — keep previous data
+  1158→      }
+  1159→    }
+  1160→    void load()
+  1161→    const id = setInterval(() => void load(), 10000)
+  1162→    return () => {
+  1163→      active = false
+  1164→      clearInterval(id)
+  1165→    }
+  1166→  }, [])
+  1167→
+  1168→  // Poll recent conversations every 10s
+  1169→  React.useEffect(() => {
+  1170→    let active = true
+  1171→    const load = async () => {
+  1172→      try {
+  1173→        const data = await apiGet<unknown>('/api/chats?limit=6')
+  1174→        if (active) setConversations(asArray<ChatListItem>(data))
+  1175→      } catch {
+  1176→        // route may not yet be deployed by another agent — keep previous data
+  1177→      }
+  1178→    }
+  1179→    void load()
+  1180→    const id = setInterval(() => void load(), 10000)
+  1181→    return () => {
+  1182→      active = false
+  1183→      clearInterval(id)
+  1184→    }
+  1185→  }, [])
+  1186→
+  1187→  return (
+  1188→    <div className="flex flex-col gap-6">
+  1189→      {/* Header */}
+  1190→      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  1191→        <div>
+  1192→          <h1 className="text-2xl font-bold tracking-tight text-gradient-premium">Dashboard</h1>
+  1193→          <p className="text-sm text-muted-foreground">
+  1194→            Real-time overview of your WhatsApp AI auto-reply platform
+  1195→          </p>
+  1196→        </div>
+  1197→        <div className="inline-flex items-center gap-2 self-start rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300">
+  1198→          <span className="relative flex h-2 w-2">
+  1199→            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+  1200→            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+  1201→          </span>
+  1202→          Live
+  1203→        </div>
+  1204→      </header>
+  1205→
+  1206→      {/* Stat cards grid */}
+  1207→      <section
+  1208→        aria-label="Key metrics"
+  1209→        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+  1210→      >
+  1211→        {loading && !stats ? (
+  1212→          Array.from({ length: 6 }).map((_, i) => (
+  1213→            <Skeleton key={i} className="h-36 rounded-xl" />
+  1214→          ))
+  1215→        ) : stats ? (
+  1216→          <>
+  1217→            <WhatsAppStatusCard stats={stats} onNavigate={onNavigate} />
+  1218→            <TodayMessagesCard stats={stats} />
+  1219→            <TotalContactsCard stats={stats} />
+  1220→            <HotLeadsCard stats={stats} onNavigate={onNavigate} />
+  1221→            <AiRepliesCard stats={stats} />
+  1222→            <SystemUptimeCard stats={stats} />
+  1223→          </>
+  1224→        ) : null}
+  1225→      </section>
+  1226→
+  1227→      {/* Last 7 days — 4 charts (area + bar + pie + horizontal bar) */}
+  1228→      <TrendsSection />
+  1229→
+  1230→      {/* Live activity feed (full-width timeline) + side rail with
+  1231→          recent notifications & recent conversations.
+  1232→
+  1233→          On large screens the timeline spans 7 of 12 columns while the
+  1234→          notification + conversations stack fills the remaining 5, giving
+  1235→          the feed the room it needs for a tall scrollable list while the
+  1236→          side cards stay readable. */}
+  1237→      <section className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+  1238→        <div className="lg:col-span-7">
+  1239→          <LiveActivityFeed onNavigate={onNavigate} />
+  1240→        </div>
+  1241→        <div className="flex flex-col gap-4 lg:col-span-5">
+  1242→          <RecentActivityCard notifications={notifications} />
+  1243→          <RecentConversationsCard conversations={conversations} onNavigate={onNavigate} />
+  1244→        </div>
+  1245→      </section>
+  1246→    </div>
+  1247→  )
+  1248→}
+  1249→

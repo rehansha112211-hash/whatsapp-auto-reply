@@ -64,6 +64,7 @@ import {
   tagColor,
 } from '@/lib/format'
 import { useRealtime } from '@/hooks/use-realtime'
+import { useCan } from '@/hooks/use-current-user'
 import { LeadBadge } from '@/components/status'
 import type {
   ChatListItem,
@@ -1030,6 +1031,12 @@ function ChatWindow({
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const pinnedToBottomRef = React.useRef(true)
 
+  // Permission gate: viewers (read-only) cannot send or schedule messages.
+  // The Send and Schedule buttons are disabled with a tooltip explaining
+  // why. The API also rejects the request with 403 if they try anyway.
+  const canSend = useCan('canSendMessages')
+  const canSchedule = useCan('canScheduleMessages')
+
   // Quick replies: shared between the Zap popover, the slash-command
   // dropdown, and the manager dialog.
   const qr = useQuickReplies()
@@ -1207,7 +1214,7 @@ function ChatWindow({
 
   const handleSubmit = async () => {
     const trimmed = text.trim()
-    if (!trimmed || sending) return
+    if (!trimmed || sending || !canSend) return
     setText('')
     await onSend(trimmed)
   }
@@ -1489,34 +1496,47 @@ function ChatWindow({
                 size="icon"
                 className="h-10 shrink-0 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
                 onClick={openSchedule}
-                disabled={!text.trim() || !contact}
+                disabled={!text.trim() || !contact || !canSchedule}
                 aria-label="Schedule message"
               >
                 <Clock className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Schedule this message for later</TooltipContent>
+            <TooltipContent side="top">
+              {canSchedule
+                ? 'Schedule this message for later'
+                : 'You need operator role to schedule messages'}
+            </TooltipContent>
           </Tooltip>
-          <Button
-            onClick={handleSubmit}
-            disabled={!text.trim() || sending}
-            className={cn(
-              'h-10 shrink-0 gap-1.5 px-3',
-              aiActive
-                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
-                : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
-            )}
-            aria-label={aiActive ? 'Take over and send' : 'Send message'}
-          >
-            {sending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            <span className="hidden text-xs font-semibold sm:inline">
-              {aiActive ? 'Take over & send' : 'Send'}
-            </span>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={handleSubmit}
+                disabled={!text.trim() || sending || !canSend}
+                className={cn(
+                  'h-10 shrink-0 gap-1.5 px-3',
+                  aiActive
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700',
+                )}
+                aria-label={aiActive ? 'Take over and send' : 'Send message'}
+              >
+                {sending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                <span className="hidden text-xs font-semibold sm:inline">
+                  {aiActive ? 'Take over & send' : 'Send'}
+                </span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {canSend
+                ? (aiActive ? 'Take over from AI and send' : 'Send message')
+                : 'You need operator role to send messages'}
+            </TooltipContent>
+          </Tooltip>
         </div>
         <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
           <span>Enter to send · Shift+Enter for newline</span>

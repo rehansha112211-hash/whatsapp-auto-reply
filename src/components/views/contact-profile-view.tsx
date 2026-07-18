@@ -54,6 +54,10 @@ import {
   Calendar,
   Timer,
   Gauge,
+  Smile,
+  Meh,
+  Frown,
+  Heart,
 } from 'lucide-react'
 import {
   Area,
@@ -166,6 +170,9 @@ interface ProfileMessage {
   text: string
   status: string
   read: boolean
+  sentiment: string
+  sentimentScore: number
+  intent: string
   timestamp: string
 }
 
@@ -363,6 +370,78 @@ const SOURCE_PIE_COLORS: Record<string, string> = {
 }
 
 const HEATMAP_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+// ---------------------------------------------------------------------------
+// Sentiment badge — small colored dot + emoji label used on the
+// conversation timeline and the per-contact stats summary card.
+// ---------------------------------------------------------------------------
+type SentimentKey = 'positive' | 'neutral' | 'negative' | 'urgent' | 'unknown'
+
+const SENTIMENT_META: Record<
+  SentimentKey,
+  { label: string; emoji: string; dot: string; chip: string; icon: React.ReactNode }
+> = {
+  positive: {
+    label: 'Positive',
+    emoji: '😊',
+    dot: 'bg-emerald-500',
+    chip: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+    icon: <Smile className="h-3 w-3" />,
+  },
+  neutral: {
+    label: 'Neutral',
+    emoji: '😐',
+    dot: 'bg-zinc-400',
+    chip: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30',
+    icon: <Meh className="h-3 w-3" />,
+  },
+  negative: {
+    label: 'Negative',
+    emoji: '😟',
+    dot: 'bg-rose-500',
+    chip: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
+    icon: <Frown className="h-3 w-3" />,
+  },
+  urgent: {
+    label: 'Urgent',
+    emoji: '⚠️',
+    dot: 'bg-amber-500',
+    chip: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+    icon: <AlertTriangle className="h-3 w-3" />,
+  },
+  unknown: {
+    label: '—',
+    emoji: '·',
+    dot: 'bg-muted-foreground',
+    chip: 'bg-muted text-muted-foreground border-border',
+    icon: <Info className="h-3 w-3" />,
+  },
+}
+
+function sentimentMeta(s: string): { label: string; emoji: string; dot: string; chip: string; icon: React.ReactNode } {
+  return SENTIMENT_META[s as SentimentKey] ?? SENTIMENT_META.unknown
+}
+
+/** Small inline sentiment pill (dot + emoji + label). */
+function SentimentBadge({ sentiment }: { sentiment: string }) {
+  const meta = sentimentMeta(sentiment)
+  if (sentiment === 'unknown' || sentiment === '' || !sentiment) {
+    return null
+  }
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none',
+        meta.chip,
+      )}
+      title={`Sentiment: ${meta.label}`}
+    >
+      <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} aria-hidden />
+      <span>{meta.emoji}</span>
+      <span>{meta.label}</span>
+    </span>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -915,7 +994,7 @@ export function ContactProfileView({
             </TabsContent>
 
             <TabsContent value="statistics" className="mt-4">
-              <StatisticsTab contactId={contactId} />
+              <StatisticsTab contactId={contactId} messages={messages} />
             </TabsContent>
           </Tabs>
         </Card>
@@ -1414,14 +1493,20 @@ function ConversationTab({
             <div className="space-y-2">
               {group.items.map((m) => {
                 const isOutgoing = m.direction === 'outgoing'
+                const showSentiment = !isOutgoing && m.sentiment && m.sentiment !== 'unknown'
                 return (
                   <div
                     key={m.id}
-                    className={cn('flex', isOutgoing ? 'justify-end' : 'justify-start')}
+                    className={cn('flex flex-col gap-0.5', isOutgoing ? 'items-end' : 'items-start')}
                   >
+                    {showSentiment && (
+                      <div className="px-1">
+                        <SentimentBadge sentiment={m.sentiment} />
+                      </div>
+                    )}
                     <div
                       className={cn(
-                        'max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm',
+                        'flex max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm',
                         isOutgoing
                           ? m.source === 'owner'
                             ? 'rounded-br-sm bg-sky-500/20 text-sky-50'
@@ -1429,20 +1514,22 @@ function ConversationTab({
                           : 'rounded-bl-sm bg-muted text-foreground',
                       )}
                     >
-                      {isOutgoing && (
-                        <div className="mb-1 flex items-center justify-end gap-1">
-                          <SourceBadge source={m.source as MessageSource} />
-                        </div>
-                      )}
-                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                      <div
-                        className={cn(
-                          'mt-1 flex items-center gap-1 text-[10px] opacity-70',
-                          isOutgoing ? 'justify-end' : 'justify-start',
+                      <div className="min-w-0">
+                        {isOutgoing && (
+                          <div className="mb-1 flex items-center justify-end gap-1">
+                            <SourceBadge source={m.source as MessageSource} />
+                          </div>
                         )}
-                      >
-                        <span>{formatTime(m.timestamp)}</span>
-                        {isOutgoing && <DeliveryIcon status={m.status as MessageStatus} />}
+                        <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                        <div
+                          className={cn(
+                            'mt-1 flex items-center gap-1 text-[10px] opacity-70',
+                            isOutgoing ? 'justify-end' : 'justify-start',
+                          )}
+                        >
+                          <span>{formatTime(m.timestamp)}</span>
+                          {isOutgoing && <DeliveryIcon status={m.status as MessageStatus} />}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1926,10 +2013,27 @@ function buildHeatmapMatrix(flow: StatsConversationFlowPoint[]): number[][] {
   return m
 }
 
-function StatisticsTab({ contactId }: { contactId: string }) {
+function StatisticsTab({ contactId, messages }: { contactId: string; messages: ProfileMessage[] }) {
   const [stats, setStats] = React.useState<StatsPayload | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+
+  // Compute sentiment distribution from incoming messages (only those
+  // that have been analyzed — sentiment != 'unknown' / '').
+  // Note: hooks must be called BEFORE any early return.
+  const sentimentCounts = React.useMemo(() => {
+    const buckets = { positive: 0, neutral: 0, negative: 0, urgent: 0, unknown: 0 }
+    for (const m of messages) {
+      if (m.direction !== 'incoming') continue
+      const s = m.sentiment || 'unknown'
+      if (s === 'positive' || s === 'neutral' || s === 'negative' || s === 'urgent' || s === 'unknown') {
+        buckets[s] += 1
+      } else {
+        buckets.unknown += 1
+      }
+    }
+    return buckets
+  }, [messages])
 
   const loadStats = React.useCallback(async () => {
     try {
@@ -2127,17 +2231,22 @@ function StatisticsTab({ contactId }: { contactId: string }) {
         </StatTile>
       </motion.div>
 
-      {/* (b) Message timeline (stacked area, 30 days) */}
+      {/* (b) Sentiment summary — overall sentiment distribution for this contact */}
+      <motion.div variants={item}>
+        <SentimentSummaryCard counts={sentimentCounts} />
+      </motion.div>
+
+      {/* (c) Message timeline (stacked area, 30 days) */}
       <motion.div variants={item}>
         <MessageTimelineChart data={stats.messageTimeline} />
       </motion.div>
 
-      {/* (c) Activity heatmap (7×24 custom grid) */}
+      {/* (d) Activity heatmap (7×24 custom grid) */}
       <motion.div variants={item}>
         <ActivityHeatmap flow={stats.conversationFlow} />
       </motion.div>
 
-      {/* (d) Hourly distribution + (e) Day of week — side by side */}
+      {/* (e) Hourly distribution + (f) Day of week — side by side */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <motion.div variants={item}>
           <HourlyDistributionChart data={stats.hourlyHeatmap} />
@@ -2147,12 +2256,12 @@ function StatisticsTab({ contactId }: { contactId: string }) {
         </motion.div>
       </div>
 
-      {/* (f) Response time trend (line chart, full width) */}
+      {/* (g) Response time trend (line chart, full width) */}
       <motion.div variants={item}>
         <ResponseTimeTrendChart data={stats.responseTimes} />
       </motion.div>
 
-      {/* (g) Source distribution + (h) Conversation flow — side by side */}
+      {/* (h) Source distribution + (i) Conversation flow — side by side */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <motion.div variants={item}>
           <SourceDistributionChart data={stats.sourceDistribution} />
@@ -2168,6 +2277,138 @@ function StatisticsTab({ contactId }: { contactId: string }) {
 // ---------------------------------------------------------------------------
 // Stats tab — sub-components
 // ---------------------------------------------------------------------------
+
+/**
+ * Sentiment summary card — overall sentiment distribution for this contact
+ * computed from the messages array passed in. Renders a 4-segment split bar
+ * + per-label percentages + a small AI-tone footer line.
+ */
+function SentimentSummaryCard({
+  counts,
+}: {
+  counts: { positive: number; neutral: number; negative: number; urgent: number; unknown: number }
+}) {
+  const total =
+    counts.positive + counts.neutral + counts.negative + counts.urgent + counts.unknown
+  const analyzed = total - counts.unknown
+  const pct = (n: number) => (analyzed > 0 ? Math.round((n / analyzed) * 100) : 0)
+
+  const segments: { key: SentimentKey; value: number }[] = [
+    { key: 'positive', value: counts.positive },
+    { key: 'neutral', value: counts.neutral },
+    { key: 'negative', value: counts.negative },
+    { key: 'urgent', value: counts.urgent },
+  ]
+
+  // Dominant tone (only when we have at least 1 analyzed message).
+  const dominant: SentimentKey = (() => {
+    if (analyzed === 0) return 'unknown'
+    let best: SentimentKey = 'positive'
+    let bestN = -1
+    for (const seg of segments) {
+      if (seg.value > bestN) {
+        bestN = seg.value
+        best = seg.key
+      }
+    }
+    return best
+  })()
+
+  const dominantMeta = sentimentMeta(dominant)
+
+  return (
+    <Card className={CARD_CLS}>
+      <SectionHeader
+        icon={<Brain className="h-4 w-4" />}
+        title="Sentiment Summary"
+        description={
+          analyzed === 0
+            ? 'No sentiment analysis yet — analyzed messages will appear here'
+            : `${analyzed} of ${total} incoming messages analyzed · AI-detected tone`
+        }
+        action={
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium',
+              dominantMeta.chip,
+            )}
+          >
+            {dominant !== 'unknown' ? (
+              <>
+                <span>{dominantMeta.emoji}</span>
+                <span>{dominantMeta.label}</span>
+              </>
+            ) : (
+              '—'
+            )}
+          </span>
+        }
+      />
+
+      <div className="mt-4 space-y-3">
+        {/* Stacked split bar */}
+        <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted">
+          {analyzed === 0 ? (
+            <div className="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground">
+              no data
+            </div>
+          ) : (
+            segments.map((seg) => {
+              if (seg.value === 0) return null
+              const meta = sentimentMeta(seg.key)
+              const widthPct = (seg.value / analyzed) * 100
+              return (
+                <div
+                  key={seg.key}
+                  className={cn('h-full', meta.dot)}
+                  style={{ width: `${widthPct}%` }}
+                  title={`${meta.label}: ${seg.value} (${pct(seg.value)}%)`}
+                />
+              )
+            })
+          )}
+        </div>
+
+        {/* Per-label grid */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {segments.map((seg) => {
+            const meta = sentimentMeta(seg.key)
+            return (
+              <div
+                key={seg.key}
+                className="rounded-lg border border-border/50 bg-background/40 px-2.5 py-2"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className={cn('h-2 w-2 shrink-0 rounded-full', meta.dot)} />
+                  <span className="text-[11px] font-medium">
+                    {meta.emoji} {meta.label}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-baseline gap-1.5">
+                  <span className="text-lg font-bold tabular-nums leading-none">
+                    {seg.value}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    · {pct(seg.value)}%
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {analyzed > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            {dominant === 'positive' && '😊 Customer tone is mostly positive — great rapport.'}
+            {dominant === 'neutral' && '😐 Customer tone is mostly neutral / informational.'}
+            {dominant === 'negative' && '😟 Customer tone leans negative — consider proactive follow-up.'}
+            {dominant === 'urgent' && '⚠️ Multiple urgent messages — prioritize this contact.'}
+          </p>
+        )}
+      </div>
+    </Card>
+  )
+}
 
 function StatTile({
   icon,

@@ -5,6 +5,7 @@ import { AnimatePresence } from 'framer-motion'
 import { AppShell } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { PageTransition } from '@/components/ui/page-transition'
+import { PermissionDenied } from '@/components/permission-denied'
 import { LoginView } from '@/components/views/login-view'
 import { DashboardView } from '@/components/views/dashboard-view'
 import { WhatsAppView } from '@/components/views/whatsapp-view'
@@ -24,7 +25,11 @@ import { ContactProfileView } from '@/components/views/contact-profile-view'
 import { SearchView } from '@/components/views/search-view'
 import { WebhooksView } from '@/components/views/webhooks-view'
 import { DataManagementView } from '@/components/views/data-management-view'
+import { UsersView } from '@/components/views/users-view'
 import { apiGet, apiPost } from '@/lib/api-client'
+import { OnboardingTour } from '@/components/onboarding-tour'
+import { CurrentUserProvider } from '@/hooks/use-current-user'
+import { canView } from '@/lib/permissions'
 import type { AuthUser, DashboardStats, ViewKey } from '@/lib/types'
 
 export default function Home() {
@@ -34,6 +39,7 @@ export default function Home() {
   const [stats, setStats] = React.useState<DashboardStats | null>(null)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [profileContactId, setProfileContactId] = React.useState<string | null>(null)
+  const [showTour, setShowTour] = React.useState(false)
 
   // Check auth on mount
   React.useEffect(() => {
@@ -73,6 +79,28 @@ export default function Home() {
     return () => {
       cancelled = true
       clearInterval(t)
+    }
+  }, [user])
+
+  // After auth check, fetch onboarding state. If the tour hasn't been
+  // completed or skipped yet, auto-start it for first-time users.
+  React.useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    apiGet<{ completed: boolean; skipped: boolean; steps: string[] }>('/api/onboarding')
+      .then((d) => {
+        if (cancelled) return
+        if (!d.completed && !d.skipped) {
+          // Small delay so the app shell finishes its first paint
+          // before we mount the tour overlay.
+          setTimeout(() => setShowTour(true), 400)
+        }
+      })
+      .catch(() => {
+        /* ignore — tour is non-blocking */
+      })
+    return () => {
+      cancelled = true
     }
   }, [user])
 
@@ -126,56 +154,81 @@ export default function Home() {
   }
 
   return (
-    <AppShell
-      user={user}
-      stats={stats}
-      active={active}
-      onNavigate={setActive}
-      onLogout={handleLogout}
-      onOpenPalette={() => setPaletteOpen(true)}
-    >
-      <AnimatePresence mode="wait">
-        <PageTransition viewKey={active}>
-          {active === 'dashboard' && <DashboardView onNavigate={setActive} />}
-          {active === 'whatsapp' && <WhatsAppView />}
-          {active === 'chats' && (
-            <ChatsView
-              onViewProfile={(id) => {
-                setProfileContactId(id)
-                setActive('contact-profile')
-              }}
-            />
-          )}
-          {active === 'leads' && <LeadsView onNavigate={setActive} />}
-          {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
-          {active === 'broadcast' && <BroadcastView />}
-          {active === 'scheduled' && <ScheduledView onNavigate={setActive} />}
-          {active === 'search' && <SearchView onNavigate={setActive} />}
-          {active === 'analytics' && <AnalyticsView />}
-          {active === 'contact-profile' && profileContactId && (
-            <ContactProfileView
-              contactId={profileContactId}
-              onBack={() => setActive('chats')}
-              onNavigate={setActive}
-            />
-          )}
-          {active === 'ai-settings' && <AISettingsView />}
-          {active === 'company-settings' && <CompanySettingsView />}
-          {active === 'owner-settings' && <OwnerSettingsView />}
-          {active === 'autoreply-settings' && <AutoReplySettingsView />}
-          {active === 'logs' && <LogsView />}
-          {active === 'system' && <SystemView />}
-          {active === 'webhooks' && <WebhooksView />}
-          {active === 'data-management' && <DataManagementView />}
-        </PageTransition>
-      </AnimatePresence>
-
-      <CommandPalette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
+    <CurrentUserProvider user={user}>
+      <AppShell
+        user={user}
+        stats={stats}
+        active={active}
         onNavigate={setActive}
-        onOpenContact={() => setActive('chats')}
-      />
-    </AppShell>
+        onLogout={handleLogout}
+        onOpenPalette={() => setPaletteOpen(true)}
+        onStartTour={() => setShowTour(true)}
+      >
+        <AnimatePresence mode="wait">
+          <PageTransition viewKey={active}>
+            {/* View-level permission gate. If the user lacks the
+                permission required for the active view, render the
+                PermissionDenied card instead of the view body. The
+                API also enforces permissions server-side, so a user
+                can't bypass this by crafting requests directly. */}
+            {!canView(user, active) ? (
+              <PermissionDenied
+                view={active}
+                role={user.role}
+                onBack={() => setActive('dashboard')}
+              />
+            ) : (
+              <>
+                {active === 'dashboard' && <DashboardView onNavigate={setActive} />}
+                {active === 'whatsapp' && <WhatsAppView />}
+                {active === 'chats' && (
+                  <ChatsView
+                    onViewProfile={(id) => {
+                      setProfileContactId(id)
+                      setActive('contact-profile')
+                    }}
+                  />
+                )}
+                {active === 'leads' && <LeadsView onNavigate={setActive} />}
+                {active === 'simulator' && <SimulatorView onNavigate={setActive} />}
+                {active === 'broadcast' && <BroadcastView />}
+                {active === 'scheduled' && <ScheduledView onNavigate={setActive} />}
+                {active === 'search' && <SearchView onNavigate={setActive} />}
+                {active === 'analytics' && <AnalyticsView />}
+                {active === 'contact-profile' && profileContactId && (
+                  <ContactProfileView
+                    contactId={profileContactId}
+                    onBack={() => setActive('chats')}
+                    onNavigate={setActive}
+                  />
+                )}
+                {active === 'ai-settings' && <AISettingsView />}
+                {active === 'company-settings' && <CompanySettingsView />}
+                {active === 'owner-settings' && <OwnerSettingsView />}
+                {active === 'autoreply-settings' && <AutoReplySettingsView />}
+                {active === 'logs' && <LogsView />}
+                {active === 'system' && <SystemView />}
+                {active === 'webhooks' && <WebhooksView />}
+                {active === 'data-management' && <DataManagementView />}
+                {active === 'users' && <UsersView />}
+              </>
+            )}
+          </PageTransition>
+        </AnimatePresence>
+
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onNavigate={setActive}
+          onOpenContact={() => setActive('chats')}
+        />
+
+        <OnboardingTour
+          open={showTour}
+          onOpenChange={setShowTour}
+          onNavigate={setActive}
+        />
+      </AppShell>
+    </CurrentUserProvider>
   )
 }

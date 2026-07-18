@@ -7,6 +7,7 @@
 import { db } from '@/lib/db'
 import { generateReply } from '@/lib/ai-engine'
 import { dispatchWebhooks } from '@/lib/webhook-dispatcher'
+import { analyzeSentiment } from '@/lib/sentiment'
 
 export interface ProcessIncomingResult {
   ok: boolean
@@ -17,6 +18,9 @@ export interface ProcessIncomingResult {
   ownerRequested: boolean
   ownerNotified: boolean
   aiSkipped: boolean
+  sentiment?: string
+  intent?: string
+  sentimentScore?: number
   error?: string
 }
 
@@ -198,6 +202,79 @@ export async function processIncomingMessage(opts: {
     },
   })
 
+  // 2b. Sentiment analysis — runs in the background, non-blocking.
+  // If it fails, the pipeline still continues. The result is stored
+  // both on the Message record and as a SentimentAnalysis row for the
+  // dashboard's history.
+  let sentimentLabel: string = 'unknown'
+  let sentimentScoreNum = 0
+  let sentimentIntent = ''
+  try {
+    const sentimentResult = await analyzeSentiment(text)
+    sentimentLabel = sentimentResult.sentiment
+    sentimentScoreNum = sentimentResult.score
+    sentimentIntent = sentimentResult.intent
+    await db.message.update({
+      where: { id: incoming.id },
+      data: {
+        sentiment: sentimentLabel,
+        sentimentScore: sentimentScoreNum,
+        intent: sentimentIntent,
+      },
+    })
+    await db.sentimentAnalysis.create({
+      data: {
+        contactId: contact.id,
+        messageId: incoming.id,
+        sentiment: sentimentLabel,
+        score: sentimentScoreNum,
+        intent: sentimentIntent,
+        summary: sentimentResult.summary,
+      },
+    })
+    // Urgent / negative → owner notification (severity: warning).
+    if (sentimentLabel === 'urgent' || sentimentLabel === 'negative') {
+      await db.notification.create({
+        data: {
+          type: 'owner_request',
+          title:
+            sentimentLabel === 'urgent'
+              ? `Urgent message from ${contact.name}`
+              : `Negative message from ${contact.name}`,
+          body: `${contact.name} (${phone}): "${text.slice(0, 140)}"`,
+          contactId: contact.id,
+          severity: 'warning',
+        },
+      })
+      await db.log.create({
+        data: {
+          category: 'ai',
+          level: 'warn',
+          message: `Sentiment ${sentimentLabel} detected from ${contact.name} (${phone})`,
+          contactId: contact.id,
+          meta: JSON.stringify({ sentiment: sentimentLabel, score: sentimentScoreNum, intent: sentimentIntent }),
+        },
+      })
+      void dispatchWebhooks('owner.requested', {
+        contactId: contact.id,
+        phone,
+        sentiment: sentimentLabel,
+        intent: sentimentIntent,
+        lastMessage: text,
+      })
+    }
+  } catch (err) {
+    // Non-fatal: log and continue the pipeline.
+    await db.log.create({
+      data: {
+        category: 'ai',
+        level: 'warn',
+        message: `Sentiment analysis failed: ${(err as Error).message}`,
+        contactId: contact.id,
+      },
+    })
+  }
+
   // 3. Update contact lastSeen / lastMessageAt
   await db.contact.update({
     where: { id: contact.id },
@@ -231,6 +308,9 @@ export async function processIncomingMessage(opts: {
       ownerRequested: false,
       ownerNotified: false,
       aiSkipped: true,
+      sentiment: sentimentLabel,
+      sentimentScore: sentimentScoreNum,
+      intent: sentimentIntent,
     }
   }
 
@@ -246,6 +326,9 @@ export async function processIncomingMessage(opts: {
       ownerRequested: false,
       ownerNotified: false,
       aiSkipped: true,
+      sentiment: sentimentLabel,
+      sentimentScore: sentimentScoreNum,
+      intent: sentimentIntent,
     }
   }
 
@@ -273,6 +356,9 @@ export async function processIncomingMessage(opts: {
       ownerRequested: false,
       ownerNotified: false,
       aiSkipped: false,
+      sentiment: sentimentLabel,
+      sentimentScore: sentimentScoreNum,
+      intent: sentimentIntent,
       error: (err as Error).message,
     }
   }
@@ -406,6 +492,9 @@ export async function processIncomingMessage(opts: {
     ownerRequested: result.ownerRequested,
     ownerNotified,
     aiSkipped: false,
+    sentiment: sentimentLabel,
+    sentimentScore: sentimentScoreNum,
+    intent: sentimentIntent,
   }
 }
 

@@ -29,6 +29,9 @@ interface ProfileMessage {
   text: string
   status: string
   read: boolean
+  sentiment: string
+  sentimentScore: number
+  intent: string
   timestamp: string
 }
 
@@ -166,6 +169,9 @@ export async function GET(
         text: true,
         status: true,
         read: true,
+        sentiment: true,
+        sentimentScore: true,
+        intent: true,
         timestamp: true,
       },
     }),
@@ -258,6 +264,9 @@ export async function GET(
       text: m.text,
       status: m.status,
       read: m.read,
+      sentiment: m.sentiment,
+      sentimentScore: m.sentimentScore,
+      intent: m.intent,
       timestamp: m.timestamp.toISOString(),
     })),
     memories: memories.map<ProfileMemory>((m) => ({
