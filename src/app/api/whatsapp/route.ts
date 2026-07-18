@@ -14,7 +14,7 @@ export async function GET() {
 
   try {
     const engineRes = await fetch(ENGINE_URL + '/', {
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     })
 
     if (!engineRes.ok) {

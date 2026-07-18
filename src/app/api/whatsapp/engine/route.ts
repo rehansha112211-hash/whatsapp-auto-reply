@@ -16,7 +16,7 @@ export async function GET() {
   try {
     // Check if the real engine is alive
     const healthRes = await fetch(ENGINE_URL + '/health', {
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(15000),
     })
     if (healthRes.ok) {
       const health = await healthRes.json()
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body.action === 'send' ? { phone: body.phone, text: body.text } : {}),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     })
     const data = await engineRes.json()
     return NextResponse.json({ engineAvailable: true, ...data })

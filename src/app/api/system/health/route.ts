@@ -24,7 +24,7 @@ export async function GET() {
   let whatsapp: WhatsAppState = 'disconnected'
   try {
     const engineRes = await fetch(ENGINE_URL + '/', {
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(15000),
     })
     if (engineRes.ok) {
       const engine = await engineRes.json()

@@ -15,7 +15,7 @@ export async function POST() {
   try {
     const engineRes = await fetch(ENGINE_URL + '/disconnect', {
       method: 'POST',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     })
 
     if (!engineRes.ok) {
