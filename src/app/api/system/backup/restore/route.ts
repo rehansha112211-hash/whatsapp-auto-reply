@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     // Checkpoint the WAL so any in-memory data is flushed before overwrite.
     // wal_checkpoint returns a result row, so use $queryRawUnsafe.
     try {
-      await db.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
+      // PostgreSQL doesn't need WAL checkpoint (SQLite-specific)
     } catch {
       /* best-effort */
     }

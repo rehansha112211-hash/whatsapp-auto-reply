@@ -2,7 +2,7 @@
 
 // ============================================================
 // SimulatorView — end-to-end test harness for the AI auto-reply
-// pipeline. Lets the operator simulate an incoming WhatsApp
+// pipeline. Lets the operator test an incoming WhatsApp
 // customer message (no real WhatsApp connection needed) and
 // watch the real LLM produce a reply, score the lead, and
 // (optionally) trigger owner-notification + human-takeover.
@@ -198,7 +198,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
     setLastSent(null)
     setHistory([])
     setActiveContactId(null)
-    toast.message('New simulated phone generated')
+    toast.message('New test phone generated')
   }
 
   const handleRandomizePhone = () => {
@@ -253,7 +253,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Send className="h-4 w-4 text-emerald-400" />
-              Simulate Incoming Message
+              Test Incoming Message
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -367,7 +367,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
             </Button>
 
             <div className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-              The simulated message runs through{' '}
+              The test message runs through{' '}
               <code className="font-mono text-foreground">processIncomingMessage</code>{' '}
               → upsert contact → save incoming → AI reply (z-ai-web-dev-sdk) →
               save outgoing → memory update → lead score history → owner notify.
@@ -389,7 +389,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
               {!lastSent && !sending && (
                 <div className="flex h-[150px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
                   <Bot className="h-8 w-8 text-muted-foreground/50" />
-                  <div>Send a simulated message to see the AI reply here.</div>
+                  <div>Send a test message to see the AI reply here.</div>
                 </div>
               )}
 
@@ -589,7 +589,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
             <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
               <User className="h-8 w-8 text-muted-foreground/50" />
               <div>
-                Send a simulated message to load the full conversation thread for
+                Send a test message to load the full conversation thread for
                 this phone number.
               </div>
             </div>
@@ -603,7 +603,7 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
               <MessageCircle className="h-8 w-8 text-muted-foreground/50" />
               <div>
                 No conversation history available yet. The chat preview above
-                shows the latest simulated exchange.
+                shows the latest test exchange.
               </div>
               <Button
                 variant="ghost"

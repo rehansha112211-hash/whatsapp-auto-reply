@@ -152,7 +152,7 @@ export async function POST() {
     // WAL checkpoint so the main .db file contains all committed data.
     // wal_checkpoint returns a result row, so use $queryRawUnsafe.
     try {
-      await db.$queryRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
+      // PostgreSQL doesn't need WAL checkpoint (SQLite-specific)
     } catch {
       /* best-effort; proceed with copy anyway */
     }

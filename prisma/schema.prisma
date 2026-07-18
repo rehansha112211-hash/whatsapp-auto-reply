@@ -1,6 +1,6 @@
 // ============================================================
 // WhatsApp AI Auto Reply Platform - QorvixNode Technologies
-// Prisma Schema (SQLite)
+// Prisma Schema (PostgreSQL — Neon)
 // ============================================================
 
 generator client {
@@ -8,7 +8,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

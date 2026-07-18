@@ -1532,7 +1532,7 @@ function ChatWindow({
     ? 'Human mode active — AI paused'
     : waConnected
       ? 'AI auto-reply is handling this chat'
-      : 'AI auto-reply is handling this chat (simulated)'
+      : 'AI auto-reply is handling this chat (test)'
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1657,7 +1657,7 @@ function ChatWindow({
       {!waConnected && (
         <div className="flex items-center gap-2 bg-zinc-500/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300">
           <AlertTriangle className="h-3.5 w-3.5" />
-          <span>WhatsApp not connected — messages are simulated.</span>
+          <span>WhatsApp not connected — messages are test.</span>
         </div>
       )}
 
