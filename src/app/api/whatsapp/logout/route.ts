@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
-import { logoutWhatsApp } from '@/lib/wa-engine'
+
+// ============================================================
+// Logout — proxies to the REAL Baileys engine.
+// This clears the auth state — a new QR scan will be required
+// to reconnect.
+// ============================================================
 
 export async function POST() {
   const user = await getCurrentUser()
@@ -8,6 +13,25 @@ export async function POST() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  await logoutWhatsApp()
-  return NextResponse.json({ ok: true })
+  try {
+    const engineRes = await fetch('http://localhost:3004/logout', {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!engineRes.ok) {
+      return NextResponse.json(
+        { error: 'Engine error' },
+        { status: 502 },
+      )
+    }
+
+    const data = await engineRes.json()
+    return NextResponse.json({ ok: true, ...data })
+  } catch {
+    return NextResponse.json(
+      { error: 'WhatsApp engine not running' },
+      { status: 503 },
+    )
+  }
 }

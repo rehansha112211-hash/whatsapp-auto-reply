@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import { SYSTEM_START, getWhatsAppSession } from '@/lib/wa-engine'
+import { SYSTEM_START } from '@/lib/wa-engine'
 import type { SystemHealth, WhatsAppState } from '@/lib/types'
 
 function clamp(v: number, min: number, max: number): number {
@@ -19,11 +19,16 @@ export async function GET() {
     database = 'error'
   }
 
-  // WhatsApp session state
+  // WhatsApp state — check the REAL Baileys engine
   let whatsapp: WhatsAppState = 'disconnected'
   try {
-    const session = await getWhatsAppSession()
-    whatsapp = (session.state as WhatsAppState) ?? 'disconnected'
+    const engineRes = await fetch('http://localhost:3004/', {
+      signal: AbortSignal.timeout(2000),
+    })
+    if (engineRes.ok) {
+      const engine = await engineRes.json()
+      whatsapp = (engine.connectionState as WhatsAppState) ?? 'disconnected'
+    }
   } catch {
     whatsapp = 'disconnected'
   }

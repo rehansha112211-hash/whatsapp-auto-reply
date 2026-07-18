@@ -35,7 +35,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'whatsapp', label: 'WhatsApp', icon: QrCode, description: 'QR login & session', group: 'main' },
   { key: 'chats', label: 'Chats', icon: MessagesSquare, description: 'Live conversations', group: 'main' },
   { key: 'leads', label: 'Leads', icon: Flame, description: 'Lead pipeline', group: 'main' },
-  { key: 'simulator', label: 'Simulator', icon: FlaskConical, description: 'Test AI replies', group: 'main' },
+  { key: 'simulator', label: 'Test Console', icon: FlaskConical, description: 'Test AI pipeline', group: 'main' },
   { key: 'broadcast', label: 'Broadcast', icon: Megaphone, description: 'Mass messages & templates', group: 'main' },
   { key: 'scheduled', label: 'Scheduled', icon: Clock, description: 'Scheduled messages', group: 'main' },
   { key: 'search', label: 'Search', icon: Search, description: 'Global message search', group: 'main' },

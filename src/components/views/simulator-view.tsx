@@ -227,11 +227,12 @@ export function SimulatorView({ onNavigate }: SimulatorViewProps) {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight sm:text-2xl text-gradient-premium">
-              Message Simulator
+              Test Console
             </h1>
             <p className="text-sm text-muted-foreground">
-              Test the AI auto-reply engine end-to-end without a real WhatsApp
-              connection. Simulated messages flow through the real LLM pipeline.
+              Test the AI auto-reply pipeline. Enter a message as if it came
+              from a customer — the real LLM generates a reply and sends it
+              via real WhatsApp.
             </p>
           </div>
         </div>

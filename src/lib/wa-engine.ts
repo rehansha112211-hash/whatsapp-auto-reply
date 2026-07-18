@@ -1,8 +1,9 @@
 // ============================================================
-// WhatsApp Engine - simulation layer.
-// In a real deployment this module would wrap Baileys / whatsapp-web.js.
-// Here it manages connection state, QR generation (simulated), and
-// the message processing pipeline (save -> AI -> reply -> log -> notify).
+// WhatsApp Engine — REAL Baileys integration
+// The actual WhatsApp connection lives in mini-services/whatsapp-engine
+// (port 3004) using @whiskeysockets/baileys. This module handles
+// the message processing pipeline (save -> AI -> reply -> log -> notify)
+// and proxies sends to the real engine.
 // ============================================================
 import { db } from '@/lib/db'
 import { generateReply } from '@/lib/ai-engine'
@@ -28,127 +29,33 @@ export interface ProcessIncomingResult {
 // In-process uptime tracker (resets on server restart)
 export const SYSTEM_START = new Date()
 
-let qrCounter = 0
-// Generate a fake-but-stable QR string (a data URL placeholder). In real impl
-// this would come from the WhatsApp Web multi-device pairing.
-export function generateQrPayload(): string {
-  qrCounter += 1
-  const token = `${Date.now().toString(36)}-${qrCounter}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`
-  // QR data payload (a real WhatsApp pairing string would go here)
-  return `2@QorvixNodeWA_${token},QorvixNode_Technologies,${new Date().toISOString()}`
-}
-
-export async function getWhatsAppSession() {
-  let s = await db.session.findUnique({ where: { id: 'whatsapp' } })
-  if (!s) {
-    s = await db.session.create({ data: { id: 'whatsapp' } })
+// ============================================================
+// Send a message via the REAL Baileys WhatsApp engine.
+// Called after the AI generates a reply, or when the owner
+// sends a manual message. Proxies to port 3004.
+// ============================================================
+export async function sendViaWhatsApp(phone: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch('http://localhost:3004/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, text }),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Engine error' }))
+      return { ok: false, error: err.error || 'Failed to send' }
+    }
+    return { ok: true }
+  } catch {
+    return { ok: false, error: 'WhatsApp engine not running' }
   }
-  return s
-}
-
-export async function setWhatsAppState(
-  state: 'disconnected' | 'connecting' | 'qr_ready' | 'connected' | 'logged_out',
-  patch: Partial<{
-    connectedNumber: string
-    connectedName: string
-    deviceInfo: string
-    qrCode: string
-    connectedAt: Date | null
-  }> = {},
-) {
-  const data = {
-    state,
-    lastSeen: new Date(),
-    ...patch,
-  }
-  return db.session.upsert({
-    where: { id: 'whatsapp' },
-    update: data,
-    create: { id: 'whatsapp', ...data },
-  })
-}
-
-// Simulate "connect": generate a QR. In a real backend this would start the
-// WA websocket and surface the actual pairing QR. The dashboard polls until
-// the user "scans" (we simulate the scan by calling confirmWhatsAppLogin).
-export async function requestWhatsAppQR() {
-  const qr = generateQrPayload()
-  await setWhatsAppState('qr_ready', { qrCode: qr, connectedNumber: '', connectedName: '', connectedAt: null })
-  await db.log.create({
-    data: {
-      category: 'whatsapp',
-      level: 'info',
-      message: 'WhatsApp QR generated (awaiting scan)',
-    },
-  })
-  return qr
-}
-
-export async function confirmWhatsAppLogin(number: string, name: string) {
-  await setWhatsAppState('connected', {
-    connectedNumber: number,
-    connectedName: name,
-    deviceInfo: 'Chrome on Android · QorvixNode WA',
-    connectedAt: new Date(),
-    qrCode: '',
-  })
-  await db.notification.create({
-    data: {
-      type: 'wa_connected',
-      title: 'WhatsApp Connected',
-      body: `Connected as ${name} (${number})`,
-      severity: 'success',
-    },
-  })
-  await db.log.create({
-    data: {
-      category: 'whatsapp',
-      level: 'info',
-      message: `WhatsApp connected as ${name} (${number})`,
-    },
-  })
-  // Fire webhook: whatsapp.connected
-  void dispatchWebhooks('whatsapp.connected', { number, name, connectedAt: new Date().toISOString() })
-}
-
-export async function disconnectWhatsApp() {
-  await setWhatsAppState('disconnected', {
-    connectedNumber: '',
-    connectedName: '',
-    connectedAt: null,
-    qrCode: '',
-  })
-  await db.notification.create({
-    data: {
-      type: 'wa_disconnected',
-      title: 'WhatsApp Disconnected',
-      body: 'Session was disconnected manually',
-      severity: 'warning',
-    },
-  })
-  await db.log.create({
-    data: { category: 'whatsapp', level: 'warn', message: 'WhatsApp disconnected' },
-  })
-  // Fire webhook: whatsapp.disconnected
-  void dispatchWebhooks('whatsapp.disconnected', { reason: 'manual' })
-}
-
-export async function logoutWhatsApp() {
-  await setWhatsAppState('logged_out', {
-    connectedNumber: '',
-    connectedName: '',
-    connectedAt: null,
-    qrCode: '',
-  })
-  await db.log.create({
-    data: { category: 'whatsapp', level: 'warn', message: 'WhatsApp logged out' },
-  })
 }
 
 // ------------------------------------------------------------
 // Incoming message pipeline (the core of the platform)
+// Called by /api/whatsapp/incoming when the REAL Baileys engine
+// receives a genuine WhatsApp message.
 // ------------------------------------------------------------
 export async function processIncomingMessage(opts: {
   phone: string
@@ -429,6 +336,19 @@ export async function processIncomingMessage(opts: {
     },
   })
 
+  // 8b. Send the AI reply via the REAL Baileys WhatsApp engine
+  const sendResult = await sendViaWhatsApp(contact.phone, result.reply)
+  if (!sendResult.ok) {
+    await db.log.create({
+      data: {
+        category: 'whatsapp',
+        level: 'warn',
+        message: `AI reply WhatsApp send failed for ${contact.name}: ${sendResult.error}`,
+        contactId: contact.id,
+      },
+    })
+  }
+
   // Fire webhook: message.sent (AI)
   void dispatchWebhooks('message.sent', { contactId: contact.id, text: result.reply, source: 'ai', messageId: outgoing.id })
 
@@ -554,6 +474,7 @@ export async function processIncomingMessage(opts: {
 
 // Owner sends a manual message (human takeover path)
 export async function sendOwnerMessage(contactId: string, text: string) {
+  // Save the message to the database
   const msg = await db.message.create({
     data: {
       contactId,
@@ -567,11 +488,30 @@ export async function sendOwnerMessage(contactId: string, text: string) {
     where: { id: contactId },
     data: { lastMessageAt: new Date(), lastSeen: new Date() },
   })
+
+  // Send via the REAL Baileys WhatsApp engine
+  const contact = await db.contact.findUnique({ where: { id: contactId } })
+  if (contact) {
+    const sendResult = await sendViaWhatsApp(contact.phone, text)
+    if (!sendResult.ok) {
+      // Log the failure but don't fail the whole operation —
+      // the message is saved in DB and will be visible in the dashboard.
+      await db.log.create({
+        data: {
+          category: 'whatsapp',
+          level: 'warn',
+          message: `WhatsApp send failed for ${contact.name}: ${sendResult.error}`,
+          contactId,
+        },
+      })
+    }
+  }
+
   await db.log.create({
     data: {
       category: 'whatsapp',
       level: 'info',
-      message: `Owner sent manual message to contact ${contactId}`,
+      message: `Owner sent message to ${contact?.name || contactId} via WhatsApp`,
       contactId,
     },
   })
