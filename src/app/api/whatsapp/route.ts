@@ -45,6 +45,8 @@ export async function GET() {
       connectedAt: engine.connectedAt || null,
       deviceInfo: engine.userName ? `Baileys · ${engine.userName}` : '',
       qrCode: engine.qrCode || '',
+      pairingCode: engine.pairingCode || '',
+      pairingMode: engine.pairingMode || false,
       lastSeen: engine.lastSeen || new Date().toISOString(),
       engineAvailable: true,
       error: engine.error || '',

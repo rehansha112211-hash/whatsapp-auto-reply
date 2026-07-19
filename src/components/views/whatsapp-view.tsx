@@ -56,6 +56,8 @@ interface WaSession {
   connectedAt: string | null
   deviceInfo: string
   qrCode: string
+  pairingCode: string
+  pairingMode: boolean
   lastSeen: string
   engineAvailable: boolean
   error: string
@@ -253,6 +255,13 @@ export function WhatsAppView() {
               busy={busy}
               onDisconnect={handleDisconnect}
               onLogout={handleLogout}
+            />
+          ) : session?.pairingMode && session?.pairingCode ? (
+            <PairingCodeCard
+              code={session.pairingCode}
+              phone={session.connectedNumber || ''}
+              busy={busy}
+              onRefresh={refresh}
             />
           ) : session?.qrCode ? (
             <RealQrCard
@@ -701,6 +710,76 @@ function QrImage({ payload, size = 320 }: { payload: string; size?: number }) {
       alt="WhatsApp QR Code"
       style={{ display: 'block' }}
     />
+  )
+}
+
+// ============================================================
+// Pairing Code Card — shows the phone pairing code
+// ============================================================
+function PairingCodeCard({
+  code,
+  phone,
+  busy,
+  onRefresh,
+}: {
+  code: string
+  phone: string
+  busy: boolean
+  onRefresh: () => void
+}) {
+  return (
+    <Card className="overflow-hidden rounded-xl border border-emerald-500/30 bg-card/60 backdrop-blur card-hover">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15">
+            <Smartphone className="h-4 w-4 text-emerald-400" />
+          </span>
+          <div>
+            <CardTitle className="text-base">WhatsApp Pairing Code</CardTitle>
+            <CardDescription className="text-xs">
+              Enter this code in your phone's WhatsApp
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col items-center gap-5 pb-6">
+        <div className="rounded-2xl border-2 border-emerald-500/30 bg-emerald-500/5 px-8 py-6 text-center">
+          <div className="text-xs font-medium uppercase tracking-wider text-emerald-300">
+            Your Pairing Code
+          </div>
+          <div className="mt-3 text-4xl font-bold tracking-[0.3em] text-emerald-300 font-mono">
+            {code}
+          </div>
+        </div>
+
+        <div className="w-full space-y-2 text-left text-sm">
+          <div className="font-medium">Steps to connect:</div>
+          <ol className="ml-4 list-decimal space-y-1.5 text-muted-foreground">
+            <li>Open <strong className="text-foreground">WhatsApp</strong> on your phone</li>
+            <li>Go to <strong className="text-foreground">Settings → Linked Devices</strong></li>
+            <li>Tap <strong className="text-foreground">Link a Device</strong></li>
+            <li>Choose <strong className="text-foreground">&quot;Link with phone number instead&quot;</strong></li>
+            <li>Enter the code: <strong className="text-emerald-300 font-mono">{code}</strong></li>
+          </ol>
+        </div>
+
+        <div className="flex w-full items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <Clock className="h-3.5 w-3.5 shrink-0" />
+          <span>Code expires soon. Enter it quickly in your phone's WhatsApp.</span>
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          disabled={busy}
+          className="gap-1.5"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Check Connection Status
+        </Button>
+      </CardContent>
+    </Card>
   )
 }
 

@@ -48,6 +48,8 @@ interface WAState {
   connectedAt: string | null
   lastSeen: string
   error: string
+  pairingCode: string
+  pairingMode: boolean
 }
 
 let state: WAState = {
@@ -58,6 +60,8 @@ let state: WAState = {
   connectedAt: null,
   lastSeen: new Date().toISOString(),
   error: '',
+  pairingCode: '',
+  pairingMode: false,
 }
 
 let sock: WASocket | null = null
@@ -177,15 +181,20 @@ async function startConnection() {
       const { connection, lastDisconnect, qr } = update
 
       if (qr) {
-        state.qrCode = qr
-        state.connectionState = 'connecting'
-        saveState()
-        console.log('[wa-engine] QR code generated — scan with your phone')
+        // Only store QR if NOT in pairing mode (phone pairing suppresses QR)
+        if (!state.pairingMode) {
+          state.qrCode = qr
+          state.connectionState = 'connecting'
+          saveState()
+          console.log('[wa-engine] QR code generated — scan with your phone')
+        }
       }
 
       if (connection === 'open') {
         state.connectionState = 'connected'
         state.qrCode = ''
+        state.pairingCode = ''
+        state.pairingMode = false
         state.connectedAt = new Date().toISOString()
         state.error = ''
         const user = sock?.user
@@ -203,9 +212,13 @@ async function startConnection() {
 
         if (statusCode === DisconnectReason.loggedOut) {
           state.connectionState = 'logged_out'
+      state.pairingCode = ''
+      state.pairingMode = false
           console.log('[wa-engine] Device logged out — need new QR scan')
         } else {
           state.connectionState = 'disconnected'
+      state.pairingCode = ''
+      state.pairingMode = false
           console.log(`[wa-engine] Connection closed (code ${statusCode}), reconnecting: ${shouldReconnect}`)
         }
 
@@ -230,6 +243,8 @@ async function startConnection() {
     })
   } catch (err) {
     state.connectionState = 'disconnected'
+      state.pairingCode = ''
+      state.pairingMode = false
     state.error = (err as Error).message
     saveState()
     console.error('[wa-engine] Failed to start connection:', err)
@@ -316,17 +331,17 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
       try {
         // Request pairing code from WhatsApp
-        // Phone must be in format: country code + number, no + or spaces
         const cleanPhone = phone.replace(/[^0-9]/g, '')
         console.log(`[wa-engine] Requesting pairing code for ${cleanPhone}...`)
 
-        // Baileys requestPairingCode returns a string like "ABCD-EFGH"
         const code = await sock.requestPairingCode(cleanPhone)
         console.log(`[wa-engine] ✓ Pairing code generated: ${code}`)
 
-        // IMPORTANT: Clear the QR code from state so the UI shows the
-        // pairing code screen instead of switching to the QR card.
-        state.qrCode = ''
+        // Set pairing mode — this tells the UI to show the code,
+        // NOT the QR (even though Baileys may also emit a QR).
+        state.pairingCode = code
+        state.pairingMode = true
+        state.qrCode = '' // suppress QR display
         state.connectionState = 'connecting'
         state.phoneNumber = phone
         saveState()
@@ -346,6 +361,8 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         sock = null
       }
       state.connectionState = 'disconnected'
+      state.pairingCode = ''
+      state.pairingMode = false
       state.qrCode = ''
       state.connectedAt = null
       state.lastSeen = new Date().toISOString()
@@ -361,6 +378,8 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         sock = null
       }
       state.connectionState = 'logged_out'
+      state.pairingCode = ''
+      state.pairingMode = false
       state.qrCode = ''
       state.phoneNumber = ''
       state.userName = ''
